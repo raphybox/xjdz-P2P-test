@@ -313,6 +313,11 @@
       // 首次从服务端文件载入时同步进浏览器存储，保证游戏页（同域）能读到同一份配置
       writeConfig(JSON.stringify(d));
     }
+    else if (valid(window.WOWPINBALL_PUBLISHED)) {
+      // 纯静态托管（GitHub Pages）：没有 /api/config，用仓库导出的已发布配置
+      d = clone(window.WOWPINBALL_PUBLISHED); S.source = 'published';
+      writeConfig(JSON.stringify(d));
+    }
     else { d = clone(DEFAULT); S.source = 'default'; }
     S.data = normalize(d);
     S.saved = clone(S.data);
@@ -752,7 +757,7 @@
         : '<div class="faint" style="padding:14px 0">当前没有生效的活动。可在「活动事件」中启用，或勾选「忽略日期」强制生效。</div>') +
       '<div class="divider"></div>' +
       '<div class="row" style="justify-content:space-between"><span class="muted">配置来源</span><span class="badge badge-mute">' +
-      (S.source === 'local' ? '浏览器本地' : S.source === 'server' ? '服务端文件' : '内置默认') + '</span></div>' +
+      (S.source === 'local' ? '浏览器本地' : S.source === 'server' ? '服务端文件' : S.source === 'published' ? '已发布静态配置' : '内置默认') + '</span></div>' +
       '<div class="row" style="justify-content:space-between;margin-top:8px"><span class="muted">最近更新</span><span>' + esc(S.data.meta.updatedAt || '—') + '</span></div>' +
       '<div class="row" style="justify-content:space-between;margin-top:8px"><span class="muted">服务状态</span><span>' + (S.serverMode ? '已连接（可落盘）' : '未启动（仅本地）') + '</span></div>' +
       '</div></div>' +

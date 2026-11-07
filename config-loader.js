@@ -16,8 +16,16 @@
       d.classes.length > 0 && d.skills.length > 0;
   }
 
+  /* 纯静态托管（GitHub Pages）没有 /api/config、访问者也没有本地存档：
+     回退到仓库导出的已发布配置，保证弹珠贴图 / 卡片背景 / 数值与本地一致。
+     优先级始终是：本地存档 > 已发布静态副本 > 内置默认。 */
+  var fromPublished = false;
+  if (!valid(data) && window.WOWPINBALL_PUBLISHED) {
+    data = window.WOWPINBALL_PUBLISHED;
+    fromPublished = true;
+  }
   window.WOWPINBALL_CONFIG_KEY = KEY;
-  window.WOWPINBALL_CONFIG_SOURCE = valid(data) ? 'saved' : 'default';
+  window.WOWPINBALL_CONFIG_SOURCE = valid(data) ? (fromPublished ? 'published' : 'saved') : 'default';
   window.WOWPINBALL_DATA = valid(data) ? migrate(data) : DEF;
 
   // 物理重构迁移：旧配置用「朝对手加速度 + 速度衰减」，

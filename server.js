@@ -83,6 +83,9 @@ const server = http.createServer(async (req, res) => {
           fs.writeFileSync(path.join(HISTORY_DIR, stamp() + '.json'), fs.readFileSync(CONFIG_FILE));
         }
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2));
+        // 同步刷新静态站副本；失败只告警，不影响本次发布结果
+        try { require('./tools/export-static-config')(); }
+        catch (e) { console.warn('静态配置副本生成失败：' + (e && e.message || e)); }
         return json(res, 200, { ok: true, savedAt: new Date().toISOString() });
       }
       if (req.method === 'GET' && url.startsWith('/api/history')) {
