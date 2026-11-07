@@ -1172,7 +1172,7 @@ window.WOWPINBALL_PUBLISHED = {
     "types": [
       {
         "enabled": true,
-        "weight": 4,
+        "weight": 2,
         "id": "wind",
         "name": "大风",
         "forceMin": 30,
@@ -1182,7 +1182,7 @@ window.WOWPINBALL_PUBLISHED = {
       },
       {
         "enabled": true,
-        "weight": 3,
+        "weight": 1,
         "id": "rain",
         "name": "下雨",
         "slip": 0.12,
@@ -1190,6 +1190,6 @@ window.WOWPINBALL_PUBLISHED = {
       }
     ]
   },
-  "version": "WJ-MEXG-Y3J5-AAAAAD-BQ96-NDUB-Z2K4-CP6R-PCVA",
-  "versionSeq": 3
+  "version": "WJ-MEXG-Y3J5-AAAAAE-BQ9N-NDUB-Z2K4-CP6R-PCVA",
+  "versionSeq": 4
 };
