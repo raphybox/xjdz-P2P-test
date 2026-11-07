@@ -8,6 +8,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
 
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
@@ -61,6 +62,64 @@ function safePath(urlPath) {
   return target;
 }
 
+/* -------------------------------------------------------------
+   发布即同步到 GitHub：把本次落盘的游戏文件提交并推送到远程。
+   - 管理后台(admin.*)已在 .gitignore 排除，不会进入仓库。
+   - 代理做 HTTPS 中间人，git 必须 http.sslVerify=false（内置）。
+   - 非交互、带超时，避免弹窗卡死；失败不影响本地落盘结果。
+   ------------------------------------------------------------- */
+function isGitRepo() {
+  try { return fs.existsSync(path.join(ROOT, '.git')); } catch (e) { return false; }
+}
+function runGit(args, timeoutMs) {
+  return new Promise((resolve) => {
+    const full = ['-c', 'http.sslVerify=false'].concat(args);
+    const env = Object.assign({}, process.env, {
+      GCM_INTERACTIVE: 'never',   // 无缓存凭据时直接失败，不弹窗
+      GIT_TERMINAL_PROMPT: '0'
+    });
+    let settled = false;
+    const p = execFile('git', full, { cwd: ROOT, timeout: timeoutMs || 120000, windowsHide: true, env },
+      (err, stdout, stderr) => {
+        if (settled) return; settled = true;
+        resolve({
+          ok: !err,
+          code: err && err.code,
+          killed: err && err.killed,
+          stdout: String(stdout || ''),
+          stderr: String(stderr || '')
+        });
+      });
+    p.on('error', (e) => { if (!settled) { settled = true; resolve({ ok: false, error: String(e) }); } });
+  });
+}
+async function gitSync() {
+  const out = { ok: true, pushed: false, message: '' };
+  if (!isGitRepo()) { out.ok = false; out.message = '未检测到 git 仓库，跳过 GitHub 同步'; return out; }
+  try {
+    const inside = await runGit(['rev-parse', '--is-inside-work-tree'], 30000);
+    if (!inside.ok || inside.stdout.trim() !== 'true') {
+      out.ok = false; out.message = '当前目录不是 git 工作区，跳过 GitHub 同步'; return out;
+    }
+    const add = await runGit(['add', '-A'], 60000);
+    if (!add.ok) { out.ok = false; out.message = 'git add 失败：' + (add.stderr || add.error || '未知错误'); return out; }
+    const st = await runGit(['status', '--porcelain'], 60000);
+    if (!st.ok) { out.ok = false; out.message = 'git status 失败，跳过推送'; return out; }
+    if (!st.stdout.trim()) { out.message = '没有需要同步的改动'; out.pushed = false; return out; }
+    const msg = 'chore: 本地后台发布同步 ' + stamp();
+    const commit = await runGit(['commit', '-m', msg], 60000);
+    if (!commit.ok) { out.ok = false; out.message = 'commit 失败：' + (commit.stderr || commit.error || ''); return out; }
+    const push = await runGit(['push', 'origin', 'main'], 100000);
+    if (!push.ok) {
+      const tail = (push.stderr || push.error || '未知错误').split('\n').map(s => s.trim()).filter(Boolean).pop() || 'push 失败';
+      out.ok = false; out.message = '已提交但未推送：' + tail + '（本地配置已落盘，可稍后手动 git push）'; return out;
+    }
+    out.ok = true; out.pushed = true; out.message = '已同步到 GitHub'; return out;
+  } catch (e) {
+    out.ok = false; out.message = '同步异常：' + (e && e.message || e); return out;
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = req.url || '/';
   if (req.method === 'OPTIONS') return json(res, 200, { ok: true });
@@ -86,7 +145,15 @@ const server = http.createServer(async (req, res) => {
         // 同步刷新静态站副本；失败只告警，不影响本次发布结果
         try { require('./tools/export-static-config')(); }
         catch (e) { console.warn('静态配置副本生成失败：' + (e && e.message || e)); }
-        return json(res, 200, { ok: true, savedAt: new Date().toISOString() });
+        // 发布即同步到 GitHub（后台文件已 gitignore，不会进仓库）；失败仅告警
+        let github = null;
+        try { github = await gitSync(); }
+        catch (e) { github = { ok: false, message: '同步未执行：' + (e && e.message || e) }; }
+        if (github) {
+          if (github.ok && github.pushed) console.log('[github] 已同步到远程');
+          else console.warn('[github] ' + (github.message || '未同步'));
+        }
+        return json(res, 200, { ok: true, savedAt: new Date().toISOString(), github: github });
       }
       if (req.method === 'GET' && url.startsWith('/api/history')) {
         const files = fs.existsSync(HISTORY_DIR)
