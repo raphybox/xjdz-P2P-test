@@ -1168,7 +1168,7 @@ window.WOWPINBALL_PUBLISHED = {
   ],
   "weather": {
     "enabled": true,
-    "noneWeight": 5,
+    "noneWeight": 4,
     "types": [
       {
         "enabled": true,
@@ -1190,6 +1190,6 @@ window.WOWPINBALL_PUBLISHED = {
       }
     ]
   },
-  "versionSeq": 2,
-  "version": "WJ-MEXG-Y3J5-AAAAAC-BQ9N-NDUB-Z2K4-CP6R-PCVA"
+  "version": "WJ-MEXG-Y3J5-AAAAAD-BQ96-NDUB-Z2K4-CP6R-PCVA",
+  "versionSeq": 3
 };
