@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>魔兽弹珠 · 三回合对撞</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+
+  <div id="reloadNotice" class="reload-notice" hidden>
+    <span>后台配置已更新，重新载入后生效</span>
+    <button id="reloadBtn" class="ghost-btn" type="button">重新载入</button>
+    <button id="dismissReloadBtn" class="ghost-btn" type="button">忽略</button>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark"><span></span><span></span></div>
+      <div class="brand-text">
+        <h1>魔兽弹珠</h1>
+        <p>九职业 · 三回合 · 随机技能构筑</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button id="nickBtn" class="ghost-btn nick-btn" type="button">设置昵称</button>
+      <button id="speedBtn" class="ghost-btn" type="button">速度 x1</button>
+      <button id="soundBtn" class="ghost-btn" type="button">音效 开</button>
+      <button id="rulesBtn" class="ghost-btn" type="button">规则</button>
+    </div>
+  </header>
+
+  <!-- ============ 选职业 ============ -->
+  <section id="startScreen" class="screen">
+    <div class="section-head">
+      <div>
+        <h2>选择你的职业</h2>
+        <p>每个职业的弹珠拥有不同的生命、力量、质量与速度。对手职业随机。</p>
+      </div>
+    </div>
+
+    <div id="classGrid" class="class-grid"></div>
+
+    <div class="start-footer">
+      <div class="selected-line">
+        <span class="muted">已选择</span>
+        <strong id="selectedClassName">—</strong>
+        <span id="selectedClassTrait" class="muted"></span>
+      </div>
+      <div class="start-actions">
+        <span id="coinChip" class="coin-chip">金币 0</span>
+        <button id="ghostBtn" class="ghost-btn" type="button">异步对战</button>
+        <button id="shopBtn" class="ghost-btn" type="button">商店</button>
+        <button id="startBtn" class="primary-btn" type="button" disabled>开始对战</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 对战 ============ -->
+  <section id="battleScreen" class="screen" hidden>
+    <div class="scoreboard">
+      <div class="fighter-panel player-panel">
+        <div class="fp-top"><div class="fp-ident"><span id="pClassName" class="fp-name">—</span><span id="pNick" class="fp-nick">—</span></div><span class="fp-side">我方</span></div>
+        <div class="hp-track"><div id="pShieldBar" class="shield-bar"></div><div id="pHpBar" class="hp-bar"></div></div>
+        <div class="fp-bottom"><span id="pHpText" class="hp-text">0 / 0</span><span id="pScore" class="score-text">回合胜 0</span></div>
+        <div id="pSkills" class="mini-skills"></div>
+      </div>
+
+      <div class="round-panel">
+        <div id="roundLabel" class="round-label">第 1 / 3 回合</div>
+        <div id="roundPips" class="round-pips"></div>
+        <div id="phaseLabel" class="phase-label">准备阶段</div>
+        <div id="asyncTag" class="async-tag" hidden></div>
+      </div>
+
+      <div class="fighter-panel enemy-panel">
+        <div class="fp-top"><span class="fp-side">对手</span><div class="fp-ident"><span id="eClassName" class="fp-name">—</span><span id="eNick" class="fp-nick">—</span></div></div>
+        <div class="hp-track"><div id="eShieldBar" class="shield-bar"></div><div id="eHpBar" class="hp-bar"></div></div>
+        <div class="fp-bottom"><span id="eScore" class="score-text">回合胜 0</span><span id="eHpText" class="hp-text">0 / 0</span></div>
+        <div id="eSkills" class="mini-skills"></div>
+      </div>
+    </div>
+
+    <div class="arena-wrap" id="arenaWrap">
+      <canvas id="arena"></canvas>
+      <div class="arena-timer"><span id="timerText">9.0</span><span class="muted"> 秒</span></div>
+      <button id="logBtn" class="arena-log-btn" type="button">战斗记录</button>
+      <div id="banner" class="banner" hidden><h3 id="bannerTitle"></h3><p id="bannerSub"></p></div>
+      <div class="aim-overlay" id="aimOverlay" hidden>
+        <div class="aim-tip">在弹球上按住并拖动，自由设定发射方向</div>
+        <button id="launchBtn" class="primary-btn" type="button">发射弹珠 ▶</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 结算 ============ -->
+  <section id="resultScreen" class="screen" hidden>
+    <div class="result-card">
+      <div id="resultKicker" class="result-kicker">三回合结束</div>
+      <h2 id="resultTitle">—</h2>
+      <p id="resultDesc" class="result-desc"></p>
+      <div id="roundReview" class="round-review"></div>
+      <div id="buildReview" class="build-review"></div>
+      <div class="result-actions">
+        <button id="rematchBtn" class="primary-btn" type="button">再战一局（同职业）</button>
+        <button id="shareResultBtn" class="ghost-btn" type="button">分享码 · 发给好友</button>
+        <button id="changeBtn" class="ghost-btn" type="button">更换职业</button>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<!-- 昵称弹层：首次进入必须手动输入，之后可从顶栏修改 -->
+<div id="nameModal" class="modal" hidden>
+  <div class="modal-card name-modal-card">
+    <div class="modal-head">
+      <h3 id="nameTitle">给自己起个名字</h3>
+      <button id="closeNameBtn" class="icon-btn" type="button">关闭</button>
+    </div>
+    <p class="name-tip">这个昵称会写进你的对局分享码，好友导入后能看到是谁的挑战；同职业对战时也会标在弹珠上，方便分清敌我。</p>
+    <label class="name-label" for="nameInput">昵称</label>
+    <input id="nameInput" class="name-input" type="text" maxlength="12" autocomplete="off" placeholder="例如：联盟小分队" />
+    <div id="nameMsg" class="ghost-msg" hidden></div>
+    <div class="name-actions">
+      <button id="nameCancelBtn" class="ghost-btn" type="button" hidden>取消</button>
+      <button id="nameConfirmBtn" class="primary-btn" type="button">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 规则弹层 -->
+<div id="rulesModal" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><h3>规则</h3><button id="closeRulesBtn" class="icon-btn" type="button">关闭</button></div>
+    <ol class="rules-list" id="rulesList"></ol>
+    <p class="modal-foot">技能中的百分比为相对目标最大生命的比例伤害加成，暴击、减伤、护盾、吸血等按公式叠加。本规则随后台配置自动生成。</p>
+  </div>
+</div>
+
+<!-- 战斗记录弹层 -->
+<div id="logModal" class="modal" hidden>
+  <div class="modal-card log-modal-card">
+    <div class="modal-head"><h3>战斗记录</h3><button id="closeLogBtn" class="icon-btn" type="button">关闭</button></div>
+    <div id="battleLog" class="battle-log log-modal-body"></div>
+  </div>
+</div>
+
+<!-- 技能选择弹层 -->
+<div id="draftModal" class="modal" hidden>
+  <div class="modal-card draft-modal-card">
+    <div class="modal-head"><h3 id="draftTitle">战前准备 · 随机三选一</h3><span id="draftSub" class="modal-sub">选择一个技能，本局全程生效</span></div>
+    <div id="draftCards" class="draft-cards"></div>
+  </div>
+</div>
+
+<!-- 商店弹层 -->
+<div id="shopModal" class="modal" hidden>
+  <div class="modal-card shop-modal-card">
+    <div class="modal-head">
+      <h3>商店 · 抽取弹珠</h3>
+      <div class="shop-head-right">
+        <span id="shopCoin" class="coin-chip">金币 0</span>
+        <button id="closeShopBtn" class="icon-btn" type="button">关闭</button>
+      </div>
+    </div>
+    <div class="shop-draw-row">
+      <div class="shop-draw-info">
+        <span id="shopCostLabel" class="shop-cost">单抽 80 金币</span>
+        <span id="shopHint" class="faint">每次随机获得一颗卡池中的弹珠，重复获得会返还金币</span>
+      </div>
+      <button id="shopDrawBtn" class="primary-btn" type="button">抽取一次</button>
+    </div>
+    <div id="shopResult" class="shop-result" hidden></div>
+    <div class="shop-section-title">卡池</div>
+    <div id="shopPool" class="shop-pool"></div>
+  </div>
+</div>
+
+<!-- 异步对战弹层 -->
+<div id="ghostModal" class="modal" hidden>
+  <div class="modal-card ghost-modal-card">
+    <div class="modal-head">
+      <h3>异步对战 · 幽灵挑战</h3>
+      <div class="shop-head-right">
+        <span class="faint">离线可玩 · 对手是录好的决策</span>
+        <button id="closeGhostBtn" class="icon-btn" type="button">关闭</button>
+      </div>
+    </div>
+    <div class="ghost-tip">
+      幽灵带着它当时的回合技能与发射方向出手。你每打完一局，系统也会把你的这一局收录成幽灵，可用分享码发给朋友。
+    </div>
+    <div id="ghostList" class="ghost-list"></div>
+    <div class="ghost-share">
+      <div class="ghost-share-head">
+        <span>分享码</span>
+        <span class="faint">复制给朋友，对方粘贴后点「导入」即可挑战你的幽灵</span>
+      </div>
+      <div class="ghost-code-row">
+        <textarea id="ghostCode" class="textarea ghost-code" rows="2" placeholder="点击上方「分享码」生成，或在此粘贴别人的分享码"></textarea>
+        <button id="ghostImportBtn" class="ghost-btn" type="button">导入</button>
+      </div>
+      <div id="ghostMsg" class="ghost-msg" hidden></div>
+    </div>
+  </div>
+</div>
+
+<!-- 结算分享码弹层 -->
+<div id="shareModal" class="modal" hidden>
+  <div class="modal-card share-modal-card">
+    <div class="modal-head">
+      <h3>分享这局挑战</h3>
+      <div class="shop-head-right">
+        <span class="modal-sub">好友导入即可异步对战</span>
+        <button id="closeShareBtn" class="icon-btn" type="button">关闭</button>
+      </div>
+    </div>
+    <div class="share-tip">
+      这串码记下了你的昵称、职业、每回合选的技能和拖出的发射方向。好友粘贴导入后，会用你这套决策当对手，随时开一局，不需要同时在线。
+    </div>
+    <div id="shareMeta" class="share-meta"></div>
+    <div id="sharePlays" class="share-plays"></div>
+    <div class="share-code-head">
+      <span>分享码</span>
+      <span class="faint">复制后发给好友，让对方在「异步对战」里粘贴导入</span>
+    </div>
+    <textarea id="shareCode" class="textarea ghost-code share-code" rows="5" readonly placeholder="完成一局对战后即可生成"></textarea>
+    <div class="share-actions">
+      <button id="shareCopyBtn" class="primary-btn" type="button">复制分享码</button>
+      <button id="shareImportBtn" class="ghost-btn" type="button">去导入朋友的码</button>
+    </div>
+    <div id="shareMsg" class="ghost-msg" hidden></div>
+  </div>
+</div>
+
+<script src="game-data.js"></script>
+<script src="skin-render.js"></script>
+<script src="config-loader.js"></script>
+<script src="ui-layout.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

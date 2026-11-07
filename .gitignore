@@ -1,0 +1,16 @@
+# 项目工作记忆（本地 AI 记录，不属于源码）
+.workbuddy/
+
+# 后台每次发布自动生成的历史快照（体积大、每次发布都会新增）
+data/history/
+
+# 本地依赖 / 备份 / 日志 / 系统文件
+node_modules/
+*.bak
+*.bak-*
+*.log
+.DS_Store
+Thumbs.db
+
+# 说明：data/game-config.json 是有意提交的，它包含职业数值、地图、
+# 已上传的弹珠贴图与 UI 背景，是 Pages 静态站的默认内容数据源。
