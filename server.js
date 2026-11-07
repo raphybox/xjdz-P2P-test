@@ -1,5 +1,5 @@
 /* =============================================================
-   魔兽弹珠 · 本地开发服务（零依赖）
+   选技弹珠 · 本地开发服务（零依赖）
    启动：node server.js        打开：http://127.0.0.1:8787/admin.html
    作用：托管游戏与后台，并把后台配置真正落盘到 data/game-config.json
    不启动本服务也可以：后台配置会写入 localStorage，游戏刷新即生效
@@ -116,7 +116,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   ensureDirs();
-  console.log('魔兽弹珠开发服务已启动');
+  console.log('选技弹珠开发服务已启动');
   console.log('  后台工具： http://' + HOST + ':' + PORT + '/admin.html');
   console.log('  游戏预览： http://' + HOST + ':' + PORT + '/index.html');
   console.log('  配置文件： ' + CONFIG_FILE);

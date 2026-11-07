@@ -1,5 +1,5 @@
 /* =============================================================
-   魔兽弹珠 · 默认配置（共享数据层）
+   选技弹珠 · 默认配置（共享数据层）
    - 主游戏与后台工具都读取本文件
    - 后台保存后写入 localStorage: wowpinball.config.v1
    - 若启动 server.js，还会落盘到 data/game-config.json
@@ -7,7 +7,7 @@
 window.WOWPINBALL_DEFAULT = {
   meta: {
     schema: 1,
-    gameName: '魔兽弹珠',
+    gameName: '选技弹珠',
     updatedAt: '2026-11-06',
     note: 'v2 物理：无追踪加速度，开战前选定初始发射方向，全程靠反弹推进（力不衰减），碰撞时获得加速反弹'
   },

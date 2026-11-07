@@ -3,7 +3,7 @@
 window.WOWPINBALL_PUBLISHED = {
   "meta": {
     "schema": 1,
-    "gameName": "魔兽弹珠",
+    "gameName": "选技弹珠",
     "updatedAt": "2026-11-06",
     "note": "默认配置，与首版游戏数值一致"
   },
