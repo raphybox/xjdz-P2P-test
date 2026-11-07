@@ -2049,10 +2049,20 @@
     }
   }
 
+  /* 右下角私有版本号：只读配置里的 version 密钥串展示，无任何逻辑参与 */
+  function applyVersionTag() {
+    const el = document.getElementById('verTag');
+    if (!el) return;
+    const v = DATA.version ? String(DATA.version) : '';
+    el.textContent = v;
+    el.hidden = !v;
+  }
+
   /* ---------------------------------------------------------
      21. 启动
      --------------------------------------------------------- */
   applyTexts();
+  applyVersionTag();
   loadProfile();
   updateNickButton();
   syncSideNames();

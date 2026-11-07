@@ -141,6 +141,16 @@ const server = http.createServer(async (req, res) => {
         if (fs.existsSync(CONFIG_FILE)) {
           fs.writeFileSync(path.join(HISTORY_DIR, stamp() + '.json'), fs.readFileSync(CONFIG_FILE));
         }
+        // 私有版本号自增：以「已落盘文件」里的计数作为权威，每次发布严格 +1。
+        // 不依赖后台传来的版本，避免浏览器端草稿回传导致重复计数；
+        // 编码格式只有我们自己理解（见 tools/version-codec.js）。
+        let verInfo;
+        try {
+          const prevObj = fs.existsSync(CONFIG_FILE) ? JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) : null;
+          verInfo = require('./tools/version-codec').nextVersion(prevObj || data);
+        } catch (e) { verInfo = { versionSeq: 1, version: 'WJ-DEV' }; }
+        data.versionSeq = verInfo.versionSeq;
+        data.version = verInfo.version;
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2));
         // 同步刷新静态站副本；失败只告警，不影响本次发布结果
         try { require('./tools/export-static-config')(); }
@@ -153,7 +163,8 @@ const server = http.createServer(async (req, res) => {
           if (github.ok && github.pushed) console.log('[github] 已同步到远程');
           else console.warn('[github] ' + (github.message || '未同步'));
         }
-        return json(res, 200, { ok: true, savedAt: new Date().toISOString(), github: github });
+        return json(res, 200, { ok: true, savedAt: new Date().toISOString(), github: github,
+          version: data.version, versionSeq: data.versionSeq });
       }
       if (req.method === 'GET' && url.startsWith('/api/history')) {
         const files = fs.existsSync(HISTORY_DIR)

@@ -12,6 +12,12 @@ window.WOWPINBALL_DEFAULT = {
     note: 'v2 物理：无追踪加速度，开战前选定初始发射方向，全程靠反弹推进（力不衰减），碰撞时获得加速反弹'
   },
 
+  /* 私有版本号：对外显示一串只有我们理解的密钥（tools/version-codec.js 编码），
+     内部 versionSeq 是从 1 开始的构建计数，server.js 每次发布自动 +1 并重新编码。
+     游戏端只读 version 字符串显示在右下角，不参与任何逻辑。 */
+  version: '',
+  versionSeq: 0,
+
   config: {
     arenaW: 900,
     arenaH: 400,

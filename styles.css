@@ -542,3 +542,11 @@ body.preview-mode .arena-wrap { height: clamp(360px, 60vh, 720px); }
 .preview-bar .pb-btn { font-size: 11.5px; padding: 5px 11px; border-radius: 999px; border: 1px solid #2a3648;
   background: #161d2a; color: #e9edf5; }
 .preview-bar .pb-btn:hover { background: #1b2433; border-color: #3a4a63; }
+
+/* 右下角私有版本号：只显示内部构建密钥，不干扰任何交互 */
+.version-tag {
+  position: fixed; right: 10px; bottom: 6px; z-index: 60;
+  font: 600 10.5px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: .6px; color: rgba(150, 172, 205, .38);
+  user-select: none; pointer-events: none; white-space: nowrap;
+}
