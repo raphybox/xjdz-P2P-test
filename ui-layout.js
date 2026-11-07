@@ -240,6 +240,8 @@
       el.style[prop] = value;
     }
     el[OWN] = own;
+    // 图层上传了图片：隐藏其装饰性子元素（如品牌图标里的手绘圆点），避免遮挡素材
+    if (p && p.img) el.classList.add('__hasImg'); else el.classList.remove('__hasImg');
     if (!p) return;
 
     var dx = num(p.dx, -2000, 2000) || 0, dy = num(p.dy, -2000, 2000) || 0;

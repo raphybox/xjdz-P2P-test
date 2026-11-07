@@ -2035,8 +2035,24 @@
   }
 
   /* ---------------------------------------------------------
+     20.5 文案注入：把后台「文案编辑」里配置的内容写入对应 DOM
+     --------------------------------------------------------- */
+  function applyTexts() {
+    const list = (DATA.texts && Array.isArray(DATA.texts)) ? DATA.texts : [];
+    for (let i = 0; i < list.length; i++) {
+      const t = list[i];
+      if (!t || !t.selector) continue;
+      const el = document.querySelector(t.selector);
+      if (!el) continue;
+      const v = t.value == null ? '' : String(t.value);
+      if (t.mode === 'html') el.innerHTML = v; else el.textContent = v;
+    }
+  }
+
+  /* ---------------------------------------------------------
      21. 启动
      --------------------------------------------------------- */
+  applyTexts();
   loadProfile();
   updateNickButton();
   syncSideNames();

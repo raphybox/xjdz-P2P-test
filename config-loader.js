@@ -60,6 +60,8 @@
     // 界面编辑器迁移：旧存档没有 ui 字段时补一份空覆盖，保持默认外观
     if (!d.ui || typeof d.ui !== 'object') d.ui = { enabled: true, screens: {} };
     if (!d.ui.screens || typeof d.ui.screens !== 'object') d.ui.screens = {};
+    // 文案迁移：旧存档没有 texts 时补齐默认文案（深拷贝，避免与内置默认互相引用）
+    if (!Array.isArray(d.texts)) d.texts = (DEF.texts || []).map(function (t) { return Object.assign({}, t); });
     return d;
   }
 })();

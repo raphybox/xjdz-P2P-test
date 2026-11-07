@@ -14,3 +14,9 @@ Thumbs.db
 
 # 说明：data/game-config.json 是有意提交的，它包含职业数值、地图、
 # 已上传的弹珠贴图与 UI 背景，是 Pages 静态站的默认内容数据源。
+
+# 管理后台（admin.*）仅在本地使用，不进入 GitHub / 部署产物。
+# 本地修改游戏配置后由 server.js 自动推送到 GitHub，但后台工具本身不发布。
+admin.html
+admin.js
+admin.css

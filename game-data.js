@@ -159,5 +159,38 @@ window.WOWPINBALL_DEFAULT = {
         extraDraft: 1, skillBan: [], skillBoost: []
       }
     }
+  ],
+
+  /* 游戏内文案：后台「文案编辑」页可逐条修改，游戏加载时按 selector 写入对应 DOM。
+     mode = 'text' 写入 textContent；mode = 'html' 写入 innerHTML（用于含简单说明文字）。
+     selector 为 CSS 选择器，命中第一个匹配元素；value 为空字符串时清空该处文字。 */
+  texts: [
+    { id: 'brandTitle', label: '品牌标题（LOGO 文字）', group: '品牌与首页', selector: '.brand-text h1', mode: 'text', value: '选技弹珠' },
+    { id: 'brandSub', label: '品牌副标题', group: '品牌与首页', selector: '.brand-text p', mode: 'text', value: '九职业 · 三回合 · 随机技能构筑' },
+    { id: 'startTitle', label: '首页主标题', group: '品牌与首页', selector: '#startScreen .section-head h2', mode: 'text', value: '选择你的职业' },
+    { id: 'startDesc', label: '首页说明文字', group: '品牌与首页', selector: '#startScreen .section-head p', mode: 'text', value: '每个职业的弹珠拥有不同的生命、力量、质量与速度。对手职业随机。' },
+
+    { id: 'nickBtn', label: '顶栏「设置昵称」按钮', group: '按钮文字', selector: '#nickBtn', mode: 'text', value: '设置昵称' },
+    { id: 'rulesBtn', label: '顶栏「规则」按钮', group: '按钮文字', selector: '#rulesBtn', mode: 'text', value: '规则' },
+    { id: 'ghostBtn', label: '底部「异步对战」按钮', group: '按钮文字', selector: '#ghostBtn', mode: 'text', value: '异步对战' },
+    { id: 'shopBtn', label: '底部「商店」按钮', group: '按钮文字', selector: '#shopBtn', mode: 'text', value: '商店' },
+    { id: 'startBtn', label: '底部「开始对战」按钮', group: '按钮文字', selector: '#startBtn', mode: 'text', value: '开始对战' },
+
+    { id: 'nameTitle', label: '昵称弹层标题', group: '弹层文案', selector: '#nameTitle', mode: 'text', value: '给自己起个名字' },
+    { id: 'nameLabel', label: '昵称输入框标签', group: '弹层文案', selector: '.name-label', mode: 'text', value: '昵称' },
+    { id: 'nameTip', label: '昵称弹层说明', group: '弹层文案', selector: '.name-tip', mode: 'text', value: '这个昵称会写进你的对局分享码，好友导入后能看到是谁的挑战；同职业对战时也会标在弹珠上，方便分清敌我。' },
+    { id: 'rulesHead', label: '规则弹层标题', group: '弹层文案', selector: '#rulesModal .modal-head h3', mode: 'text', value: '规则' },
+    { id: 'rulesFoot', label: '规则弹层脚注', group: '弹层文案', selector: '#rulesModal .modal-foot', mode: 'html', value: '技能中的百分比为相对目标最大生命的比例伤害加成，暴击、减伤、护盾、吸血等按公式叠加。本规则随后台配置自动生成。' },
+    { id: 'logTitle', label: '战斗记录弹层标题', group: '弹层文案', selector: '#logModal .modal-head h3', mode: 'text', value: '战斗记录' },
+    { id: 'draftTitle', label: '技能三选一标题', group: '弹层文案', selector: '#draftTitle', mode: 'text', value: '战前准备 · 随机三选一' },
+    { id: 'draftSub', label: '技能三选一副标题', group: '弹层文案', selector: '#draftSub', mode: 'text', value: '选择一个技能，本局全程生效' },
+    { id: 'shopTitle', label: '商店弹层标题', group: '弹层文案', selector: '#shopModal .modal-head h3', mode: 'text', value: '商店 · 抽取弹珠' },
+    { id: 'shopCost', label: '商店单抽价格标签', group: '弹层文案', selector: '#shopCostLabel', mode: 'text', value: '单抽 80 金币' },
+    { id: 'shopHint', label: '商店抽取说明', group: '弹层文案', selector: '#shopHint', mode: 'text', value: '每次随机获得一颗卡池中的弹珠，重复获得会返还金币' },
+    { id: 'shopSection', label: '商店卡池标题', group: '弹层文案', selector: '.shop-section-title', mode: 'text', value: '卡池' },
+    { id: 'ghostTitle', label: '异步对战弹层标题', group: '弹层文案', selector: '#ghostModal .modal-head h3', mode: 'text', value: '异步对战 · 幽灵挑战' },
+    { id: 'ghostTip', label: '异步对战说明', group: '弹层文案', selector: '.ghost-tip', mode: 'html', value: '幽灵带着它当时的回合技能与发射方向出手。你每打完一局，系统也会把你的这一局收录成幽灵，可用分享码发给朋友。' },
+    { id: 'shareTitle', label: '分享弹层标题', group: '弹层文案', selector: '#shareModal .modal-head h3', mode: 'text', value: '分享这局挑战' },
+    { id: 'shareTip', label: '分享说明', group: '弹层文案', selector: '.share-tip', mode: 'html', value: '这串码记下了你的昵称、职业、每回合选的技能和拖出的发射方向。好友粘贴导入后，会用你这套决策当对手，随时开一局，不需要同时在线。' }
   ]
 };
