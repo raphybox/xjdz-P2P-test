@@ -21,6 +21,29 @@
   const MAP = MAP_LIST.find(m => m.id === DATA.activeMapId) || MAP_LIST[0] || null;
   const C = DATA.config;
 
+  /* 对局天气配置：只保留启用且有权重的类型，数值全部兜底，旧存档缺字段也能跑 */
+  const WEATHER_CFG = (function () {
+    const w = (DATA.weather && typeof DATA.weather === 'object') ? DATA.weather : {};
+    const all = Array.isArray(w.types) ? w.types : [];
+    const num = (v, d) => { const n = Number(v); return isFinite(n) ? n : d; };
+    const types = all
+      .filter(t => t && t.id && t.enabled !== false && num(t.weight, 0) > 0)
+      .map(t => ({
+        id: t.id,
+        name: t.name || t.id,
+        weight: num(t.weight, 1),
+        forceMin: Math.max(0, num(t.forceMin, 30)),
+        forceMax: Math.max(0, num(t.forceMax, 70)),
+        sway: Math.max(0, num(t.sway, 0.45)),
+        slip: Math.max(0, num(t.slip, 0.12))
+      }));
+    return {
+      enabled: w.enabled !== false && types.length > 0,
+      noneWeight: Math.max(0, num(w.noneWeight, 5)),
+      types: types
+    };
+  })();
+
   const CONFIG = {
     ARENA_W: MAP ? MAP.width : C.arenaW,
     ARENA_H: MAP ? MAP.height : C.arenaH,
@@ -244,6 +267,8 @@
     sound: true,
     clock: 0,
     lastImpact: -10,
+    weather: null,           // 本回合天气：null=无 { id, name, dir, force, sway, slip }
+    weatherFx: [],           // 天气视觉粒子（风线 / 雨滴）
     trauma: 0,
     hitStopUntil: 0,
     flash: 0,
@@ -1011,6 +1036,44 @@
   }
 
   /* ---------------------------------------------------------
+     10.8 对局天气：进入对撞阶段时按权重随机抽取（含无天气）
+     --------------------------------------------------------- */
+  function pickWeather() {
+    G.weather = null;
+    G.weatherFx = [];
+    if (!WEATHER_CFG.enabled) return;
+    const total = WEATHER_CFG.types.reduce((s, t) => s + t.weight, 0) + WEATHER_CFG.noneWeight;
+    if (total <= 0) return;
+    let r = Math.random() * total;
+    let picked = null;
+    for (let i = 0; i < WEATHER_CFG.types.length; i++) {
+      if (r < WEATHER_CFG.types[i].weight) { picked = WEATHER_CFG.types[i]; break; }
+      r -= WEATHER_CFG.types[i].weight;
+    }
+    if (!picked) return;   // 落在「无天气」权重区间
+
+    if (picked.id === 'wind') {
+      const dir = Math.random() < 0.5 ? -1 : 1;
+      const force = rand(picked.forceMin, Math.max(picked.forceMin, picked.forceMax));
+      G.weather = { id: 'wind', name: picked.name, dir: dir, force: force, sway: picked.sway };
+      seedWindFx();
+      addLog('本回合天气：' + picked.name + '（' + (dir > 0 ? '吹向右侧 →' : '吹向左侧 ←') + '，力度 ' + Math.round(force) + '）', 'hl');
+    } else if (picked.id === 'rain') {
+      G.weather = { id: 'rain', name: picked.name, slipExtra: picked.slip };
+      seedRainFx();
+      addLog('本回合天气：' + picked.name + '（场地湿滑，反弹更活跃）', 'hl');
+    } else {
+      G.weather = { id: picked.id, name: picked.name };
+      addLog('本回合天气：' + picked.name, 'hl');
+    }
+  }
+
+  // 当前回合的湿滑系数：下雨 > 1，其余 = 1
+  function weatherSlip() {
+    return (G.weather && G.weather.id === 'rain') ? 1 + (G.weather.slipExtra || 0) : 1;
+  }
+
+  /* ---------------------------------------------------------
      11. 回合流程
      --------------------------------------------------------- */
   function beginRound() {
@@ -1024,6 +1087,7 @@
     }
     G.roundTime = CONFIG.ROUND_SECONDS;
     G.phase = 'fighting';
+    pickWeather();   // 进入倒计时后随机抽取本回合天气（风 / 雨 / 无）
     dom.phaseLabel.textContent = '对撞中';
     showBanner('第 ' + G.round + ' 回合', G.playerClass.name + '  对阵  ' + G.enemyClass.name, 900);
     addLog('第 ' + G.round + ' 回合开始，双方血量重置', 'hl');
@@ -1157,7 +1221,7 @@
   function resolveObstacles(f) {
     if (!MAP || !MAP.obstacles || !MAP.obstacles.length) return;
     MAP.obstacles.forEach(ob => {
-      const bounce = ob.bounce == null ? 0.9 : ob.bounce;
+      const bounce = (ob.bounce == null ? 0.9 : ob.bounce) * weatherSlip();   // 下雨湿滑：障碍反弹更弹
       if (ob.type === 'circle') {
         let dx = f.x - ob.x, dy = f.y - ob.y;
         let d = Math.hypot(dx, dy);
@@ -1201,10 +1265,17 @@
     G.clock += dt;
     const p = G.player, e = G.enemy;
     const list = [p, e];
+    const slip = weatherSlip();   // 下雨湿滑：反弹系数整体放大
 
     list.forEach((f, i) => {
       // 无追踪加速度、无速度衰减：全程只靠初始发射方向与反弹推进
       const slowActive = G.clock < f.slowUntil ? f.slowFactor : 1;
+
+      // 天气 · 大风：持续水平力推弹珠（含正弦阵风波动），同样受速度上限约束
+      if (G.weather && G.weather.id === 'wind') {
+        const gust = 1 + G.weather.sway * Math.sin(G.clock * 2.1 + (f.side === 'player' ? 0 : 1.7));
+        f.vx += G.weather.dir * G.weather.force * gust * dt;
+      }
 
       const sp = Math.hypot(f.vx, f.vy);
       const cap = CONFIG.MAX_SPEED * f.speed * slowActive;
@@ -1213,11 +1284,12 @@
       f.x += f.vx * dt;
       f.y += f.vy * dt;
 
-      // 边界反弹
-      if (f.x - f.r < 0) { f.x = f.r; f.vx = Math.abs(f.vx) * CONFIG.WALL_RESTITUTION; }
-      if (f.x + f.r > CONFIG.ARENA_W) { f.x = CONFIG.ARENA_W - f.r; f.vx = -Math.abs(f.vx) * CONFIG.WALL_RESTITUTION; }
-      if (f.y - f.r < 0) { f.y = f.r; f.vy = Math.abs(f.vy) * CONFIG.WALL_RESTITUTION; }
-      if (f.y + f.r > CONFIG.ARENA_H) { f.y = CONFIG.ARENA_H - f.r; f.vy = -Math.abs(f.vy) * CONFIG.WALL_RESTITUTION; }
+      // 边界反弹（下雨湿滑：反弹更有弹性）
+      const wr = CONFIG.WALL_RESTITUTION * slip;
+      if (f.x - f.r < 0) { f.x = f.r; f.vx = Math.abs(f.vx) * wr; }
+      if (f.x + f.r > CONFIG.ARENA_W) { f.x = CONFIG.ARENA_W - f.r; f.vx = -Math.abs(f.vx) * wr; }
+      if (f.y - f.r < 0) { f.y = f.r; f.vy = Math.abs(f.vy) * wr; }
+      if (f.y + f.r > CONFIG.ARENA_H) { f.y = CONFIG.ARENA_H - f.r; f.vy = -Math.abs(f.vy) * wr; }
 
       resolveObstacles(f);
 
@@ -1253,7 +1325,7 @@
       const rvx = p.vx - e.vx, rvy = p.vy - e.vy;
       const vn = rvx * nx + rvy * ny;   // >0 表示正在接近
       if (vn > 0) {
-        const j = (1 + CONFIG.RESTITUTION) * vn / (1 / p.mass + 1 / e.mass);
+        const j = (1 + CONFIG.RESTITUTION * slip) * vn / (1 / p.mass + 1 / e.mass);
         p.vx -= j / p.mass * nx; p.vy -= j / p.mass * ny;
         e.vx += j / e.mass * nx; e.vy += j / e.mass * ny;
 
@@ -1301,6 +1373,104 @@
     G.particles = G.particles.filter(q => q.life > 0);
     G.floaters.forEach(q => { q.life -= dt; q.y += q.vy * dt; q.vy *= Math.pow(0.96, dt * 60); });
     G.floaters = G.floaters.filter(q => q.life > 0);
+    updateWeatherFx(dt);
+  }
+
+  /* ---------------------------------------------------------
+     14.2 天气视觉：风线 / 雨滴 / 左上角天气牌
+     --------------------------------------------------------- */
+  function seedWindFx() {
+    const n = 26;
+    for (let i = 0; i < n; i++) {
+      G.weatherFx.push({
+        x: rand(0, CONFIG.ARENA_W), y: rand(0, CONFIG.ARENA_H),
+        len: rand(26, 64), sp: rand(220, 480) * (G.weather.dir || 1),
+        al: rand(0.08, 0.22), wob: rand(0, 6.28)
+      });
+    }
+  }
+  function seedRainFx() {
+    const n = 84;
+    for (let i = 0; i < n; i++) {
+      G.weatherFx.push({
+        x: rand(0, CONFIG.ARENA_W), y: rand(-CONFIG.ARENA_H, CONFIG.ARENA_H),
+        len: rand(10, 22), v: rand(420, 640), drift: rand(-26, 26), al: rand(0.12, 0.3)
+      });
+    }
+  }
+  function updateWeatherFx(dt) {
+    const AW = CONFIG.ARENA_W, AH = CONFIG.ARENA_H;
+    G.weatherFx.forEach(q => {
+      if (G.weather && G.weather.id === 'wind') {
+        q.x += q.sp * dt;
+        q.y += Math.sin(G.clock * 1.4 + q.wob) * 14 * dt;
+        if (q.sp > 0 && q.x - q.len > AW) { q.x = -q.len; q.y = rand(0, AH); }
+        if (q.sp < 0 && q.x + q.len < 0) { q.x = AW + q.len; q.y = rand(0, AH); }
+        q.y = clamp(q.y, 0, AH);
+      } else if (G.weather && G.weather.id === 'rain') {
+        q.y += q.v * dt; q.x += q.drift * dt;
+        if (q.y - q.len > AH) { q.y = -q.len - rand(0, 40); q.x = rand(0, AW); }
+        if (q.x < -8) q.x = AW + 8; if (q.x > AW + 8) q.x = -8;
+      }
+    });
+  }
+  function drawWeatherBack() {
+    if (!G.weather || G.weather.id !== 'wind' || !G.weatherFx.length) return;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(190,214,255,1)';
+    ctx.lineWidth = 1.4;
+    G.weatherFx.forEach(q => {
+      ctx.globalAlpha = q.al;
+      ctx.beginPath();
+      ctx.moveTo(q.x, q.y);
+      ctx.lineTo(q.x - q.len * Math.sign(q.sp || 1), q.y + 3);
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+  function drawWeatherFront() {
+    if (!G.weather) return;
+    const AW = CONFIG.ARENA_W;
+    if (G.weather.id === 'rain' && G.weatherFx.length) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(150,196,255,1)';
+      ctx.lineWidth = 1.2;
+      G.weatherFx.forEach(q => {
+        ctx.globalAlpha = q.al;
+        ctx.beginPath();
+        ctx.moveTo(q.x, q.y);
+        ctx.lineTo(q.x - q.drift * 0.05, q.y - q.len);
+        ctx.stroke();
+      });
+      // 全场淡淡的湿滑雾层
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = 'rgba(96,150,220,0.05)';
+      ctx.fillRect(0, 0, AW, CONFIG.ARENA_H);
+      ctx.restore();
+    }
+    // 左上角天气牌：一眼看清本回合天气与方向
+    let label, color;
+    if (G.weather.id === 'wind') {
+      const s = G.weather.force >= 55 ? '▍▍▍' : (G.weather.force >= 40 ? '▍▍' : '▍');
+      label = G.weather.name + ' ' + (G.weather.dir > 0 ? '→' : '←') + s;
+      color = 'rgba(140,190,255,0.92)';
+    } else if (G.weather.id === 'rain') {
+      label = G.weather.name + ' · 湿滑';
+      color = 'rgba(150,196,255,0.92)';
+    } else {
+      label = G.weather.name;
+      color = 'rgba(200,214,235,0.8)';
+    }
+    ctx.save();
+    ctx.font = '600 12px "PingFang SC","Microsoft YaHei",sans-serif';
+    const w = ctx.measureText(label).width + 22, h = 24, x = 12, y = 12;
+    roundRectPath(ctx, x, y, w, h, 9);
+    ctx.fillStyle = 'rgba(9,14,22,0.78)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(120,160,220,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, x + 11, y + h / 2 + 0.5);
+    ctx.restore();
   }
 
   /* ---------------------------------------------------------
@@ -1350,6 +1520,7 @@
     ctx.beginPath(); ctx.arc(AW / 2, AH / 2, 62, 0, Math.PI * 2); ctx.stroke();
     ctx.beginPath(); ctx.arc(AW / 2, AH / 2, 4, 0, Math.PI * 2); ctx.fillStyle = theme.accent; ctx.fill();
     drawObstacles();
+    drawWeatherBack();   // 风线画在弹珠后面，作为场内环境层
 
     // 震屏只作用于视觉变换，不影响物理坐标
     const shake = G.trauma * G.trauma;
@@ -1362,6 +1533,8 @@
     drawParticles();
     drawFloaters();
     ctx.restore();
+
+    drawWeatherFront();   // 雨滴与天气牌画在弹珠前面
 
     if (G.flash > 0) {
       ctx.fillStyle = 'rgba(255,255,255,' + (G.flash * 0.35).toFixed(3) + ')';

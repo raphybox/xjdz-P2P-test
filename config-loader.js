@@ -62,6 +62,10 @@
     if (!d.ui.screens || typeof d.ui.screens !== 'object') d.ui.screens = {};
     // 文案迁移：旧存档没有 texts 时补齐默认文案（深拷贝，避免与内置默认互相引用）
     if (!Array.isArray(d.texts)) d.texts = (DEF.texts || []).map(function (t) { return Object.assign({}, t); });
+    // 天气迁移：旧存档没有 weather 时整体补一份默认（纯数据，深拷贝隔离引用）
+    if (!d.weather || typeof d.weather !== 'object') {
+      d.weather = JSON.parse(JSON.stringify(DEF.weather || { enabled: true, noneWeight: 5, types: [] }));
+    }
     // 私有版本号：旧 localStorage 存档没有 version 字段时，从已发布静态副本回填，
     // 否则右下角版本号会被旧存档遮蔽（发布记录在服务端文件里，浏览器存档天然滞后一拍）
     if (!d.version && window.WOWPINBALL_PUBLISHED && window.WOWPINBALL_PUBLISHED.version) {

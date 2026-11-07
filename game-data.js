@@ -43,6 +43,23 @@ window.WOWPINBALL_DEFAULT = {
 
   tierWeights: { common: 1, rare: 0.62, epic: 0.28 },
 
+  /* 对局天气：每回合进入对撞阶段（倒计时开始）时按权重随机抽取一次，含「无天气」。
+     wind 大风：整回合给场内弹珠施加持续水平力（随机方向 + 正弦阵风波动），同受速度上限约束；
+     rain 下雨：场地湿滑，弹珠互撞、墙壁与障碍反弹更有弹性（反弹系数乘 1+slip）。
+     后台「对局天气」页可调整开关、权重与全部参数。 */
+  weather: {
+    enabled: true,
+    noneWeight: 5,
+    types: [
+      { id: 'wind', name: '大风', enabled: true, weight: 4,
+        forceMin: 30, forceMax: 70, sway: 0.45,
+        desc: '持续水平风力推动弹珠，阵风时强时弱，方向每回合随机' },
+      { id: 'rain', name: '下雨', enabled: true, weight: 3,
+        slip: 0.12,
+        desc: '场地湿滑：互撞与墙壁、障碍反弹更有弹性，来回更快更难预判' }
+    ]
+  },
+
   /* 商店：抽取弹珠（职业）。starter 里的职业默认解锁，其余需要在商店抽取。
      后续在后台「职业管理」新增弹珠后，会自动进入卡池（默认未解锁），可在后台「商店」页调整稀有度/权重/是否上架。 */
   shop: {
