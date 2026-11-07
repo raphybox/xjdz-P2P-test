@@ -971,7 +971,7 @@ window.WOWPINBALL_PUBLISHED = {
       "group": "品牌与首页",
       "selector": ".brand-text h1",
       "mode": "text",
-      "value": "选技弹珠"
+      "value": "选技弹珠-大乱斗"
     },
     {
       "id": "brandSub",
@@ -979,7 +979,7 @@ window.WOWPINBALL_PUBLISHED = {
       "group": "品牌与首页",
       "selector": ".brand-text p",
       "mode": "text",
-      "value": "九职业 · 三回合 · 随机技能构筑"
+      "value": "挑选你的职业，抽取你的技能，构筑你的BD，击溃你的对手"
     },
     {
       "id": "startTitle",
@@ -995,7 +995,7 @@ window.WOWPINBALL_PUBLISHED = {
       "group": "品牌与首页",
       "selector": "#startScreen .section-head p",
       "mode": "text",
-      "value": "每个职业的弹珠拥有不同的生命、力量、质量与速度。对手职业随机。"
+      "value": "每个职业的弹珠都会有用专属的技能，合理的搭配它们"
     },
     {
       "id": "nickBtn",
