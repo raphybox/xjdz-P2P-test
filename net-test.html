@@ -124,6 +124,16 @@ textarea { word-break: break-all; }
 .metric .v.warn { color: var(--warn); }
 .metric .v.bad { color: var(--bad); }
 
+.seg { display: flex; gap: 6px; margin-bottom: 10px; }
+.seg-btn {
+  padding: 6px 13px; font-size: 12.5px; font-family: inherit; cursor: pointer;
+  background: var(--panel-2); color: var(--text-dim);
+  border: 1px solid var(--line); border-radius: 7px;
+}
+.seg-btn:hover:not(.active) { color: var(--text); }
+.seg-btn.active { background: #1d3350; color: #cfe2f7; border-color: #37597f; }
+.seg-btn:disabled { opacity: .45; cursor: default; }
+
 .verdict {
   margin-top: 14px; padding: 13px 15px; border-radius: 10px; font-size: 13px; line-height: 1.65;
   border: 1px solid var(--line);
@@ -228,6 +238,10 @@ details[open] summary { margin-bottom: 10px; }
         <span>链路 <b id="tPath">—</b></span>
       </div>
       <div class="log" id="iceLog"></div>
+      <div id="failBox" class="verdict bad" hidden></div>
+      <div class="btn-row" id="failActions" hidden>
+        <button id="btnRestart" class="btn ghost" type="button">保留设置，重新开始</button>
+      </div>
     </div>
 
     <div class="card">
@@ -264,15 +278,23 @@ details[open] summary { margin-bottom: 10px; }
   </div>
 
   <div class="card">
-    <h2>高级：自定义 TURN</h2>
-    <p class="hint" style="margin-top:0">如果直连失败，填入你自己的 TURN 服务再重试，可以验证中继是否能打通。</p>
-    <input id="turnUrl" type="text" placeholder="turn:your-server.com:3478" style="margin-bottom:8px">
-    <input id="turnUser" type="text" placeholder="用户名" style="margin-bottom:8px">
-    <input id="turnPass" type="text" placeholder="密码" style="margin-bottom:8px">
-    <div class="btn-row">
-      <button id="btnSaveTurn" class="btn ghost" type="button">保存到本机</button>
-      <span id="turnSaved" class="hint" hidden>已保存，重新创建房间后生效</span>
+    <h2>中继设置（直连失败时必填）</h2>
+    <p class="hint" style="margin-top:0">
+      双方都在 NAT 后面时，直连大概率失败，必须有 TURN 服务器帮着转发。填好凭证后点「保存并自检」，
+      页面会单独建立一次只走中继的连接，能拿到 relay 候选才算配置成功。
+      没有 TURN 的话，可以在 Cloudflare 控制台进 Realtime → TURN 建一个 Key，用这个 Key 换一段临时凭证粘进来。
+    </p>
+    <div class="seg" id="policySeg">
+      <button class="seg-btn active" data-policy="all" type="button">直连优先</button>
+      <button class="seg-btn" data-policy="relay" type="button">强制中继</button>
     </div>
+    <textarea id="turnIn" rows="4" placeholder="支持三种贴法：&#10;turn:turn.example.com:3478|用户名|密码&#10;turns:turn.example.com:443?transport=tcp|用户名|密码&#10;或直接粘贴 Cloudflare 返回的 iceServers JSON"></textarea>
+    <div class="btn-row">
+      <button id="btnSaveTurn" class="btn primary" type="button">保存并自检</button>
+      <button id="btnClearTurn" class="btn ghost" type="button">清除</button>
+    </div>
+    <div id="turnStatus" class="status-line" hidden><span class="dot"></span><span></span></div>
+    <p id="turnHint" class="hint" hidden style="margin:10px 0 0"></p>
   </div>
 
 </div>
@@ -290,6 +312,7 @@ details[open] summary { margin-bottom: 10px; }
   var isHost = false;
   var unreliableOk = true;
   var candStats = { host: 0, srflx: 0, prflx: 0, relay: 0 };
+  var remoteStats = { host: 0, srflx: 0, prflx: 0, relay: 0 };
 
   var PAD = new Array(240).join('x');
   var TEST_TOTAL = 150;
@@ -362,17 +385,76 @@ details[open] summary { margin-bottom: 10px; }
 
   /* ---------- ICE 配置 ---------- */
 
+  var LS_TURN = 'wbnet.turn';
+  var LS_POLICY = 'wbnet.policy';
+
+  function loadTurn() {
+    try {
+      var t = JSON.parse(localStorage.getItem(LS_TURN) || 'null');
+      if (t && t.urls && t.urls.length) return t;
+    } catch (e) {}
+    return null;
+  }
+
   function iceServers() {
     var list = [
+      { urls: 'stun:stun.cloudflare.com:3478' },
       { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun.cloudflare.com:3478' }
+      { urls: 'stun:stun1.l.google.com:19302' }
     ];
-    var url = (localStorage.getItem('wbnet.turnUrl') || '').trim();
-    var user = localStorage.getItem('wbnet.turnUser') || '';
-    var pass = localStorage.getItem('wbnet.turnPass') || '';
-    if (url) list.push({ urls: url.split(',').map(function (u) { return u.trim(); }), username: user, credential: pass });
+    var t = loadTurn();
+    if (t) list.push({ urls: t.urls, username: t.username || '', credential: t.credential || '' });
     return list;
+  }
+
+  function icePolicy() {
+    return localStorage.getItem(LS_POLICY) === 'relay' ? 'relay' : 'all';
+  }
+
+  function peerOptions() {
+    var policy = icePolicy();
+    if (policy === 'relay' && !loadTurn()) policy = 'all';
+    return { iceServers: iceServers(), iceTransportPolicy: policy, bundlePolicy: 'max-bundle' };
+  }
+
+  /* 把用户粘贴的内容解析成 iceServers 里的一项。
+     既接受 Cloudflare 返回的整段 JSON，也接受 a:b|c|d 这种手写格式。 */
+  function parseTurnInput(text) {
+    var s = String(text || '').trim();
+    if (!s) throw new Error('请先粘贴 TURN 凭证');
+
+    if (s.charAt(0) === '{' || s.charAt(0) === '[') {
+      var json = JSON.parse(s);
+      var arr = Object.prototype.toString.call(json) === '[object Array]' ? json : (json.iceServers || [json]);
+      var urls = [], user = '', cred = '';
+      arr.forEach(function (item) {
+        if (!item || !item.urls) return;
+        var list = Object.prototype.toString.call(item.urls) === '[object Array]' ? item.urls : [item.urls];
+        list.forEach(function (u) { if (/^turns?:/i.test(String(u))) urls.push(String(u)); });
+        if (item.username && !user) user = item.username;
+        if (item.credential && !cred) cred = item.credential;
+      });
+      if (!urls.length) throw new Error('这段 JSON 里没有 turn: 或 turns: 地址');
+      if (!user || !cred) throw new Error('这段 JSON 里缺少 username / credential');
+      return { urls: urls, username: user, credential: cred };
+    }
+
+    var parts = s.split('|');
+    if (parts.length < 3) throw new Error('格式应为 地址|用户名|密码，三段用竖线分隔');
+    var list2 = parts[0].split(',').map(function (x) { return x.trim(); }).filter(function (x) { return /^turns?:/i.test(x); });
+    if (!list2.length) throw new Error('第一段必须以 turn: 或 turns: 开头');
+    return { urls: list2, username: parts[1].trim(), credential: parts.slice(2).join('|').trim() };
+  }
+
+  /* 数 SDP 里各类候选的数量，用于判断对端有没有中继能力 */
+  function countCand(sdp) {
+    var r = { host: 0, srflx: 0, prflx: 0, relay: 0 };
+    String(sdp || '').split(/\r?\n/).forEach(function (line) {
+      if (line.indexOf('a=candidate:') !== 0) return;
+      var m = line.match(/ typ (\w+)/);
+      if (m && r[m[1]] != null) r[m[1]]++;
+    });
+    return r;
   }
 
   /* ---------- 日志与状态 ---------- */
@@ -403,6 +485,10 @@ details[open] summary { margin-bottom: 10px; }
     $('stageHost').hidden = name !== 'host';
     $('stageJoin').hidden = name !== 'join';
     $('stageLive').hidden = name !== 'live';
+    if (name === 'live') {
+      $('failBox').hidden = true;
+      $('failActions').hidden = true;
+    }
   }
 
   /* ---------- 连接构建 ---------- */
@@ -435,7 +521,7 @@ details[open] summary { margin-bottom: 10px; }
 
   function newPeer() {
     candStats = { host: 0, srflx: 0, prflx: 0, relay: 0 };
-    var p = new RTCPeerConnection({ iceServers: iceServers() });
+    var p = new RTCPeerConnection(peerOptions());
     p.onicecandidate = function (e) { noteCandidate(e.candidate); };
     p.onconnectionstatechange = function () { onConnState(p.connectionState); };
     p.oniceconnectionstatechange = function () { if (p.iceConnectionState === 'failed') onConnState('failed'); };
@@ -462,13 +548,100 @@ details[open] summary { margin-bottom: 10px; }
     }
   }
 
+  function candLine(label, s) {
+    return label + ' host ' + s.host + ' · srflx ' + s.srflx + ' · relay ' + s.relay;
+  }
+
+  var failTimer = null;
+
+  function stopFailWatch() {
+    if (failTimer) { clearTimeout(failTimer); failTimer = null; }
+  }
+
+  /* 没有候选时 Chrome 会一直停在 connecting，不触发 failed，
+     所以再加一道超时兜底，否则用户只会看到「正在建立连接」然后没下文。 */
+  function startFailWatch() {
+    stopFailWatch();
+    failTimer = setTimeout(function () {
+      failTimer = null;
+      if (!pc) return;
+      var c = pc.connectionState, i = pc.iceConnectionState;
+      if (c === 'connected' || i === 'connected' || i === 'completed') return;
+      setStatus('liveStatus', 'warn', '连接超时 · 详见下方诊断');
+      showFailure();
+    }, 20000);
+  }
+
+  /* 好友这侧在连上之前看不到连接状态卡片，单独给一条兜底提示 */
+  function startJoinWatch() {
+    setTimeout(function () {
+      if (!pc) return;
+      var c = pc.connectionState, i = pc.iceConnectionState;
+      if (c === 'connected' || i === 'connected' || i === 'completed') return;
+      setStatus('joinStatus', 'bad', '连接没建起来 · 让房主回页面看诊断，大概率需要配 TURN');
+    }, 25000);
+  }
+
+  function showFailure() {
+    var box = $('failBox');
+    var localRelay = candStats.relay > 0;
+    var remoteRelay = remoteStats.relay > 0;
+    var localTotal = candStats.host + candStats.srflx + candStats.prflx + candStats.relay;
+    var remoteTotal = remoteStats.host + remoteStats.srflx + remoteStats.prflx + remoteStats.relay;
+    var title, tips;
+
+    if (localTotal === 0 || remoteTotal === 0) {
+      title = '有一端连候选地址都没收集到。';
+      tips = '如果开着「强制中继」但 TURN 不可用，这一端就只剩中继路径，而中继又连不上，等于没有任何可用地址。' +
+        '先点「保存并自检」确认 TURN 能用，或切回「直连优先」再试。';
+    } else if (!localRelay && !remoteRelay) {
+      title = '双方都没拿到 relay 候选，直连被 NAT 挡住了。';
+      tips = '这不是页面代码的问题。两端都在路由器或运营商内网后面，打洞失败，必须有 TURN 服务器转发。' +
+        '在「中继设置」里给双方各填一份 TURN 凭证，点「保存并自检」确认拿到 relay，再重新创建房间。';
+    } else if (!localRelay || !remoteRelay) {
+      title = '只有一端拿到了 relay 候选。';
+      tips = 'TURN 必须双方都配置：没配的那一端根本发不出 relay 候选，对端也就无从选择中继路径。' +
+        '请确认两端都粘贴了凭证，并都点过「保存并自检」。';
+    } else {
+      title = '两端都有 relay 候选，但连接仍然失败。';
+      tips = '大概率是凭证已过期、地址或端口写错，或者该 TURN 端口在当前网络被封。' +
+        '回到「中继设置」点「保存并自检」——如果自检也拿不到 relay，问题就在凭证本身。';
+    }
+
+    box.innerHTML = '';
+    var h = document.createElement('strong');
+    h.textContent = title;
+    box.appendChild(h);
+    var l1 = document.createElement('div');
+    l1.style.marginTop = '8px';
+    l1.textContent = candLine('本端', candStats) + '　|　' + candLine('对端', remoteStats);
+    box.appendChild(l1);
+    var l2 = document.createElement('div');
+    l2.style.marginTop = '8px';
+    l2.textContent = tips;
+    box.appendChild(l2);
+    box.hidden = false;
+    $('failActions').hidden = false;
+
+    $('tLocal').textContent = localTotal + ' 个';
+    $('tRemote').textContent = remoteTotal + ' 个';
+    $('tPath').textContent = '未建立';
+    $('tPath').style.color = 'var(--bad)';
+  }
+
   function onConnState(state) {
     log('连接状态 ' + state);
     if (state === 'connected') {
+      stopFailWatch();
       setStatus('liveStatus', 'good', '已连接 · 数据通道' + (dc && dc.readyState === 'open' ? '可用' : '建立中'));
+      $('failBox').hidden = true;
+      $('failActions').hidden = true;
       refreshLink();
     } else if (state === 'failed') {
-      setStatus('liveStatus', 'bad', '连接失败 · 双方网络可能都需要 TURN 中继');
+      stopFailWatch();
+      setStatus('liveStatus', 'bad', '连接失败 · 详见下方诊断');
+      showFailure();
+      if (!isHost) setStatus('joinStatus', 'bad', '连接失败 · 让房主对照诊断信息处理');
     } else if (state === 'disconnected') {
       setStatus('liveStatus', 'warn', '连接中断 · 正在尝试恢复');
     }
@@ -480,6 +653,8 @@ details[open] summary { margin-bottom: 10px; }
     showStage('host');
     setStatus('hostStatus', 'live', '正在收集网络候选地址，请稍候…');
     isHost = true;
+    var policy = peerOptions().iceTransportPolicy;
+    log('本次策略 ' + (policy === 'relay' ? '强制中继' : '直连优先') + (loadTurn() ? ' · 已配置 TURN' : ' · 未配置 TURN'));
     pc = newPeer();
     bindDataChannel(pc.createDataChannel('ctrl', { ordered: true }), 'ctrl');
     try {
@@ -496,8 +671,10 @@ details[open] summary { margin-bottom: 10px; }
       await waitIce(pc);
 
       var sdp = pc.localDescription.sdp;
-      if (!/ typ relay /.test(sdp) && candStats.relay === 0) {
-        log('未收集到 relay 候选，本次为纯直连尝试');
+      if (candStats.relay === 0) {
+        log(policy === 'relay'
+          ? '强制中继却没有 relay 候选：TURN 凭证无效，对端拿不到中继路径'
+          : '未收集到 relay 候选，本次为纯直连尝试');
       }
       var code = await pack({ t: 'offer', sdp: sdp, ty: pc.localDescription.type });
       var url = location.origin + location.pathname + '#o=' + code;
@@ -521,10 +698,12 @@ details[open] summary { margin-bottom: 10px; }
     try {
       var ans = await unpack(raw);
       if (ans.t !== 'answer') throw new Error('这不是应答码，请确认复制的是好友回传的那段');
+      remoteStats = countCand(ans.sdp);
       await pc.setRemoteDescription({ type: 'answer', sdp: ans.sdp });
       log('已应用应答码，等待连接建立');
       setStatus('hostStatus', 'good', '应答码已应用');
       showStage('live');
+      startFailWatch();
     } catch (e) {
       setStatus('hostStatus', 'bad', '连接失败：' + e.message);
     }
@@ -545,6 +724,7 @@ details[open] summary { margin-bottom: 10px; }
       var off = await unpack(raw);
       if (off.t !== 'offer') throw new Error('这不是邀请链接，请确认复制的是房主发来的');
       isHost = false;
+      remoteStats = countCand(off.sdp);
 
       pc = newPeer();
       pc.ondatachannel = function (e) { bindDataChannel(e.channel, e.channel.label === 'ctrl' ? 'ctrl' : 'game'); };
@@ -563,6 +743,7 @@ details[open] summary { margin-bottom: 10px; }
       lenEl.textContent = '应答码长度 ' + code.length + ' 字符 · 候选 host ' + candStats.host + ' / srflx ' + candStats.srflx + ' / relay ' + candStats.relay;
       setStatus('joinStatus', 'good', '应答码已生成，请复制发给房主');
       log('answer 就绪，SDP ' + pc.localDescription.sdp.length + ' 字符');
+      startJoinWatch();
     } catch (e) {
       setStatus('joinStatus', 'bad', '生成失败：' + e.message);
     }
@@ -626,6 +807,56 @@ details[open] summary { margin-bottom: 10px; }
       log('已选链路 ' + lType + ' ↔ ' + rType + (rtt != null ? ' · RTT ' + rtt.toFixed(0) + 'ms' : ''));
     } catch (e) {
       log('读取链路信息失败：' + e.message);
+    }
+  }
+
+  /* ---------- TURN 自检 ---------- */
+
+  function showTurnStatus(tone, text) {
+    $('turnStatus').hidden = false;
+    setStatus('turnStatus', tone, text);
+  }
+
+  /* 单独建一条只允许中继的连接，用来验证凭证是否真的能用。
+     能收到 relay 候选 = TURN 可达且鉴权通过；一个都收不到 = 配错了。 */
+  async function probeRelay() {
+    var t = loadTurn();
+    var p = new RTCPeerConnection({
+      iceServers: [{ urls: t.urls, username: t.username || '', credential: t.credential || '' }],
+      iceTransportPolicy: 'relay'
+    });
+    var relay = 0;
+    var t0 = Date.now();
+    try { p.createDataChannel('probe'); } catch (e) {}
+    p.onicecandidate = function (e) {
+      if (e.candidate && / typ relay /.test(e.candidate.candidate)) relay++;
+    };
+    try {
+      await p.setLocalDescription(await p.createOffer());
+      await waitIce(p, 8000);
+    } catch (e) {
+      try { p.close(); } catch (e2) {}
+      return { relay: relay, ms: Date.now() - t0, err: e.message };
+    }
+    try { p.close(); } catch (e3) {}
+    return { relay: relay, ms: Date.now() - t0 };
+  }
+
+  async function selfCheckTurn() {
+    if (!loadTurn()) { showTurnStatus('warn', '还没有保存 TURN 凭证'); return; }
+    $('btnSaveTurn').disabled = true;
+    showTurnStatus('live', '正在只走中继收集候选，最多等 8 秒…');
+    var r = await probeRelay();
+    $('btnSaveTurn').disabled = false;
+
+    if (r.relay > 0) {
+      showTurnStatus('good', 'TURN 可用 · 收到 ' + r.relay + ' 个 relay 候选，耗时 ' + (r.ms / 1000).toFixed(1) + ' 秒');
+      $('turnHint').hidden = true;
+    } else {
+      showTurnStatus('bad', 'TURN 不可用 · 8 秒内没有收到任何 relay 候选');
+      $('turnHint').hidden = false;
+      $('turnHint').textContent = '常见原因：① 凭证已过期（Cloudflare 默认 24 小时）；② 地址或端口写错；' +
+        '③ 当前网络封了这个 TURN 的端口，改用 turns:...:443?transport=tcp 再试一次。';
     }
   }
 
@@ -793,22 +1024,60 @@ details[open] summary { margin-bottom: 10px; }
   $('btnCopyOffer').addEventListener('click', function () { copyFrom('offerOut', this); });
   $('btnCopyAnswer').addEventListener('click', function () { copyFrom('answerOut', this); });
 
-  $('btnSaveTurn').addEventListener('click', function () {
-    localStorage.setItem('wbnet.turnUrl', $('turnUrl').value.trim());
-    localStorage.setItem('wbnet.turnUser', $('turnUser').value.trim());
-    localStorage.setItem('wbnet.turnPass', $('turnPass').value);
-    $('turnSaved').hidden = false;
-    setTimeout(function () { $('turnSaved').hidden = true; }, 2200);
+  function syncPolicyUI() {
+    var cur = icePolicy();
+    var btns = $('policySeg').querySelectorAll('.seg-btn');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle('active', btns[i].getAttribute('data-policy') === cur);
+    }
+  }
+
+  $('policySeg').addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('.seg-btn') : null;
+    if (!btn) return;
+    var policy = btn.getAttribute('data-policy');
+    localStorage.setItem(LS_POLICY, policy);
+    syncPolicyUI();
+    if (policy === 'relay') {
+      if (!loadTurn()) showTurnStatus('warn', '强制中继需要先填 TURN 凭证，否则一个候选都收不到');
+      else showTurnStatus('good', '已切换为强制中继，所有流量走 TURN');
+    } else {
+      showTurnStatus('good', '已切换为直连优先，直连失败时仍会走 TURN');
+    }
   });
+
+  $('btnSaveTurn').addEventListener('click', async function () {
+    var parsed;
+    try {
+      parsed = parseTurnInput($('turnIn').value);
+    } catch (e) {
+      showTurnStatus('bad', '解析失败：' + e.message);
+      return;
+    }
+    localStorage.setItem(LS_TURN, JSON.stringify(parsed));
+    $('turnIn').value = parsed.urls.join(',') + '|' + parsed.username + '|' + parsed.credential;
+    await selfCheckTurn();
+  });
+
+  $('btnClearTurn').addEventListener('click', function () {
+    localStorage.removeItem(LS_TURN);
+    $('turnIn').value = '';
+    $('turnStatus').hidden = true;
+    $('turnHint').hidden = true;
+  });
+
+  $('btnRestart').addEventListener('click', function () { location.reload(); });
 
   /* ---------- 初始化 ---------- */
 
   (function init() {
     if (location.protocol === 'file:') $('fileWarn').hidden = false;
 
-    $('turnUrl').value = localStorage.getItem('wbnet.turnUrl') || '';
-    $('turnUser').value = localStorage.getItem('wbnet.turnUser') || '';
-    $('turnPass').value = localStorage.getItem('wbnet.turnPass') || '';
+    var savedTurn = loadTurn();
+    if (savedTurn) {
+      $('turnIn').value = savedTurn.urls.join(',') + '|' + savedTurn.username + '|' + savedTurn.credential;
+    }
+    syncPolicyUI();
 
     var hash = location.hash || '';
     var m = hash.match(/[#&]o=([^&]+)/);
