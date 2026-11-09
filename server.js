@@ -207,7 +207,7 @@ function runGit(args, timeoutMs) {
    提交 → prepare_site.js → wrangler deploy → 推 xjdz（域名绑定仓库）与 origin。
    部署失败不阻断推送，但会在结果里明确提示。 */
 async function deploySync() {
-  const out = { ok: true, pushed: false, deployed: false, message: '', detail: [] };
+  const out = { ok: true, pushed: false, deployed: false, message: '', mirrorWarning: '', detail: [] };
   if (!isGitRepo()) { out.ok = false; out.message = '未检测到 git 仓库，跳过同步上线'; return out; }
   try {
     const inside = await runGit(['rev-parse', '--is-inside-work-tree'], 30000);
@@ -240,24 +240,27 @@ async function deploySync() {
         out.detail.push('已发布到 xjdz.de5.net' + (m ? '（版本 ' + m[1].slice(0, 8) + '）' : ''));
       } else {
         const tail = (dep.stderr || dep.stdout || dep.error || '未知错误').split('\n').map(s => s.trim()).filter(Boolean).pop();
+        out.ok = false;
         out.detail.push('站点部署失败：' + tail);
       }
     } else {
+      out.ok = false;
       out.detail.push('未找到本地 wrangler，跳过站点部署');
     }
 
-    // xjdz = xjdz.de5.net 绑定的项目仓库；origin 同步保留，与手动发布一致
-    const targets = [['xjdz', 'xjdz-P2P-test'], ['origin', 'xuanji-pinball']];
-    let anyPush = false;
-    for (const [remote, label] of targets) {
-      const push = await runGit(['push', remote, 'main'], 100000);
-      if (push.ok) { anyPush = true; out.detail.push('已推送 ' + label); }
-      else {
-        out.ok = false;
-        out.detail.push('推送 ' + label + ' 失败：' + ((push.stderr || push.error || '未知错误').split('\n').map(s => s.trim()).filter(Boolean).pop()));
-      }
+    const tailOf = r => ((r.stderr || r.error || '未知错误').split('\n').map(s => s.trim()).filter(Boolean).pop());
+    // 主仓库 = xjdz.de5.net 绑定的 xjdz-P2P-test，必须成功
+    const main = await runGit(['push', 'xjdz', 'main'], 100000);
+    if (main.ok) { out.pushed = true; out.detail.push('已推送 xjdz-P2P-test'); }
+    else { out.ok = false; out.detail.push('主仓库推送失败：' + tailOf(main)); }
+
+    // 镜像仓库 = 旧仓库 xuanji-pinball，仅尽力而为：失败不影响整体结果
+    const mirror = await runGit(['push', 'origin', 'main'], 100000);
+    if (mirror.ok) out.detail.push('已推送 xuanji-pinball');
+    else {
+      out.mirrorWarning = '镜像仓库 xuanji-pinball 未同步：' + tailOf(mirror);
+      out.detail.push(out.mirrorWarning);
     }
-    out.pushed = anyPush;
     out.message = out.detail.length ? out.detail.join('；') : '已同步上线';
     return out;
   } catch (e) {

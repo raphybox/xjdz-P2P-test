@@ -45,8 +45,17 @@ assert.ok(/renderClassGrid\(\);\s*\n\s*p2pRoomBuildClasses\(\);/.test(game),
 
 // 一键同步：推域名绑定仓库 + wrangler 部署
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
-assert.ok(/\['xjdz', 'xjdz-P2P-test'\]/.test(server), '一键同步未推 xjdz-P2P-test');
+const admin = fs.readFileSync(path.join(root, 'admin.js'), 'utf8');
+const ignore = fs.readFileSync(path.join(root, '.gitignore'), 'utf8');
+assert.ok(/\['push', 'xjdz', 'main'\]/.test(server) || /push', 'xjdz'/.test(server), '一键同步未推 xjdz-P2P-test');
 assert.ok(/wrangler, 'deploy'/.test(server), '一键同步未执行 wrangler deploy');
 assert.ok(/api\/room/.test(server), '本地服务缺少 /api/room');
+// 主仓库必须成功、镜像仓库失败只警告；点击时必须有可见反馈
+assert.ok(/mirrorWarning/.test(server), '镜像仓库失败未与整体结果分离');
+assert.ok(/正在同步上线 xjdz\.de5\.net/.test(admin), '点击后缺少进行中提示');
+assert.ok(/syncBtn\.disabled = true/.test(admin), '点击后未禁用按钮');
+assert.ok(/g\.deployed/.test(admin) && /g\.mirrorWarning/.test(admin), '后台未分类展示部署/镜像结果');
+assert.ok(/未连接本地服务/.test(admin), '未连服务时缺少明确提示');
+assert.ok(/\.wrangler\//.test(ignore), '.gitignore 未排除 wrangler 临时目录');
 
 console.log('test_room_ui_layout: all assertions passed');
