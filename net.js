@@ -326,10 +326,20 @@
   /* ---------- 房主：应用好友回传的应答码 ---------- */
 
   Session.hostFinish = async function (session, answerCode) {
+    var pc = session.pc;
+    if (!pc) throw new Error('会话已失效，请点「重新生成」重新创建房间');
+    // 信令状态校验：stable = 应答码已应用过（双击 / 旧码重复粘贴），再设会直接抛
+    // "Called in wrong state"，必须前置拦截给出人话提示
+    var st = pc.signalingState;
+    if (st !== 'have-local-offer') {
+      if (session.ready) throw new Error('已经连接成功了，不需要再应用应答码');
+      if (st === 'stable') throw new Error('这份应答码之前已经应用过了。若仍未连上，请点「重新生成」换新邀请码，让好友重新走一遍流程');
+      throw new Error('当前连接状态不匹配（' + st + '），请点「重新生成」重试');
+    }
     var ans = await unpack(answerCode);
     if (ans.t !== 'answer') throw new Error('这不是应答码，请确认复制的是好友回传的那段');
     session._remoteSdp = ans.sdp;
-    await session.pc.setRemoteDescription({ type: 'answer', sdp: ans.sdp });
+    await pc.setRemoteDescription({ type: 'answer', sdp: ans.sdp });
     var L = session.stats;
     session._state('应答码已应用，等待连接建立…（本端候选 host ' + L.host + ' · srflx ' + L.srflx + ' · relay ' + L.relay + '）');
     session._armWatchdog();

@@ -676,13 +676,19 @@
   }
 
   async function p2pHostFinish() {
+    const btn = $('p2pFinishBtn');
+    if (P2P.net && P2P.net.ready) { p2pMsg('p2pHostMsg', '已经连接成功了，等双方选职业即可', 'good'); return; }
+    if (btn && btn.disabled) return;
     const raw = $('p2pAnswerIn').value;
     if (!raw.trim()) { p2pMsg('p2pHostMsg', '请先粘贴好友回传的应答码'); return; }
+    if (btn) btn.disabled = true;
     try {
       await NET.Session.hostFinish(P2P.net, raw);
-      p2pMsg('p2pHostMsg', '应答码已应用，正在建立连接…', 'good');
+      p2pMsg('p2pHostMsg', '应答码已应用，连接成功后会自动进入选职业界面', 'good');
     } catch (e) {
-      p2pMsg('p2pHostMsg', '连接失败：' + e.message, 'bad');
+      p2pMsg('p2pHostMsg', e.message, 'bad');
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
 
