@@ -1069,9 +1069,14 @@ details[open] summary { margin-bottom: 10px; }
         '。建议把快照频率降到每秒 12 帧，并在客机端加长插值缓冲。';
     } else {
       box.className = 'verdict bad';
+      var onRelay = $('tPath').textContent.indexOf('中继') >= 0;
       box.innerHTML = '<strong>' + head + '：链路质量不足。</strong>丢包 ' + lossPct.toFixed(1) +
-        '%，抖动 ' + (jitter != null ? jitter.toFixed(1) + ' ms' : '样本不足') +
-        '。这个网络下做实时对战会出现明显瞬移与判定错位，需要改用 TURN 中继或降低同步频率。';
+        '%，抖动 ' + (jitter != null ? jitter.toFixed(1) + ' ms' : '样本不足') + '。' +
+        (onRelay
+          ? '当前已经过 TURN 中继，这基本是线路的物理上限（国内访问 Cloudflare TURN 会绕行境外节点）。' +
+            '两个方向：①换国内自建 TURN（如轻量云服务器部署 coturn），延迟可降到 50ms 内；' +
+            '②回合制对战不必追求实时——每回合只传一次瞄准输入，判定全部在房主端做，这个延迟完全可玩。'
+          : '这个网络下做实时对战会出现明显瞬移与判定错位，需要改用 TURN 中继或降低同步频率。');
     }
     log('收到统计：丢包 ' + lossPct.toFixed(1) + '%，收包 ' + got + '/' + total);
   }
