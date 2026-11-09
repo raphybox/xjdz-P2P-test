@@ -1,10 +1,8 @@
 /**
- * Cloudflare TURN 凭证 Worker 的离线回归测试
+ * Cloudflare Pages Function 版 TURN 凭证签发的离线回归测试
+ * 与 tools/test_turn_worker.js 同一套用例，针对 functions/api/turn.js 的 onRequestGet。
  *
- * 不需要真实 Cloudflare 账号：把上游 fetch 和 caches.default 都换成内存实现，
- * 验证鉴权、CORS、缓存、错误透传、ttl 下限这些容易写错的分支。
- *
- * 运行：node tools/test_turn_worker.js
+ * 运行：node tools/test_turn_function.js
  */
 
 const fs = require('fs');
@@ -87,29 +85,30 @@ const ENV = {
   ALLOWED_ORIGIN: 'https://xjdz.de5.net',
 };
 
-/* ---------- 载入 Worker（ESM 走 data URL，避免 package.json 的 module 类型问题） ---------- */
-async function loadWorker() {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'worker', 'turn-credentials.js'), 'utf8');
+/* ---------- 载入 Function（ESM 走 data URL） ---------- */
+async function loadFn() {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'functions', 'api', 'turn.js'), 'utf8');
   const url = 'data:text/javascript;base64,' + Buffer.from(src, 'utf8').toString('base64');
   const mod = await import(url);
-  return mod.default;
+  assert(typeof mod.onRequestGet === 'function', '缺少 onRequestGet 导出');
+  return mod.onRequestGet;
 }
 
 function req(method, origin) {
   const headers = {};
   if (origin) headers.Origin = origin;
-  return new Request('https://turn.example.workers.dev/', { method, headers });
+  return new Request('https://xjdz.de5.net/api/turn', { method, headers });
 }
 
 (async () => {
-  const worker = await loadWorker();
+  const handler = await loadFn();
 
   console.log('\n[1] 正常签发');
   {
     store.clear();
     upstreamCalls = [];
     upstreamReply = { body: GOOD, status: 201 };
-    const res = await worker.fetch(req('GET', 'https://xjdz.de5.net'), { ...ENV });
+    const res = await handler({ request: req('GET', 'https://xjdz.de5.net'), env: { ...ENV } });
     const body = await res.json();
     ok('状态 200', res.status === 200, res.status);
     ok('返回 iceServers', !!(body.iceServers && body.iceServers.length === 2), body);
@@ -129,7 +128,7 @@ function req(method, origin) {
   console.log('\n[2] 缓存命中');
   {
     const before = upstreamCalls.length;
-    const res = await worker.fetch(req('GET', 'https://xjdz.de5.net'), { ...ENV });
+    const res = await handler({ request: req('GET', 'https://xjdz.de5.net'), env: { ...ENV } });
     await res.json();
     ok('标 HIT', res.headers.get('X-Turn-Cache') === 'HIT', res.headers.get('X-Turn-Cache'));
     ok('上游不再被调用', upstreamCalls.length === before, upstreamCalls.length - before);
@@ -140,7 +139,7 @@ function req(method, origin) {
     store.clear();
     upstreamCalls = [];
     upstreamReply = { body: GOOD, status: 201 };
-    await worker.fetch(req('GET', ''), { ...ENV, TURN_TTL: '10' });
+    await handler({ request: req('GET', ''), env: { ...ENV, TURN_TTL: '10' } });
     ok('ttl 抬到 300', JSON.parse(upstreamCalls[0].init.body).ttl === 300,
       upstreamCalls[0].init.body);
   }
@@ -150,10 +149,10 @@ function req(method, origin) {
     store.clear();
     upstreamCalls = [];
     upstreamReply = { body: GOOD, status: 201 };
-    await worker.fetch(req('GET', ''), { ...ENV, TURN_TTL: '600' });
+    await handler({ request: req('GET', ''), env: { ...ENV, TURN_TTL: '600' } });
     const cacheSize = store.size;
     upstreamCalls = [];
-    await worker.fetch(req('GET', ''), { ...ENV, TURN_TTL: '7200' });
+    await handler({ request: req('GET', ''), env: { ...ENV, TURN_TTL: '7200' } });
     ok('ttl 变化后重新取上游', upstreamCalls.length === 1, upstreamCalls.length);
     ok('缓存键随 ttl 分开', store.size === cacheSize + 1, [cacheSize, store.size]);
   }
@@ -161,32 +160,33 @@ function req(method, origin) {
   console.log('\n[5] 缺少 Secret');
   {
     store.clear();
-    const a = await worker.fetch(req('GET', ''), { TURN_KEY_API_TOKEN: 'x' });
+    const a = await handler({ request: req('GET', ''), env: { TURN_KEY_API_TOKEN: 'x' } });
     ok('缺 TURN_KEY_ID 报 500', a.status === 500, a.status);
     ok('错误码为 missing_secret', (await a.json()).error === 'missing_secret');
 
-    const b = await worker.fetch(req('GET', ''), { TURN_KEY_ID: 'k' });
+    const b = await handler({ request: req('GET', ''), env: { TURN_KEY_ID: 'k' } });
     ok('缺 TOKEN 报 500', b.status === 500, b.status);
   }
 
   console.log('\n[6] 来源限制');
   {
     store.clear();
-    const denied = await worker.fetch(req('GET', 'https://evil.example.com'), { ...ENV });
+    const denied = await handler({ request: req('GET', 'https://evil.example.com'), env: { ...ENV } });
     ok('非白名单来源 403', denied.status === 403, denied.status);
     ok('错误码 origin_not_allowed', (await denied.json()).error === 'origin_not_allowed');
 
     upstreamReply = { body: GOOD, status: 201 };
-    const allowedNoSlash = await worker.fetch(req('GET', 'https://xjdz.de5.net/'), { ...ENV });
+    const allowedNoSlash = await handler({ request: req('GET', 'https://xjdz.de5.net/'), env: { ...ENV } });
     ok('带尾斜杠的来源也放行', allowedNoSlash.status === 200, allowedNoSlash.status);
 
     store.clear();
-    const noOrigin = await worker.fetch(req('GET', ''), { ...ENV });
+    const noOrigin = await handler({ request: req('GET', ''), env: { ...ENV } });
     ok('无 Origin（地址栏直开）放行', noOrigin.status === 200, noOrigin.status);
 
     store.clear();
-    const open = await worker.fetch(req('GET', 'https://any.example.com'), {
-      TURN_KEY_ID: 'k', TURN_KEY_API_TOKEN: 't',
+    const open = await handler({
+      request: req('GET', 'https://any.example.com'),
+      env: { TURN_KEY_ID: 'k', TURN_KEY_API_TOKEN: 't' },
     });
     ok('未设 ALLOWED_ORIGIN 时不限制', open.status === 200, open.status);
     ok('未设限制时回显请求来源', open.headers.get('Access-Control-Allow-Origin') === 'https://any.example.com',
@@ -194,28 +194,40 @@ function req(method, origin) {
     ok('回显时带 Vary: Origin', /Origin/i.test(open.headers.get('Vary') || ''), open.headers.get('Vary'));
 
     store.clear();
-    const noOrigin2 = await worker.fetch(req('GET', ''), { TURN_KEY_ID: 'k', TURN_KEY_API_TOKEN: 't' });
+    const noOrigin2 = await handler({
+      request: req('GET', ''),
+      env: { TURN_KEY_ID: 'k', TURN_KEY_API_TOKEN: 't' },
+    });
     ok('无 Origin 时回 *', noOrigin2.headers.get('Access-Control-Allow-Origin') === '*',
       noOrigin2.headers.get('Access-Control-Allow-Origin'));
   }
 
   console.log('\n[7] 方法处理');
   {
-    const opt = await worker.fetch(req('OPTIONS', 'https://xjdz.de5.net'), { ...ENV });
-    ok('OPTIONS 返回 204', opt.status === 204, opt.status);
+    upstreamCalls = [];
+    const mod = await import('data:text/javascript;base64,' +
+      Buffer.from(fs.readFileSync(path.join(__dirname, '..', 'functions', 'api', 'turn.js'), 'utf8'), 'utf8').toString('base64'));
+
+    const opt = await mod.onRequestOptions({ request: req('OPTIONS', 'https://xjdz.de5.net'), env: { ...ENV } });
+    ok('OPTIONS 预检返回 204', opt.status === 204, opt.status);
     ok('预检带允许方法', /GET/.test(opt.headers.get('Access-Control-Allow-Methods') || ''),
       opt.headers.get('Access-Control-Allow-Methods'));
+    ok('预检不触发上游', upstreamCalls.length === 0, upstreamCalls.length);
 
-    const post = await worker.fetch(req('POST', 'https://xjdz.de5.net'), { ...ENV });
+    const optDenied = await mod.onRequestOptions({ request: req('OPTIONS', 'https://evil.example.com'), env: { ...ENV } });
+    ok('非白名单预检 403', optDenied.status === 403, optDenied.status);
+
+    const post = await handler({ request: req('POST', 'https://xjdz.de5.net'), env: { ...ENV } });
     ok('POST 返回 405', post.status === 405, post.status);
     ok('错误码 method_not_allowed', (await post.json()).error === 'method_not_allowed');
+    ok('POST 不触发上游', upstreamCalls.length === 0, upstreamCalls.length);
   }
 
   console.log('\n[8] 上游异常');
   {
     store.clear();
     upstreamReply = { body: '{"error":"bad token"}', status: 401 };
-    const a = await worker.fetch(req('GET', ''), { ...ENV });
+    const a = await handler({ request: req('GET', ''), env: { ...ENV } });
     ok('上游 401 转 502', a.status === 502, a.status);
     const ja = await a.json();
     ok('带 upstream_error', ja.error === 'upstream_error', ja);
@@ -223,19 +235,19 @@ function req(method, origin) {
 
     store.clear();
     upstreamReply = { body: 'not json at all', status: 201 };
-    const b = await worker.fetch(req('GET', ''), { ...ENV });
+    const b = await handler({ request: req('GET', ''), env: { ...ENV } });
     ok('上游坏 JSON 转 502', b.status === 502, b.status);
     ok('错误码 upstream_bad_json', (await b.json()).error === 'upstream_bad_json');
 
     store.clear();
     upstreamReply = { body: '{"foo":1}', status: 201 };
-    const c = await worker.fetch(req('GET', ''), { ...ENV });
+    const c = await handler({ request: req('GET', ''), env: { ...ENV } });
     ok('缺 iceServers 转 502', c.status === 502, c.status);
     ok('错误码 upstream_no_ice_servers', (await c.json()).error === 'upstream_no_ice_servers');
 
     store.clear();
     upstreamReply = { throw: 'ECONNRESET' };
-    const d = await worker.fetch(req('GET', ''), { ...ENV });
+    const d = await handler({ request: req('GET', ''), env: { ...ENV } });
     ok('网络异常转 502', d.status === 502, d.status);
     ok('错误码 upstream_unreachable', (await d.json()).error === 'upstream_unreachable');
 
@@ -246,11 +258,11 @@ function req(method, origin) {
   {
     store.clear();
     upstreamReply = { body: '{"x":1}', status: 500 };
-    await worker.fetch(req('GET', ''), { ...ENV });
+    await handler({ request: req('GET', ''), env: { ...ENV } });
     ok('上游失败时缓存为空', store.size === 0, store.size);
     upstreamReply = { body: GOOD, status: 201 };
     upstreamCalls = [];
-    const retry = await worker.fetch(req('GET', ''), { ...ENV });
+    const retry = await handler({ request: req('GET', ''), env: { ...ENV } });
     ok('恢复后重试走上游', upstreamCalls.length === 1 && retry.status === 200, upstreamCalls.length);
   }
 
@@ -259,7 +271,7 @@ function req(method, origin) {
     store.clear();
     upstreamCalls = [];
     upstreamReply = { body: GOOD, status: 201 };
-    const res = await worker.fetch(req('GET', 'https://xjdz.de5.net'), { ...ENV });
+    const res = await handler({ request: req('GET', 'https://xjdz.de5.net'), env: { ...ENV } });
     const text = await res.text();
 
     const html = fs.readFileSync(path.join(__dirname, '..', 'net-test.html'), 'utf8');
@@ -271,6 +283,14 @@ function req(method, origin) {
     ok('页面拿到用户名', t.username === '0123456789abcdef0123456789abcdef', t.username);
     ok('页面拿到凭证', t.credential === 'fedcba9876543210fedcba9876543210', t.credential);
     ok('没混入 stun', !t.urls.some((u) => /^stun:/i.test(u)), t.urls);
+  }
+
+  console.log('\n[11] 页面默认地址指向本 Function');
+  {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'net-test.html'), 'utf8');
+    ok('DEFAULT_TURN_SVC = https://xjdz.de5.net/api/turn',
+      html.indexOf("var DEFAULT_TURN_SVC = 'https://xjdz.de5.net/api/turn';") >= 0);
+    ok('注释说明同域部署原因', html.indexOf('workers.dev 在国内被墙') >= 0);
   }
 
   console.log('\n' + pass + ' 通过 / ' + fail + ' 失败');

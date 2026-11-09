@@ -394,10 +394,10 @@ details[open] summary { margin-bottom: 10px; }
   var LS_POLICY = 'wbnet.policy';
   var LS_SVC = 'wbnet.turnService';
 
-  // 部署好 Worker 后把地址填在这里，所有访客（包括第一次打开邀请链接的好友）
-  // 都会自动拿到中继凭证，不需要各自配置。例如：
-  //   'https://turn-xjdz.raphybox.workers.dev'
-  var DEFAULT_TURN_SVC = '';
+  // 凭证服务地址：跑在游戏同域名下的 Pages Function（functions/api/turn.js）。
+  // 同域部署国内可达（workers.dev 在国内被墙，不能用作默认值）。
+  // 部署 Pages 时必须带上 functions/ 目录，并在项目环境变量里配置 TURN_KEY_ID / TURN_KEY_API_TOKEN。
+  var DEFAULT_TURN_SVC = 'https://xjdz.de5.net/api/turn';
 
   // 从凭证服务拉到的临时凭证，优先级高于本机手工填写的那份
   var remoteTurn = null;
