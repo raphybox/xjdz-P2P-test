@@ -280,14 +280,19 @@ details[open] summary { margin-bottom: 10px; }
   <div class="card">
     <h2>中继设置（直连失败时必填）</h2>
     <p class="hint" style="margin-top:0">
-      双方都在 NAT 后面时，直连大概率失败，必须有 TURN 服务器帮着转发。填好凭证后点「保存并自检」，
-      页面会单独建立一次只走中继的连接，能拿到 relay 候选才算配置成功。
-      没有 TURN 的话，可以在 Cloudflare 控制台进 Realtime → TURN 建一个 Key，用这个 Key 换一段临时凭证粘进来。
+      双方都在 NAT 后面时，直连大概率失败，必须有 TURN 服务器帮忙转发。
+      推荐在上面填凭证服务地址——配一次，两端打开页面都自动拿到临时凭证；
+      也可以手工粘贴一段凭证，再点「保存并自检」验证。能收到 relay 候选才算配好。
     </p>
     <div class="seg" id="policySeg">
       <button class="seg-btn active" data-policy="all" type="button">直连优先</button>
       <button class="seg-btn" data-policy="relay" type="button">强制中继</button>
     </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <input id="turnSvc" type="text" placeholder="凭证服务地址（可选，填了自动获取，不用手工贴）" style="flex:1;margin:0">
+      <button id="btnSaveSvc" class="btn ghost" type="button" style="flex:0 0 auto">保存</button>
+    </div>
+    <div id="svcStatus" class="hint" hidden style="margin:0 0 10px"></div>
     <textarea id="turnIn" rows="4" placeholder="支持三种贴法：&#10;turn:turn.example.com:3478|用户名|密码&#10;turns:turn.example.com:443?transport=tcp|用户名|密码&#10;或直接粘贴 Cloudflare 返回的 iceServers JSON"></textarea>
     <div class="btn-row">
       <button id="btnSaveTurn" class="btn primary" type="button">保存并自检</button>
@@ -387,6 +392,16 @@ details[open] summary { margin-bottom: 10px; }
 
   var LS_TURN = 'wbnet.turn';
   var LS_POLICY = 'wbnet.policy';
+  var LS_SVC = 'wbnet.turnService';
+
+  // 部署好 Worker 后把地址填在这里，所有访客（包括第一次打开邀请链接的好友）
+  // 都会自动拿到中继凭证，不需要各自配置。例如：
+  //   'https://turn-xjdz.raphybox.workers.dev'
+  var DEFAULT_TURN_SVC = '';
+
+  // 从凭证服务拉到的临时凭证，优先级高于本机手工填写的那份
+  var remoteTurn = null;
+  var svcState = 'idle';   // idle | loading | ok | fail
 
   function loadTurn() {
     try {
@@ -396,13 +411,22 @@ details[open] summary { margin-bottom: 10px; }
     return null;
   }
 
+  function loadSvc() {
+    var v = (localStorage.getItem(LS_SVC) || '').trim();
+    return v || DEFAULT_TURN_SVC;
+  }
+
+  function effectiveTurn() {
+    return remoteTurn || loadTurn();
+  }
+
   function iceServers() {
     var list = [
       { urls: 'stun:stun.cloudflare.com:3478' },
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' }
     ];
-    var t = loadTurn();
+    var t = effectiveTurn();
     if (t) list.push({ urls: t.urls, username: t.username || '', credential: t.credential || '' });
     return list;
   }
@@ -413,8 +437,45 @@ details[open] summary { margin-bottom: 10px; }
 
   function peerOptions() {
     var policy = icePolicy();
-    if (policy === 'relay' && !loadTurn()) policy = 'all';
+    if (policy === 'relay' && !effectiveTurn()) policy = 'all';
     return { iceServers: iceServers(), iceTransportPolicy: policy, bundlePolicy: 'max-bundle' };
+  }
+
+  /* 从凭证服务取一段临时 TURN 凭证。
+     Worker 返回的就是 Cloudflare 的 { iceServers: [...] }，直接走同一套解析。
+     失败不阻塞流程，回落到手工填写的那份。 */
+  async function fetchTurnService(silent) {
+    var svc = loadSvc();
+    if (!svc) { svcState = 'idle'; return null; }
+
+    svcState = 'loading';
+    if (!silent) showSvcStatus('live', '正在从凭证服务获取…');
+    try {
+      var r = await fetch(svc, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var j = await r.json();
+      if (j && j.error) throw new Error(j.error);
+      var t = parseTurnInput(JSON.stringify(j));
+      remoteTurn = t;
+      svcState = 'ok';
+      showSvcStatus('good', '已从凭证服务获取中继凭证（' + t.urls.length + ' 个地址）');
+      log('凭证服务已返回中继地址 ' + t.urls.length + ' 个');
+      return t;
+    } catch (e) {
+      remoteTurn = null;
+      svcState = 'fail';
+      showSvcStatus('warn', '凭证服务获取失败：' + e.message + (loadTurn() ? '，已回落到手工填写的凭证' : ''));
+      log('凭证服务失败 ' + e.message);
+      return null;
+    }
+  }
+
+  function showSvcStatus(kind, text) {
+    var el = $('svcStatus');
+    if (!el) return;
+    el.hidden = false;
+    el.textContent = text;
+    el.style.color = kind === 'good' ? 'var(--good)' : kind === 'warn' ? 'var(--warn)' : 'var(--muted)';
   }
 
   /* 把用户粘贴的内容解析成 iceServers 里的一项。
@@ -600,8 +661,8 @@ details[open] summary { margin-bottom: 10px; }
         '在「中继设置」里给双方各填一份 TURN 凭证，点「保存并自检」确认拿到 relay，再重新创建房间。';
     } else if (!localRelay || !remoteRelay) {
       title = '只有一端拿到了 relay 候选。';
-      tips = 'TURN 必须双方都配置：没配的那一端根本发不出 relay 候选，对端也就无从选择中继路径。' +
-        '请确认两端都粘贴了凭证，并都点过「保存并自检」。';
+      tips = '单边 TURN 有时也能打通，但更稳的做法是两端都配。' +
+        '现在只有一端在往中继服务器发候选，另一端若处在对称 NAT 后面，候选配对就会失败。';
     } else {
       title = '两端都有 relay 候选，但连接仍然失败。';
       tips = '大概率是凭证已过期、地址或端口写错，或者该 TURN 端口在当前网络被封。' +
@@ -651,10 +712,14 @@ details[open] summary { margin-bottom: 10px; }
 
   async function hostCreate() {
     showStage('host');
-    setStatus('hostStatus', 'live', '正在收集网络候选地址，请稍候…');
     isHost = true;
+    setStatus('hostStatus', 'live', loadSvc() ? '正在获取中继凭证…' : '正在收集网络候选地址，请稍候…');
+    await fetchTurnService(true);
+    setStatus('hostStatus', 'live', '正在收集网络候选地址，请稍候…');
     var policy = peerOptions().iceTransportPolicy;
-    log('本次策略 ' + (policy === 'relay' ? '强制中继' : '直连优先') + (loadTurn() ? ' · 已配置 TURN' : ' · 未配置 TURN'));
+    var t0 = effectiveTurn();
+    log('本次策略 ' + (policy === 'relay' ? '强制中继' : '直连优先') +
+      (t0 ? ' · 已配置 TURN（' + t0.urls.length + ' 个地址）' : ' · 未配置 TURN'));
     pc = newPeer();
     bindDataChannel(pc.createDataChannel('ctrl', { ordered: true }), 'ctrl');
     try {
@@ -719,6 +784,8 @@ details[open] summary { margin-bottom: 10px; }
   async function joinAccept() {
     var raw = $('offerIn').value;
     if (!raw.trim()) { setStatus('joinStatus', 'warn', '请先填入邀请链接'); return; }
+    setStatus('joinStatus', 'live', loadSvc() ? '正在获取中继凭证…' : '正在解析邀请并生成应答码…');
+    await fetchTurnService(true);
     setStatus('joinStatus', 'live', '正在解析邀请并生成应答码…');
     try {
       var off = await unpack(raw);
@@ -820,7 +887,7 @@ details[open] summary { margin-bottom: 10px; }
   /* 单独建一条只允许中继的连接，用来验证凭证是否真的能用。
      能收到 relay 候选 = TURN 可达且鉴权通过；一个都收不到 = 配错了。 */
   async function probeRelay() {
-    var t = loadTurn();
+    var t = effectiveTurn();
     var p = new RTCPeerConnection({
       iceServers: [{ urls: t.urls, username: t.username || '', credential: t.credential || '' }],
       iceTransportPolicy: 'relay'
@@ -843,8 +910,19 @@ details[open] summary { margin-bottom: 10px; }
   }
 
   async function selfCheckTurn() {
-    if (!loadTurn()) { showTurnStatus('warn', '还没有保存 TURN 凭证'); return; }
     $('btnSaveTurn').disabled = true;
+    // 配了凭证服务就先拉一次，拉到就不依赖手工填写的内容
+    if (loadSvc()) {
+      showTurnStatus('live', '正在从凭证服务获取…');
+      await fetchTurnService(true);
+    }
+    if (!effectiveTurn()) {
+      $('btnSaveTurn').disabled = false;
+      showTurnStatus('warn', remoteTurn === null && svcState === 'fail'
+        ? '凭证服务没取到凭证，也没有手工填写的内容'
+        : '还没有保存 TURN 凭证');
+      return;
+    }
     showTurnStatus('live', '正在只走中继收集候选，最多等 8 秒…');
     var r = await probeRelay();
     $('btnSaveTurn').disabled = false;
@@ -1039,11 +1117,34 @@ details[open] summary { margin-bottom: 10px; }
     localStorage.setItem(LS_POLICY, policy);
     syncPolicyUI();
     if (policy === 'relay') {
-      if (!loadTurn()) showTurnStatus('warn', '强制中继需要先填 TURN 凭证，否则一个候选都收不到');
+      if (!effectiveTurn()) showTurnStatus('warn', '强制中继需要先填 TURN 凭证，否则一个候选都收不到');
       else showTurnStatus('good', '已切换为强制中继，所有流量走 TURN');
     } else {
       showTurnStatus('good', '已切换为直连优先，直连失败时仍会走 TURN');
     }
+  });
+
+  $('btnSaveSvc').addEventListener('click', async function () {
+    var v = $('turnSvc').value.trim();
+    if (v && !/^https?:\/\//i.test(v)) {
+      showSvcStatus('warn', '地址要以 http:// 或 https:// 开头');
+      return;
+    }
+    if (!v) {
+      localStorage.removeItem(LS_SVC);
+      remoteTurn = null;
+      svcState = 'idle';
+      if (DEFAULT_TURN_SVC) {
+        $('turnSvc').value = DEFAULT_TURN_SVC;
+        showSvcStatus('', '已改回默认凭证服务');
+        await fetchTurnService(true);
+      } else {
+        showSvcStatus('', '已清除凭证服务，改用本机保存的凭证');
+      }
+      return;
+    }
+    localStorage.setItem(LS_SVC, v);
+    await fetchTurnService(true);
   });
 
   $('btnSaveTurn').addEventListener('click', async function () {
@@ -1064,6 +1165,7 @@ details[open] summary { margin-bottom: 10px; }
     $('turnIn').value = '';
     $('turnStatus').hidden = true;
     $('turnHint').hidden = true;
+    if (loadSvc()) showSvcStatus('', '已清除手工凭证，仍会从凭证服务自动获取');
   });
 
   $('btnRestart').addEventListener('click', function () { location.reload(); });
@@ -1077,6 +1179,8 @@ details[open] summary { margin-bottom: 10px; }
     if (savedTurn) {
       $('turnIn').value = savedTurn.urls.join(',') + '|' + savedTurn.username + '|' + savedTurn.credential;
     }
+    $('turnSvc').value = loadSvc();
+    if (loadSvc()) fetchTurnService(true);
     syncPolicyUI();
 
     var hash = location.hash || '';
