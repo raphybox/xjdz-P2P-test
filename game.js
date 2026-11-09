@@ -590,8 +590,8 @@
         addLog('联机：未收到房主的对战快照，弹珠与血条无法同步（请确认两端都是最新版本）', 'bad');
       }
     }
-    buf.advance(dt);
-    buf.resyncIfNeeded();
+    buf.advanceAdaptive(dt);        // 缓冲水位反馈：不冻结、不硬跳，自动吸收抖动
+    buf.resyncIfNeeded();           // 仅在切后台等严重落后（>1.5s）时兜底重置
     const sm = buf.sample();
     if (sm) {
       const mine = P2P.role === 'host' ? sm.p : sm.e;
@@ -4104,10 +4104,11 @@
           endRound('time');
         } else {
           updateHud();
-          // 联机（房主）：20Hz 快照广播（不可靠 game 通道）
+          // 联机（房主）：30Hz 快照广播（不可靠 game 通道）
+          // 用 -= 保持节拍稳定；更高频率让 17% 丢包下的插值间隔更短
           if (P2P.active && P2P.role === 'host') {
             P2P.snapAcc += realDt;
-            if (P2P.snapAcc >= 0.05) { P2P.snapAcc = 0; p2pSendSnap(); }
+            if (P2P.snapAcc >= 0.033) { P2P.snapAcc -= 0.033; p2pSendSnap(); }
           }
         }
       }
