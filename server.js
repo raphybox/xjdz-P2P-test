@@ -80,23 +80,113 @@ function safePath(urlPath) {
 }
 
 /* -------------------------------------------------------------
-   发布即同步到 GitHub：把本次落盘的游戏文件提交并推送到远程。
+   本地开发服务：先在这里测试，确认无误后再由后台「同步上线」发布。
    - 管理后台(admin.*)已在 .gitignore 排除，不会进入仓库。
    - 代理做 HTTPS 中间人，git 必须 http.sslVerify=false（内置）。
    - 非交互、带超时，避免弹窗卡死；失败不影响本地落盘结果。
    ------------------------------------------------------------- */
+/* -------------------------------------------------------------
+   本地开发版房间信令 / TURN 代理
+   与 functions/api/room.js 的 Durable Object 协议完全一致，数据只在内存里，
+   重启服务即清空。目的是让「先本地测试」对 P2P 房间功能也成立：
+   本地 127.0.0.1 是安全上下文，两个浏览器窗口可直接建连对打。
+   ------------------------------------------------------------- */
+const ROOM_TTL = 10 * 60 * 1000;
+const ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const LOCAL_ROOMS = new Map();
+function localCode() {
+  const b = require('crypto').randomBytes(8);
+  let s = '';
+  for (let i = 0; i < 8; i++) s += ROOM_ALPHABET[b[i] % ROOM_ALPHABET.length];
+  return s;
+}
+function normCode(v) { return String(v == null ? '' : v).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8); }
+function validCode(v) { return /^[A-HJ-NP-Z2-9]{8}$/.test(String(v || '')); }
+function cleanRoomNick(v) { return String(v == null ? '' : v).replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 12); }
+function readRoom(code) {
+  const r = LOCAL_ROOMS.get(code);
+  if (!r) return null;
+  if (Date.now() - r.ts > ROOM_TTL) { LOCAL_ROOMS.delete(code); return null; }
+  return r;
+}
+async function handleLocalRoom(req, res, url) {
+  const u = new URL(url, 'http://' + HOST + ':' + PORT);
+  const act = (u.pathname.split('/').filter(Boolean).pop() || '').toLowerCase();
+  if (req.method === 'OPTIONS') return send(res, 204, '');
+  let body = null;
+  if (req.method === 'POST') {
+    try { body = JSON.parse(await readBody(req) || 'null'); }
+    catch (e) { return json(res, 400, { ok: false, error: 'JSON 解析失败' }); }
+  }
+  if (act === 'create' && req.method === 'POST') {
+    if (!body || typeof body.offer !== 'string' || body.offer.length < 8 || body.offer.length > 200000) {
+      return json(res, 400, { error: 'invalid_offer' });
+    }
+    let code = null;
+    for (let i = 0; i < 12; i++) { const c = localCode(); if (!readRoom(c)) { code = c; break; } }
+    if (!code) return json(res, 503, { error: 'code_exhausted' });
+    LOCAL_ROOMS.set(code, { offer: body.offer, answer: null, host: cleanRoomNick(body.nick), guest: '', ts: Date.now() });
+    return json(res, 200, { code });
+  }
+  if (act === 'lookup' && req.method === 'GET') {
+    const code = normCode(u.searchParams.get('code'));
+    if (!validCode(code)) return json(res, 400, { error: '房间码格式不对，请输入 8 位字母和数字' });
+    const r = readRoom(code);
+    if (!r) return json(res, 404, { error: '房间不存在或已过期，请让房主重新创建' });
+    if (r.answer) return json(res, 409, { error: '这个房间已经有玩家加入了' });
+    return json(res, 200, { code, offer: r.offer, host: r.host });
+  }
+  if (act === 'answer' && req.method === 'POST') {
+    const code = normCode(body && body.code);
+    if (!validCode(code)) return json(res, 400, { error: '房间码格式不对' });
+    if (!body || typeof body.answer !== 'string' || body.answer.length < 8 || body.answer.length > 200000) {
+      return json(res, 400, { error: 'invalid_answer' });
+    }
+    const r = readRoom(code);
+    if (!r) return json(res, 404, { error: '房间不存在或已过期' });
+    if (r.answer) return json(res, 409, { error: '已经有其他玩家加入了这个房间' });
+    r.answer = body.answer; r.guest = cleanRoomNick(body.nick); r.joinedAt = Date.now();
+    LOCAL_ROOMS.set(code, r);
+    return json(res, 200, { ok: true });
+  }
+  if (act === 'poll' && req.method === 'GET') {
+    const code = normCode(u.searchParams.get('code'));
+    if (!validCode(code)) return json(res, 400, { error: '房间码格式不对' });
+    const r = readRoom(code);
+    if (!r) return json(res, 404, { error: '房间已过期' });
+    return json(res, 200, { code, joined: !!r.answer, answer: r.answer || null, guest: r.guest || '', host: r.host || '' });
+  }
+  if (act === 'close' && req.method === 'POST') {
+    LOCAL_ROOMS.delete(normCode(body && body.code));
+    return json(res, 200, { ok: true });
+  }
+  return json(res, 404, { error: 'unknown_action' });
+}
+
+/* 本地页面拿不到 xjdz.de5.net 的 TURN 凭证（CORS 白名单只放线上域），
+   由本地服务服务端转发一次，保证本地联机也能走中继。 */
+async function handleLocalTurn(res) {
+  try {
+    const r = await fetch('https://xjdz.de5.net/api/turn');
+    const text = await r.text();
+    return send(res, r.status, text, 'application/json; charset=utf-8');
+  } catch (e) {
+    return json(res, 502, { error: 'turn_proxy_failed', detail: String((e && e.message) || e) });
+  }
+}
+
 function isGitRepo() {
   try { return fs.existsSync(path.join(ROOT, '.git')); } catch (e) { return false; }
 }
-function runGit(args, timeoutMs) {
+function runCmd(file, args, timeoutMs) {
   return new Promise((resolve) => {
-    const full = ['-c', 'http.sslVerify=false'].concat(args);
     const env = Object.assign({}, process.env, {
       GCM_INTERACTIVE: 'never',   // 无缓存凭据时直接失败，不弹窗
-      GIT_TERMINAL_PROMPT: '0'
+      GIT_TERMINAL_PROMPT: '0',
+      WRANGLER_SEND_METRICS: 'false'
     });
     let settled = false;
-    const p = execFile('git', full, { cwd: ROOT, timeout: timeoutMs || 120000, windowsHide: true, env },
+    const p = execFile(file, args, { cwd: ROOT, timeout: timeoutMs || 120000, windowsHide: true, env },
       (err, stdout, stderr) => {
         if (settled) return; settled = true;
         resolve({
@@ -110,28 +200,66 @@ function runGit(args, timeoutMs) {
     p.on('error', (e) => { if (!settled) { settled = true; resolve({ ok: false, error: String(e) }); } });
   });
 }
-async function gitSync() {
-  const out = { ok: true, pushed: false, message: '' };
-  if (!isGitRepo()) { out.ok = false; out.message = '未检测到 git 仓库，跳过 GitHub 同步'; return out; }
+function runGit(args, timeoutMs) {
+  return runCmd('git', ['-c', 'http.sslVerify=false'].concat(args), timeoutMs);
+}
+/* 一键同步上线：与当前正式发布链路完全一致
+   提交 → prepare_site.js → wrangler deploy → 推 xjdz（域名绑定仓库）与 origin。
+   部署失败不阻断推送，但会在结果里明确提示。 */
+async function deploySync() {
+  const out = { ok: true, pushed: false, deployed: false, message: '', detail: [] };
+  if (!isGitRepo()) { out.ok = false; out.message = '未检测到 git 仓库，跳过同步上线'; return out; }
   try {
     const inside = await runGit(['rev-parse', '--is-inside-work-tree'], 30000);
     if (!inside.ok || inside.stdout.trim() !== 'true') {
-      out.ok = false; out.message = '当前目录不是 git 工作区，跳过 GitHub 同步'; return out;
+      out.ok = false; out.message = '当前目录不是 git 工作区，跳过同步上线'; return out;
     }
     const add = await runGit(['add', '-A'], 60000);
     if (!add.ok) { out.ok = false; out.message = 'git add 失败：' + (add.stderr || add.error || '未知错误'); return out; }
     const st = await runGit(['status', '--porcelain'], 60000);
     if (!st.ok) { out.ok = false; out.message = 'git status 失败，跳过推送'; return out; }
-    if (!st.stdout.trim()) { out.message = '没有需要同步的改动'; out.pushed = false; return out; }
-    const msg = 'chore: 本地后台发布同步 ' + stamp();
-    const commit = await runGit(['commit', '-m', msg], 60000);
-    if (!commit.ok) { out.ok = false; out.message = 'commit 失败：' + (commit.stderr || commit.error || ''); return out; }
-    const push = await runGit(['push', 'origin', 'main'], 100000);
-    if (!push.ok) {
-      const tail = (push.stderr || push.error || '未知错误').split('\n').map(s => s.trim()).filter(Boolean).pop() || 'push 失败';
-      out.ok = false; out.message = '已提交但未推送：' + tail + '（本地配置已落盘，可稍后手动 git push）'; return out;
+    if (st.stdout.trim()) {
+      const msg = 'chore: 本地后台发布同步 ' + stamp();
+      const commit = await runGit(['commit', '-m', msg], 60000);
+      if (!commit.ok) { out.ok = false; out.message = 'commit 失败：' + (commit.stderr || commit.error || ''); return out; }
+    } else {
+      out.detail.push('没有新的代码改动');
     }
-    out.ok = true; out.pushed = true; out.message = '已同步到 GitHub'; return out;
+
+    // prepare_site 按 git ls-files 取文件，必须在 git add 之后执行
+    const site = await runCmd(process.execPath, [path.join(ROOT, 'tools', 'prepare_site.js')], 60000);
+    if (!site.ok) out.detail.push('站点产物生成失败：' + (site.stderr || site.error || '').split('\n').filter(Boolean).pop());
+
+    // 发布到 xjdz.de5.net（Workers 静态资产 + Worker 脚本）
+    const wrangler = path.join(ROOT, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
+    if (fs.existsSync(wrangler)) {
+      const dep = await runCmd(process.execPath, [wrangler, 'deploy'], 300000);
+      if (dep.ok) {
+        out.deployed = true;
+        const m = (dep.stdout || '').match(/Current Version ID:\s*([0-9a-f-]+)/i);
+        out.detail.push('已发布到 xjdz.de5.net' + (m ? '（版本 ' + m[1].slice(0, 8) + '）' : ''));
+      } else {
+        const tail = (dep.stderr || dep.stdout || dep.error || '未知错误').split('\n').map(s => s.trim()).filter(Boolean).pop();
+        out.detail.push('站点部署失败：' + tail);
+      }
+    } else {
+      out.detail.push('未找到本地 wrangler，跳过站点部署');
+    }
+
+    // xjdz = xjdz.de5.net 绑定的项目仓库；origin 同步保留，与手动发布一致
+    const targets = [['xjdz', 'xjdz-P2P-test'], ['origin', 'xuanji-pinball']];
+    let anyPush = false;
+    for (const [remote, label] of targets) {
+      const push = await runGit(['push', remote, 'main'], 100000);
+      if (push.ok) { anyPush = true; out.detail.push('已推送 ' + label); }
+      else {
+        out.ok = false;
+        out.detail.push('推送 ' + label + ' 失败：' + ((push.stderr || push.error || '未知错误').split('\n').map(s => s.trim()).filter(Boolean).pop()));
+      }
+    }
+    out.pushed = anyPush;
+    out.message = out.detail.length ? out.detail.join('；') : '已同步上线';
+    return out;
   } catch (e) {
     out.ok = false; out.message = '同步异常：' + (e && e.message || e); return out;
   }
@@ -144,6 +272,8 @@ const server = http.createServer(async (req, res) => {
   if (url.startsWith('/api/')) {
     try {
       ensureDirs();
+      if (url.startsWith('/api/room')) return await handleLocalRoom(req, res, url);
+      if (req.method === 'GET' && url.startsWith('/api/turn')) return await handleLocalTurn(res);
       if (req.method === 'GET' && url.startsWith('/api/config')) {
         if (!fs.existsSync(CONFIG_FILE)) return json(res, 200, { ok: true, data: null });
         const data = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
@@ -151,7 +281,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, data: data });
       }
       if (req.method === 'POST' && url.startsWith('/api/config')) {
-        // push=1 同步 GitHub（正式发布，版本号 +1）；否则仅本地预览（不推远程、不涨版本）
+        // push=1 同步上线（部署 xjdz.de5.net + 推仓库，版本号 +1）；否则仅本地预览
         const wantPush = /[?&]push=1/.test(url);
         const raw = await readBody(req);
         let data;
@@ -187,14 +317,14 @@ const server = http.createServer(async (req, res) => {
         // 同步到 GitHub（后台文件已 gitignore，不会进仓库）；本地预览跳过，失败仅告警
         let github = null;
         if (wantPush) {
-          try { github = await gitSync(); }
+          try { github = await deploySync(); }
           catch (e) { github = { ok: false, message: '同步未执行：' + (e && e.message || e) }; }
           if (github) {
-            if (github.ok && github.pushed) console.log('[github] 已同步到远程');
-            else console.warn('[github] ' + (github.message || '未同步'));
+            if (github.ok && github.pushed) console.log('[deploy] 已同步上线并推送仓库');
+            else console.warn('[deploy] ' + (github.message || '未同步'));
           }
         } else {
-          github = { ok: true, pushed: false, message: '本地预览已更新，未同步 GitHub' };
+          github = { ok: true, pushed: false, message: '本地预览已更新，未上线' };
         }
         return json(res, 200, { ok: true, savedAt: new Date().toISOString(), github: github,
           version: data.version, versionSeq: data.versionSeq });

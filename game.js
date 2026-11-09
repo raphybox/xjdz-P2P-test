@@ -4588,6 +4588,7 @@
     loadWallet();
     loadGhosts();
     renderClassGrid();
+    p2pRoomBuildClasses();   // 房间页职业网格预建好，后台界面编辑器也能选到「首个职业按钮」
     renderConfigStatus();
     renderShop();
     resizeCanvas();

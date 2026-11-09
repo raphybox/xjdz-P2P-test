@@ -28,6 +28,7 @@
     ['orb', '卡片弹珠头像（全部职业卡）', '#classGrid .cc-orb', 0, 1],
     ['footer', '底部操作栏', '#startScreen .start-footer'], ['selected', '已选择信息', '.selected-line'],
     ['actions', '底部按钮组', '.start-actions'], ['coin', '金币标签', '#coinChip'],
+    ['p2pBtn', '联机对战按钮', '#p2pBtn'],
     ['ghostBtn', '异步对战按钮', '#ghostBtn'], ['shopBtn', '商店按钮', '#shopBtn'],
     ['startBtn', '开始对战按钮', '#startBtn']
   ];
@@ -55,6 +56,35 @@
       ['review', '回合回顾', '#roundReview'], ['build', '构筑回顾', '#buildReview'],
       ['actions', '结算按钮行', '.result-actions'], ['rematchBtn', '再战按钮', '#rematchBtn'],
       ['shareBtn', '分享码按钮', '#shareResultBtn'], ['logResultBtn', '战斗记录按钮', '#logResultBtn']
+    ] },
+    { id: 'room', name: '联机房间', kind: 'screen', root: '#roomScreen', items: [
+      ['bg', '整页背景', 'body', 1], ['app', '内容容器', '.app', 1],
+      ['shell', '房间主卡片', '#roomScreen .room-shell'],
+      ['head', '房间标题区', '#roomScreen .room-head'],
+      ['leaveBtn', '退出房间按钮', '#roomLeaveBtn'],
+      ['codePanel', '邀请码面板', '.room-code-panel'],
+      ['codeLabel', '邀请码标题', '.room-code-label'],
+      ['code', '8 位邀请码', '#roomCode'],
+      ['codeActions', '邀请码按钮行', '.room-code-actions'],
+      ['copyBtn', '复制邀请码按钮', '#roomCopyBtn'],
+      ['codeHint', '邀请码说明', '#roomCodeHint'],
+      ['status', '房间状态条', '#roomStatus'],
+      ['players', '双方卡片容器', '.room-players'],
+      ['myCard', '我方案卡', '#roomMyCard'],
+      ['peerCard', '对手方卡', '#roomPeerCard'],
+      ['myNick', '我方昵称', '#roomMyNick'],
+      ['peerNick', '对手昵称', '#roomPeerNick'],
+      ['myClass', '我方职业', '#roomMyClass'],
+      ['peerClass', '对手职业', '#roomPeerClass'],
+      ['myReady', '我方准备徽标', '#roomMyReady'],
+      ['peerReady', '对手准备徽标', '#roomPeerReady'],
+      ['vs', 'VS 标识', '.room-vs'],
+      ['classHead', '选职业标题', '.room-class-head'],
+      ['classGrid', '职业网格', '#roomClassGrid'],
+      ['classBtn', '首个职业按钮', '#roomClassGrid .room-class-btn'],
+      ['footer', '房间底部操作栏', '.room-footer'],
+      ['sharedHint', '共享状态提示', '#roomSharedHint'],
+      ['readyBtn', '准备按钮', '#roomReadyBtn']
     ] },
     { id: 'name', name: '弹层 · 昵称', kind: 'modal', root: '#nameModal', items: [
       ['mask', '弹层遮罩', '#nameModal', 1], ['card', '弹层卡片', '#nameModal .modal-card'],
@@ -95,6 +125,21 @@
       ['head', '标题栏', '#shareModal .modal-head'], ['tip', '说明文字', '.share-tip'],
       ['meta', '对局信息', '#shareMeta'], ['plays', '回合决策列表', '#sharePlays'],
       ['code', '分享码输入框', '#shareCode'], ['actions', '按钮行', '.share-actions']
+    ] },
+    { id: 'p2p', name: '弹层 · 联机房间入口', kind: 'modal', root: '#p2pModal', items: [
+      ['mask', '弹层遮罩', '#p2pModal', 1],
+      ['card', '弹层卡片', '#p2pModal .modal-card'],
+      ['head', '标题栏', '#p2pModal .modal-head'],
+      ['tip', '说明文字', '#p2pStageSel .p2p-tip'],
+      ['choice', '创建/加入按钮行', '.p2p-choice'],
+      ['createBtn', '创建房间按钮', '#p2pCreateBtn'],
+      ['joinBtn', '加入房间按钮', '#p2pJoinBtn'],
+      ['joinPanel', '加入房间面板', '#p2pStageJoin'],
+      ['codeLabel', '邀请码输入标题', '#p2pStageJoin .share-code-head'],
+      ['codeInput', '8 位码输入框', '#p2pRoomCodeIn'],
+      ['acceptBtn', '加入确认按钮', '#p2pAcceptBtn'],
+      ['joinMsg', '加入提示', '#p2pJoinMsg'],
+      ['status', '连接状态行', '#p2pStatus']
     ] }
   ];
 
@@ -601,7 +646,9 @@
 
   /* ---------- 屏幕切换（正常模式不调用，仅编辑器使用） ---------- */
   var FORCE_VISIBLE = ['#banner', '#aimOverlay', '#asyncTag', '#shopResult', '#ghostMsg',
-    '#shareMsg', '#nameMsg', '#nameCancelBtn', '#closeNameBtn'];
+    '#shareMsg', '#nameMsg', '#nameCancelBtn', '#closeNameBtn',
+    /* 联机弹层的加入面板与提示默认 hidden，编辑态强制展开才能改素材 */
+    '#p2pStageJoin', '#p2pJoinMsg'];
   // 编辑态下没开局的动态容器是空的，补占位内容后才能被选中、拖拽、换素材
   var SAMPLE_FILL = [
     ['#draftCards', 3, 'draft-card', '技能示例'],
