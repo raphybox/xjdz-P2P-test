@@ -733,7 +733,9 @@ details[open] summary { margin-bottom: 10px; }
     try {
       var offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      await waitIce(pc);
+      // 配了 TURN 就放宽收集窗口：中继分配（TURN allocate）在慢网络下可能超过默认 3.5s，
+      // 提前生成链接会让 offer 缺 relay 候选，对端无法走中继
+      await waitIce(pc, effectiveTurn() ? 10000 : 3500);
 
       var sdp = pc.localDescription.sdp;
       if (candStats.relay === 0) {
@@ -799,7 +801,7 @@ details[open] summary { margin-bottom: 10px; }
       await pc.setRemoteDescription({ type: 'offer', sdp: off.sdp });
       var answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      await waitIce(pc);
+      await waitIce(pc, effectiveTurn() ? 10000 : 3500);
 
       var code = await pack({ t: 'answer', sdp: pc.localDescription.sdp, ty: pc.localDescription.type });
       $('answerOut').value = code;

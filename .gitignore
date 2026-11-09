@@ -6,6 +6,8 @@ data/history/
 
 # 本地依赖 / 备份 / 日志 / 系统文件
 node_modules/
+dist-site/
+
 dev_backup/
 *.bak
 *.bak-*

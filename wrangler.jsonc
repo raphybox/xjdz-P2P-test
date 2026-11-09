@@ -1,0 +1,13 @@
+{
+  "name": "xjdz-p2p-test",
+  "main": "cf-worker.js",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./dist-site",
+    "binding": "ASSETS"
+  },
+  "vars": {
+    "TURN_KEY_ID": "1e00352be0bc5fa6e1745a8c1554853a",
+    "ALLOWED_ORIGIN": "https://xjdz.de5.net"
+  }
+}
