@@ -11,6 +11,33 @@
 
 import { onRequestGet, onRequestOptions } from './functions/api/turn.js';
 
+/* 区域边缘缓存自助清理：
+   静态资产响应被区域级缓存规则（如 Cache Everything）钉住时，wrangler 部署
+   虽然成功但用户拿到的仍是旧文件。Cache API 只在 Worker 内可用，因此提供
+   /api/purge 白名单清理。仅允许站内静态路径（防滥用），单次最多 20 条。 */
+async function purgeAssets(request) {
+  const url = new URL(request.url);
+  const targets = url.searchParams.getAll('u').slice(0, 20);
+  if (!targets.length) {
+    return new Response(JSON.stringify({ error: '用法：/api/purge?u=/net.js&u=/game.js' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    });
+  }
+  const purged = [], skipped = [];
+  for (const t of targets) {
+    // 白名单：仅站内绝对路径，字母数字与 ./-/_ 组成
+    if (!/^\/[A-Za-z0-9._\-/]*$/.test(t)) { skipped.push(t); continue; }
+    try {
+      const ok = await caches.default.delete(url.origin + t);
+      (ok ? purged : skipped).push(t);
+    } catch (e) { skipped.push(t); }
+  }
+  return new Response(JSON.stringify({ purged, skipped }), {
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -21,6 +48,10 @@ export default {
         return onRequestOptions({ request, env });
       }
       return onRequestGet({ request, env });
+    }
+
+    if (path === '/api/purge' || path.indexOf('/api/purge-') === 0) {
+      return purgeAssets(request);
     }
 
     // 其余请求交给静态资产层（正常情况下轮不到这里：资产命中不会进 Worker）

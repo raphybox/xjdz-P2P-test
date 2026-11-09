@@ -1,7 +1,8 @@
 {
-  "name": "xjdz-p2p-test",
+  "name": "xjdz-live",
   "main": "cf-worker.js",
   "compatibility_date": "2026-11-01",
+  "routes": [{ "pattern": "xjdz.de5.net", "custom_domain": true }],
   "assets": {
     "directory": "./dist-site",
     "binding": "ASSETS"
