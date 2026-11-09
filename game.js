@@ -35,7 +35,8 @@
         forceMin: Math.max(0, num(t.forceMin, 30)),
         forceMax: Math.max(0, num(t.forceMax, 70)),
         sway: Math.max(0, num(t.sway, 0.45)),
-        slip: Math.max(0, num(t.slip, 0.12))
+        slip: Math.max(0, num(t.slip, 0.12)),
+        rainForce: Math.max(0, num(t.rainForce, 0))
       }));
     return {
       enabled: w.enabled !== false && types.length > 0,
@@ -63,6 +64,7 @@
     CRIT_BASE: C.critBase,
     CRIT_MULT_BASE: C.critMultBase,
     DRAFT_OPTIONS: C.draftOptions,
+    MAX_SKILLS: C.maxSkills != null ? C.maxSkills : 9,   // 拥有的技能最大数量（封顶后超出回合不再弹技能选项）
     CLASS_SKILL_WEIGHT: C.classSkillWeight
   };
   const SPEEDS = C.speeds && C.speeds.length ? C.speeds : [1, 2, 4];
@@ -190,12 +192,38 @@
     momentum: v => '高速撞击加成 +' + pct(v)
   };
 
+  // 技能归属（cls）统一规范化为数组：字符串 -> [字符串]；null / 空 / undefined -> []
+  // 兼容旧数据，升级后既有技能仍可正常进入对应职业的抽取池；同时去重避免重复入池
+  // 注意：SKILLS 初始化时就要用它，必须定义在 SKILLS 之前，否则会踩 const 的暂时性死区（TDZ）
+  const skillClsArr = s => {
+    const v = s && s.cls;
+    let a;
+    if (Array.isArray(v)) a = v.filter(x => typeof x === 'string' && x);
+    else if (typeof v === 'string' && v) a = [v];
+    else a = [];
+    const seen = Object.create(null), out = [];
+    a.forEach(x => { if (!seen[x]) { seen[x] = 1; out.push(x); } });
+    return out;
+  };
+
   const SKILLS = DATA.skills.filter(s => s.enabled !== false).map(s => {
     const mods = s.mods || {};
+    let compiled = null;
+    // 预编译节点图（模块化技能），供战斗中实时施放；失败则退化为纯被动
+    if (s.graph && window.SkillModules) {
+      try { compiled = window.SkillModules.compile(s); } catch (e) { compiled = null; }
+    }
+    // 充能时间（秒）：技能级属性，未配置时回落到编译器默认值
+    const charge = (typeof s.charge === 'number' && s.charge > 0) ? s.charge
+      : ((window.SkillModules && window.SkillModules.DEFAULT_CHARGE) || 3);
     return {
-      id: s.id, name: s.name, cls: s.cls || null, tier: s.tier, mods: mods,
-      desc: Object.keys(mods).filter(k => MOD_LABEL[k]).map(k => MOD_LABEL[k](mods[k])).join(' / '),
-      origin: s.cls ? ((CLASSES.find(c => c.id === s.cls) || { name: s.cls }).name + '专属') : '通用'
+      id: s.id, name: s.name, cls: skillClsArr(s), tier: s.tier, mods: mods, graph: s.graph || null, compiled: compiled,
+      charge: charge,
+      // intro = 后台编辑的技能介绍（用户文案）；desc = 由 mods / 节点图自动生成的机制摘要，两者互不覆盖
+      intro: String(s.intro || '').trim(),
+      desc: Object.keys(mods).filter(k => MOD_LABEL[k]).map(k => MOD_LABEL[k](mods[k])).join(' / ') +
+        (compiled && compiled.active ? (Object.keys(mods).length ? ' / ' : '') + '✸主动技能 · 充能 ' + charge.toFixed(1) + 's' : ''),
+      origin: (function () { const a = skillClsArr(s); return a.length ? a.map(id => (CLASSES.find(c => c.id === id) || { name: id }).name).join('/') + '专属' : '通用'; })()
     };
   });
 
@@ -211,7 +239,7 @@
     let total = 0;
     const weights = list.map(s => {
       let w = (TIER_WEIGHT[s.tier] || 1) * (EFFECTS.tierMul[s.tier] || 1) *
-        (s.cls ? CONFIG.CLASS_SKILL_WEIGHT : 1) *
+        (s.cls.length ? CONFIG.CLASS_SKILL_WEIGHT : 1) *
         (EFFECTS.skillBoost.indexOf(s.id) >= 0 ? 2.5 : 1);
       total += w;
       return w;
@@ -227,7 +255,7 @@
   function drawSkills(cls, owned, n) {
     const ownedIds = owned.map(s => s.id);
     const pool = SKILLS.filter(s =>
-      (!s.cls || s.cls === cls.id) &&
+      (s.cls.length === 0 || s.cls.indexOf(cls.id) >= 0) &&
       ownedIds.indexOf(s.id) < 0 &&
       EFFECTS.skillBan.indexOf(s.id) < 0);
     const out = [];
@@ -274,7 +302,15 @@
     flash: 0,
     particles: [],
     floaters: [],
-    logLines: []
+    logLines: [],
+    movers: [],              // 挂在弹珠身上的运动器（位移模块生成，逐帧接管速度）
+    // 伤害统计：所有来源（撞击 / 技能 / 区域残留 / 墙面残留 / 荆棘反伤 / 持续伤害 / 回响）统一收口到 recordDamage()
+    dmgStats: {
+      total: { player: 0, enemy: 0 },   // 整局累计造成的伤害
+      round: { player: 0, enemy: 0 },   // 本回合造成的伤害
+      byKind: { player: {}, enemy: {} },// 按来源分类
+      hits: { player: 0, enemy: 0 }     // 造成伤害的次数
+    }
   };
 
   /* ---------------------------------------------------------
@@ -489,12 +525,13 @@
     pNick: $('pNick'), eNick: $('eNick'),
     pHpBar: $('pHpBar'), eHpBar: $('eHpBar'), pShieldBar: $('pShieldBar'), eShieldBar: $('eShieldBar'),
     pHpText: $('pHpText'), eHpText: $('eHpText'), pScore: $('pScore'), eScore: $('eScore'),
-    pSkills: $('pSkills'), eSkills: $('eSkills'), pPanel: document.querySelector('.player-panel'), ePanel: document.querySelector('.enemy-panel'),
+    pSkills: $('pSkills'), eSkills: $('eSkills'), pBuffs: $('pBuffs'), eBuffs: $('eBuffs'),
+    pPanel: document.querySelector('.player-panel'), ePanel: document.querySelector('.enemy-panel'),
     roundLabel: $('roundLabel'), roundPips: $('roundPips'), phaseLabel: $('phaseLabel'),
     canvas: $('arena'), arenaWrap: $('arenaWrap'), timerText: $('timerText'),
     banner: $('banner'), bannerTitle: $('bannerTitle'), bannerSub: $('bannerSub'),
     draftModal: $('draftModal'), draftTitle: $('draftTitle'), draftSub: $('draftSub'), draftCards: $('draftCards'),
-    battleLog: $('battleLog'), logModal: $('logModal'), logBtn: $('logBtn'), closeLogBtn: $('closeLogBtn'),
+    battleLog: $('battleLog'), dmgSummary: $('dmgSummary'), logModal: $('logModal'), logBtn: $('logBtn'), closeLogBtn: $('closeLogBtn'),
     shopBtn: $('shopBtn'), shopModal: $('shopModal'), closeShopBtn: $('closeShopBtn'), shopDrawBtn: $('shopDrawBtn'),
     shopPool: $('shopPool'), shopCoin: $('shopCoin'), shopCostLabel: $('shopCostLabel'), shopHint: $('shopHint'),
     shopResult: $('shopResult'), coinChip: $('coinChip'),
@@ -507,7 +544,7 @@
     shareResultBtn: $('shareResultBtn'), shareModal: $('shareModal'), closeShareBtn: $('closeShareBtn'),
     shareMeta: $('shareMeta'), sharePlays: $('sharePlays'), shareCode: $('shareCode'),
     shareCopyBtn: $('shareCopyBtn'), shareImportBtn: $('shareImportBtn'), shareMsg: $('shareMsg'),
-    rematchBtn: $('rematchBtn'), changeBtn: $('changeBtn'),
+    rematchBtn: $('rematchBtn'), changeBtn: $('changeBtn'), logResultBtn: $('logResultBtn'),
     nickBtn: $('nickBtn'), nameModal: $('nameModal'), nameTitle: $('nameTitle'),
     nameInput: $('nameInput'), nameMsg: $('nameMsg'),
     nameConfirmBtn: $('nameConfirmBtn'), nameCancelBtn: $('nameCancelBtn'), closeNameBtn: $('closeNameBtn')
@@ -783,7 +820,7 @@
         const sk = SKILLS.find(s => s.id === r.skill);
         return '<div class="share-play">' +
           '<span class="sp-no">第 ' + (i + 1) + ' 回合</span>' +
-          '<span class="sp-skill" title="' + escHtml(sk ? sk.desc : '') + '">' + escHtml(sk ? sk.name : '未记录') + '</span>' +
+          '<span class="sp-skill" title="' + escHtml(sk ? (sk.intro ? sk.intro + ' · ' + sk.desc : sk.desc) : '') + '">' + escHtml(sk ? sk.name : '未记录') + '</span>' +
           '<span class="sp-aim">方向 ' + fmtAimDeg(r.aim) + '</span>' +
           '</div>';
       }).join('');
@@ -918,7 +955,7 @@
       maxHp: cls.hp, hp: cls.hp, shield: 0,
       power: cls.power, mass: cls.mass, speed: cls.speed,
       combo: 0, firstHitUsed: false, slowUntil: -1, slowFactor: 1,
-      dotDps: 0, dotUntil: -1,
+      dotDps: 0, dotUntil: -1, _statusTags: {},
       squash: 0, trail: [], lastDmgAt: -10
     };
   }
@@ -972,6 +1009,8 @@
       f.firstHitUsed = false;
       f.slowUntil = -1; f.slowFactor = 1;
       f.dotDps = 0; f.dotUntil = -1;
+      f._statusTags = {};
+      f._dotAccum = 0; f._dotLogAt = null;
       f.squash = 0;
       f.trail = [];
       f.lastDmgAt = -10;
@@ -980,12 +1019,21 @@
     G.particles = [];
     G.floaters = [];
     G.clock = 0;
+    initSkillCasters();   // 按当前双方技能重建节点图施放器
   }
 
   /* ---------------------------------------------------------
      10. 技能选择（每颗弹珠各自获得技能）
      --------------------------------------------------------- */
   function openDraft(title, sub) {
+    // 超过「拥有的技能最大数量」时，不再弹出技能随机选项，直接进入瞄准阶段；
+    // 玩家与对手同步受限（每回合双方各获得 1 个技能，封顶即同时停止）。
+    const maxSkills = CONFIG.MAX_SKILLS != null ? CONFIG.MAX_SKILLS : 9;
+    if (G.playerSkills.length >= maxSkills) {
+      addLog('已达『拥有的技能最大数量』上限（' + maxSkills + '），本回合不再弹出技能选项', 'hl');
+      setTimeout(startAimPhase, 60);
+      return;
+    }
     G.phase = 'draft';
     const draftCount = CONFIG.DRAFT_OPTIONS + EFFECTS.extraDraft;
     G.draftOptions = drawSkills(G.playerClass, G.playerSkills, draftCount);
@@ -1002,11 +1050,13 @@
     dom.draftTitle.textContent = title;
     dom.draftSub.textContent = sub;
     dom.draftModal.hidden = false;
+    // 卡牌正文：介绍优先，留空的技能仍显示自动生成的机制摘要；介绍由后台自由编辑，必须转义
     dom.draftCards.innerHTML = G.draftOptions.map((s, i) =>
-      '<button class="skill-card" type="button" data-i="' + i + '" data-tier="' + s.tier + '">' +
-      '<div class="sc-top"><span class="sc-name">' + s.name + '</span><span class="sc-tier">' + TIER_NAME[s.tier] + '</span></div>' +
-      '<div class="sc-origin">' + s.origin + '</div>' +
-      '<div class="sc-effect">' + s.desc + '</div>' +
+      '<button class="skill-card" type="button" data-i="' + i + '" data-tier="' + escHtml(s.tier) + '"' +
+      ' title="' + escHtml(s.intro ? s.intro + '\n【机制】' + s.desc : s.desc) + '">' +
+      '<div class="sc-top"><span class="sc-name">' + escHtml(s.name) + '</span><span class="sc-tier">' + escHtml(TIER_NAME[s.tier]) + '</span></div>' +
+      '<div class="sc-origin">' + escHtml(s.origin) + '</div>' +
+      '<div class="sc-effect">' + escHtml(s.intro || s.desc) + '</div>' +
       '<div class="sc-hotkey">' + (i < 3 ? '按 ' + (i + 1) + ' 选择' : '点击选择') + '</div></button>'
     ).join('');
     dom.draftCards.querySelectorAll('.skill-card').forEach(btn => {
@@ -1059,9 +1109,9 @@
       seedWindFx();
       addLog('本回合天气：' + picked.name + '（' + (dir > 0 ? '吹向右侧 →' : '吹向左侧 ←') + '，力度 ' + Math.round(force) + '）', 'hl');
     } else if (picked.id === 'rain') {
-      G.weather = { id: 'rain', name: picked.name, slipExtra: picked.slip };
+      G.weather = { id: 'rain', name: picked.name, slipExtra: picked.slip, rainForce: picked.rainForce };
       seedRainFx();
-      addLog('本回合天气：' + picked.name + '（场地湿滑，反弹更活跃）', 'hl');
+      addLog('本回合天气：' + picked.name + '（场地湿滑，反弹更活跃，雨幕向下压弹珠）', 'hl');
     } else {
       G.weather = { id: picked.id, name: picked.name };
       addLog('本回合天气：' + picked.name, 'hl');
@@ -1090,7 +1140,8 @@
     pickWeather();   // 进入倒计时后随机抽取本回合天气（风 / 雨 / 无）
     dom.phaseLabel.textContent = '对撞中';
     showBanner('第 ' + G.round + ' 回合', G.playerClass.name + '  对阵  ' + G.enemyClass.name, 900);
-    addLog('第 ' + G.round + ' 回合开始，双方血量重置', 'hl');
+    resetRoundDmg();   // 本回合伤害统计清零（整局累计保留）
+    addLog('第 ' + G.round + ' 回合<span class="sep-sub">双方血量重置</span>', 'sep');
     sfx.round();
     updateScoreboard();
   }
@@ -1114,8 +1165,12 @@
     G.scores[winner] += 1;
 
     const label = winner === 'player' ? '本回合胜' : (winner === 'enemy' ? '本回合负' : '本回合平');
-    addLog('第 ' + G.round + ' 回合结束 · ' + label + '（我方 ' + Math.round(pp * 100) + '% / 对手 ' + Math.round(ep * 100) + '%）',
+    addLog('第 ' + G.round + ' 回合结束 · ' + label + ' · 我方 ' + Math.round(pp * 100) + '% / 对手 ' + Math.round(ep * 100) + '%',
       winner === 'player' ? 'good' : (winner === 'enemy' ? 'bad' : 'hl'));
+    const ds = G.dmgStats;
+    addLog('回合伤害 · 我方 ' + Math.round(ds.round.player) + ' / 对手 ' + Math.round(ds.round.enemy) +
+      ' · 累计 ' + Math.round(ds.total.player) + ' / ' + Math.round(ds.total.enemy) +
+      ' · 命中 ' + ds.hits.player + ' / ' + ds.hits.enemy + ' 次', 'hl');
     showBanner(label, reason === 'ko' ? '一方弹珠被击碎' : '按剩余生命百分比判定', 1350);
     sfx.round();
     updateScoreboard();
@@ -1133,7 +1188,101 @@
   /* ---------------------------------------------------------
      12. 伤害与撞击结算
      --------------------------------------------------------- */
-  function applyDamage(target, dmg, src, crit, isThorns) {
+  /* 战斗记录 · 伤害统计：所有造成伤害的路径都必须经过这里，
+     这样撞击、技能、区域/墙面残留、荆棘反伤、持续伤害(dot)、回响都能被完整统计，
+     不会漏掉任何一笔。 */
+  function resetDmgStats() {
+    G.dmgStats = {
+      total: { player: 0, enemy: 0 },
+      round: { player: 0, enemy: 0 },
+      byKind: { player: {}, enemy: {} },
+      hits: { player: 0, enemy: 0 }
+    };
+    renderDmgSummary();
+  }
+  function resetRoundDmg() {
+    G.dmgStats.round.player = 0; G.dmgStats.round.enemy = 0;
+    renderDmgSummary();
+  }
+  /* 伤害来源标签：技能伤害一律带技能名，战斗记录里能直接看出是哪一招打的。
+     · 字符串  = 纯机制来源（撞击 / 荆棘反伤 / 区域残留 …）
+     · { name, tag } = name 是计入统计的主标签（技能名），tag 是机制补充（区域 / 印记 / 回响 …）
+     统计按 name 聚合，所以「同一技能的直伤 + 区域 + 印记」会归到同一个技能名下。 */
+  function dmgLabel(label) {
+    if (label && typeof label === 'object') {
+      const name = String(label.name == null ? '' : label.name).trim();
+      const tag = String(label.tag == null ? '' : label.tag).trim();
+      return { name: name || '技能', tag: tag };
+    }
+    const s = String(label == null ? '' : label).trim();
+    return { name: s || '撞击', tag: '' };
+  }
+  // 技能名兜底：编译层没带 name（旧编译缓存 / 外部构造的 C）时退回「技能」
+  function skillLabel(C, tag) {
+    const n = String((C && C.name) || '').trim();
+    return { name: n || '技能', tag: tag || '' };
+  }
+
+  function recordDamage(target, dmg, src, crit, label, logIt) {
+    if (!G.dmgStats) resetDmgStats();
+    if (!(dmg > 0)) return;   // 过滤 0 / 负数 / NaN，避免污染累计值
+    const s = G.dmgStats;
+    // src 决定「谁造成的」；dot 等无明确 src 的按受害方反推
+    const side = (src && src.side === 'enemy') ? 'enemy'
+      : (src && src.side === 'player') ? 'player'
+        : (target && target.side === 'player' ? 'enemy' : 'player');
+    const L = dmgLabel(label);
+    s.total[side] += dmg;
+    s.round[side] += dmg;
+    s.byKind[side][L.name] = (s.byKind[side][L.name] || 0) + dmg;
+    s.hits[side] += 1;
+    if (logIt !== false) {
+      const who = side === 'player' ? '我方 → 对手' : '对手 → 我方';
+      const pct = Math.round(clamp((target && target.hp || 0) / (target && target.maxHp || 1), 0, 1) * 100);
+      const remain = (target && target.side === 'player') ? '我方' : '对手';
+      /* 逐笔明细用「四列栅格」而不是一长串文字：方向 / 伤害 / 来源 / 剩余，
+         数值右对齐，扫一眼就能看出这一下是谁打的、打了多少、还剩多少。 */
+      addLog(
+        '<span class="lg-dir">' + who + '</span>' +
+        '<span class="lg-val">-' + Math.round(dmg) + '</span>' +
+        '<span class="lg-src"><b title="' + escHtml(L.name) + '">' + escHtml(L.name) + '</b>' +
+        (L.tag ? '<i>' + escHtml(L.tag) + '</i>' : '') +
+        (crit ? '<i class="lg-crit">暴击</i>' : '') + '</span>' +
+        '<span class="lg-hp">' + remain + ' ' + pct + '%</span>',
+        side === 'player' ? 'dmg-own' : 'dmg-enemy');
+    }
+    renderDmgSummary();
+  }
+  function renderDmgSummary() {
+    const el = dom.dmgSummary;
+    if (!el || !G.dmgStats) return;
+    const s = G.dmgStats, fmt = n => String(Math.round(n));
+    // 来源按伤害从高到低排，主次一眼分明
+    const chips = side => {
+      const k = s.byKind[side] || {};
+      const keys = Object.keys(k).filter(x => k[x] > 0).sort((a, b) => k[b] - k[a]);
+      if (!keys.length) return '<span class="ds-empty">暂无</span>';
+      return keys.map(x =>
+        '<span class="ds-chip" title="' + escHtml(x) + '"><b>' + escHtml(x) + '</b>' + fmt(k[x]) + '</span>').join('');
+    };
+    const row = (side, cls, label) => '<div class="ds-row ' + cls + '">' +
+      '<span class="ds-who">' + label + '</span>' +
+      '<span class="ds-cell"><i>累计</i><b>' + fmt(s.total[side]) + '</b></span>' +
+      '<span class="ds-cell"><i>本回合</i><b>' + fmt(s.round[side]) + '</b></span>' +
+      '<span class="ds-cell"><i>次数</i><b>' + s.hits[side] + '</b></span>' +
+      '</div>';
+    el.innerHTML =
+      '<div class="ds-head">伤害统计<span class="ds-sub">全部来源 · 累计 / 本回合</span></div>' +
+      '<div class="ds-table">' + row('player', 'ds-own', '我方') + row('enemy', 'ds-enemy', '对手') + '</div>' +
+      '<div class="ds-src">' +
+      '<div class="ds-src-row"><span class="ds-src-tag ds-own">我方</span>' +
+      '<span class="ds-chips">' + chips('player') + '</span></div>' +
+      '<div class="ds-src-row"><span class="ds-src-tag ds-enemy">对手</span>' +
+      '<span class="ds-chips">' + chips('enemy') + '</span></div>' +
+      '</div>';
+  }
+
+  function applyDamage(target, dmg, src, crit, isThorns, kind, dispDmg) {
     if (dmg <= 0) return;
     let left = dmg;
     if (target.shield > 0) {
@@ -1144,8 +1293,13 @@
     target.hp = Math.max(0, target.hp - left);
     target.squash = Math.min(0.5, target.squash + 0.22);
     target.lastDmgAt = G.clock;
-    addFloater(target.x, target.y - target.r - 6, '-' + Math.round(dmg),
+    recordDamage(target, dmg, src, crit, kind || (isThorns ? '荆棘反伤' : '撞击'));
+    addFloater(target.x, target.y - target.r - 6, '-' + Math.round(dispDmg != null ? dispDmg : dmg),
       crit ? '#ffd76a' : (isThorns ? '#b9a0f0' : '#ff9a92'), crit ? 20 : 15);
+    // 「护盾 · 屏障」附带的临时反伤
+    if (!isThorns && src && src !== target && (target._thornsBoost || 0) > 0) {
+      applyDamage(src, dmg * target._thornsBoost, target, false, true);
+    }
     updateHud();
   }
 
@@ -1185,7 +1339,14 @@
     if (def.hp / def.maxHp < 0.4) mult *= 1 + att.mods.execute;
     mult *= 1 + Math.min(att.combo, 6) * att.mods.combo;
     mult *= 1 + t * att.mods.momentum;
-    mult /= 1 + Math.min(def.mods.armor, 0.65);
+    // 印记：弹珠对撞同样吃「每层增伤 / 破甲」，否则印记在弹珠对撞为主的局面里几乎没有价值
+    let armorEff = Math.min(def.mods.armor, 0.65);
+    if (def._markUntil > G.clock && def._markStacks > 0 && def._markCfg) {
+      const mc = def._markCfg;
+      if (mc.damageAmp) mult *= 1 + (mc.damageAmp / 100) * def._markStacks;
+      if (mc.armorBreak) armorEff -= mc.armorBreak * def._markStacks;
+    }
+    mult /= 1 + Math.max(-0.5, armorEff);
 
     const dmg = def.maxHp * pctBase * mult * EFFECTS.dmgScale;
     applyDamage(def, dmg, att, crit, false);
@@ -1219,7 +1380,8 @@
      --------------------------------------------------------- */
   /* 地图障碍碰撞：矩形 / 圆形，障碍视为无限质量 */
   function resolveObstacles(f) {
-    if (!MAP || !MAP.obstacles || !MAP.obstacles.length) return;
+    if (!MAP || !MAP.obstacles || !MAP.obstacles.length) return false;
+    let hit = false;   // 是否发生障碍碰撞：运动器据此提前交还控制权
     MAP.obstacles.forEach(ob => {
       const bounce = (ob.bounce == null ? 0.9 : ob.bounce) * weatherSlip();   // 下雨湿滑：障碍反弹更弹
       if (ob.type === 'circle') {
@@ -1227,6 +1389,7 @@
         let d = Math.hypot(dx, dy);
         const min = f.r + (ob.r || 0);
         if (d < min) {
+          hit = true;
           if (d < 0.001) { dx = 1; dy = 0; d = 1; }
           const nx = dx / d, ny = dy / d;
           f.x = ob.x + nx * min; f.y = ob.y + ny * min;
@@ -1240,6 +1403,7 @@
         let dx = f.x - cx, dy = f.y - cy;
         const d = Math.hypot(dx, dy);
         if (d < f.r) {
+          hit = true;
           if (d < 0.001) {
             const dl = Math.abs(f.x - (ob.x - hw)), dr = Math.abs((ob.x + hw) - f.x);
             const dtp = Math.abs(f.y - (ob.y - hh)), db = Math.abs((ob.y + hh) - f.y);
@@ -1259,6 +1423,1249 @@
     });
     f.x = clamp(f.x, f.r, CONFIG.ARENA_W - f.r);
     f.y = clamp(f.y, f.r, CONFIG.ARENA_H - f.r);
+    return hit;
+  }
+
+  /* =========================================================
+     12.5 模块化技能运行时（节点图 → 战斗中实时施放）
+     - 与后台技能编辑器、skill-modules / skill-effects / pixelfx 共用同一套 schema
+     - 被动属性（stats 节点）已在 recompute() 通过 skill.mods 生效
+     - 此处只负责「主动」部分：source 触发 → 投射物 / 特效 / 粒子 / 伤害 / 状态
+     - 若运行时未加载（异常），整个模块静默降级为纯被动技能
+     ========================================================= */
+  const SKILL_RT = (window.SkillEffects && window.SkillModules) ? { SE: window.SkillEffects, SM: window.SkillModules } : null;
+  // 运动器引擎与技能运行时解耦：即使引擎缺失，其余技能效果仍可正常工作
+  const MOTION = window.MotionEngine || null;
+
+  function initSkillCasters() {
+    if (!SKILL_RT) return;
+    ['player', 'enemy'].forEach(side => {
+      const f = side === 'player' ? G.player : G.enemy;
+      if (!f) return;
+      const list = (side === 'player' ? G.playerSkills : G.enemySkills) || [];
+      f._skillCasters = [];
+      list.forEach(s => {
+        const C = s.compiled;
+        if (!C || !C.active) return;
+        const sources = (C.sources || []).filter(src => src.enabled !== false);
+        if (!sources.length) return;
+        // charge：0~1 的充能进度。对局 / 每回合开始一律「未充能」起步，
+        // 只有触发时机=回合开始 属于事件型触发，可不受充能条限制在开局立即释放；
+        // 定时循环 / 充能完成时 以及所有事件型触发都必须先充满才能放第一发。
+        f._skillCasters.push({
+          C: C, sid: s.id, charge: 0,
+          sources: sources.map(src => ({ src: src, at: 0, n: 0, lastEv: -10 }))
+        });
+      });
+    });
+    G.skillShots = []; G.skillFx = []; G.skillParts = []; G.skillZones = []; G.skillEchoes = []; G.skillWallHazards = []; G.skillAuras = []; G.skillChannels = []; G.skillDotZones = []; G._pendingProjMovers = [];
+    if (MOTION) MOTION.clear(G.movers, { now: G.clock }); else G.movers = [];
+  }
+
+  // 技能充能秒数（0 或非法值回落到默认）
+  function skillChargeTime(C) {
+    const v = C && C.charge;
+    return (typeof v === 'number' && v > 0) ? Math.max(0.2, v) : 3;
+  }
+
+  // 事件型 source（onHit / onWall / onLowHp / onCast）统一触发入口，带 0.4s 防抖
+  function triggerSkillEvent(f, type, contact) {
+    if (!SKILL_RT || !f._skillCasters) return;
+    f._skillCasters.forEach(caster => {
+      if (caster.charge < 1) return;          // 未充能完毕：不释放，也不消耗次数
+      caster.sources.forEach(s => {
+        if (s.src.trigger !== type || s.src.enabled === false) return;
+        if (G.clock - s.lastEv < 0.4) return;
+        if (s.src.maxCasts > 0 && s.n >= s.src.maxCasts) return;
+        s.lastEv = G.clock; s.n += 1;
+        caster.charge = 0;                    // 同一个技能共用一条充能，放完立刻清零
+        fireSkillCast(f, caster.C, s.src, true, contact);
+      });
+    });
+  }
+
+  function fireSkillCast(f, C, src, isEvent, contact) {
+    if (!SKILL_RT || !f) return;
+    const opp = (f.side === 'player') ? G.enemy : G.player;
+    if (!opp) return;
+    const SM = SKILL_RT.SM;
+    // 技能级公共视图：只含没有绑定到任何载体的模块，施放阶段统一播一次
+    const PUB = (SM.publicView ? SM.publicView(C) : C);
+    // 本次施放的「投射物绑定」待挂队列：applyEventEffects 里登记，投射物真正发射后再结算
+    G._pendingProjMovers = [];
+    let baseAngle = null;
+    if (src.aim === 'forward') baseAngle = Math.atan2(f.vy, f.vx) || 0;
+    else if (src.aim === 'random') baseAngle = Math.random() * Math.PI * 2;
+    else if (src.aim === 'mouse' || src.aim === 'fixed') baseAngle = (src.angle || 0) * Math.PI / 180;
+    // 施法时事件（onCast）：公共的特效 / 粒子 / 自身状态 / 位移 / 护盾 / 光环
+    applyEventEffects(PUB, f, opp, 'onCast', f.x, f.y, 0);
+    // 弹珠本体撞墙：把「撞墙时(onWall)」分组的特效 / 墙面残留伤害直接结算在接触面上
+    // （source.trigger=弹珠撞墙时 时才有 contact；投射物撞墙走 skillShotWall）
+    if (src.trigger === 'onWall' && contact) {
+      const wallRot = Math.atan2(contact.ny, contact.nx);
+      applyEventEffects(PUB, f, opp, 'onWall', contact.x, contact.y, wallRot, contact);
+    }
+
+    /* 载体分派：连线在此真正生效。
+       每个「投射物 / 光环 / 指向性 / 区域」节点都是一个可独立组合的实体；
+       连在它后面的模块，属性只进入它自己的结算视图（公共模块仍对所有实体生效）。 */
+    const hosts = (SM.hostsOf ? SM.hostsOf(C) : []) || [];
+    const targeted = hosts.filter(h => h.type === 'targeted');
+    let projectiles = hosts.filter(h => h.type === 'projectile');
+    // 旧编译结果 / 外部构造的 C 没有载体清单：回退成技能级单投射物，行为与旧版一致
+    if (!hosts.length && C.present && C.present.projectile) projectiles = [{ id: '', type: 'projectile', cfg: C.projectile || {} }];
+    const viewOf = h => (h.id && SM.viewFor ? SM.viewFor(C, h.id) : C);
+    const exclusiveOf = h => (h.id && SM.exclusiveView ? SM.exclusiveView(C, h.id) : null);
+
+    // 指向性法术优先：不产生投射物，直接锁定目标按「立即 / 延迟 / 持续引导」结算
+    if (targeted.length) {
+      G._pendingProjMovers = [];   // 不发射投射物：投射物绑定无处可挂
+      castTargetedModule(viewOf(targeted[0]), f, opp);
+      if (!isEvent) triggerSkillEvent(f, 'onCast');
+      return;
+    }
+    /* 既没有「投射物」也没有「指向性」模块：把「命中时」整组直接结算在对手身上
+       （直接命中 = 必中的单体指向）。否则 source → 标记 → 像素特效 这类技能会整条链路空转。 */
+    if (!projectiles.length) {
+      G._pendingProjMovers = [];
+      directHit(PUB, f, opp);
+      if (!isEvent) triggerSkillEvent(f, 'onCast');
+      return;
+    }
+
+    projectiles.forEach(h => {
+      const VC = viewOf(h);
+      const EX = exclusiveOf(h);
+      // 该载体专属的「施放时」模块每个载体各播一次，不会串到别的载体上
+      if (EX) applyEventEffects(EX, f, opp, 'onCast', f.x, f.y, 0);
+      const form = (VC.projectile && VC.projectile.delivery) || 'projectile';
+      if (form === 'projectile' || form === 'summon') {
+        const shots = SKILL_RT.SE.spawnProjectiles(VC, f, opp, baseAngle);
+        const projName = (VC.projectile && VC.projectile.name) || '';
+        shots.forEach(q => {
+          q._owner = f; q._C = VC; q._projName = projName; q._hostId = h.id;
+          if (form === 'summon') { q.summon = true; q.lifetime = (VC.projectile.summonDur || 6); q.homing = Math.max(q.homing || 0, 0.5); }
+          G.skillShots.push(q);
+        });
+        // 跟随投射物的像素特效：只替换「这个载体」的弹体外观
+        const projFx = VC.projectileFx || [];
+        if (projFx.length) {
+          shots.forEach((s, i) => {
+            const fx = projFx[i % projFx.length];
+            s._skinFx = true;   // 先标记，避免异步创建期间闪现手绘弹体
+            SKILL_RT.SE.spawnFx([fx], 'projectile', s.x, s.y, s.rot).then(arr => {
+              if (!arr.length) { s._skinFx = false; return; }   // 特效创建失败：回退到手绘弹体
+              arr.forEach(a => { a.follow = s; a.x = s.x; a.y = s.y; a.born = performance.now(); });
+              SKILL_RT.SE.pushFx(G.skillFx, arr);
+            });
+          });
+        }
+        // 「投射物绑定」运动器：只把本 carrier 的待挂项补到这一批弹上
+        resolvePendingProjMovers(shots, h.id);
+      } else if (!SM.rangeDescriptor || !SM.targetsInRange || !SM.rangePoint) {
+        // 旧编译层被浏览器缓存时兜底，避免整局抛错（用户 Ctrl+F5 后走下面的新链路）
+        const pt = formPoint(VC, f, opp, baseAngle, form);
+        const targets = formTargets(VC, f, opp, pt, form);
+        if (targets.length) resolveAt(VC, f, pt.x, pt.y, Math.atan2(pt.y - f.y, pt.x - f.x), 'onHit', targets);
+      } else {
+        /* 即时形态（近战 / 区域落点 / 射线）：统一走编译层的「范围判定」。
+           旧实现把命中整组直接结算在唯一对手身上（melee 只做一次「太远就不放」的二值判断），
+           aoe 落点更是取「到对手的距离」= 自动追踪全图 —— 视觉上就是全图范围判定。
+           现在：先算出判定区域 → 只挑区域内的敌方 → 命中表现也画在判定点，不再画到对手身上。 */
+        const ctx = {
+          caster: f, opponent: opp,
+          entities: [G.player, G.enemy].concat(G.enemies || []),
+          angle: baseAngle, point: null, targets: []
+        };
+        const desc = SM.rangeDescriptor(VC, ctx);
+        const pt = SM.rangePoint(desc, ctx);
+        ctx.point = pt;
+        ctx.desc = desc;
+        ctx.targets = SM.targetsInRange(desc, ctx);
+        if (ctx.targets.length) {
+          resolveAt(VC, f, pt.x, pt.y, desc.angle, 'onHit', ctx.targets, undefined, ctx);
+        } else {
+          // 空挥：只在判定点播一次表现，不结算伤害 / 状态 / 震屏
+          spawnSkillBurst(VC, pt.x, pt.y, desc.angle, 'impact', f, null, ctx);
+        }
+      }
+    });
+    G._pendingProjMovers = [];
+    if (!isEvent) triggerSkillEvent(f, 'onCast');
+  }
+
+  function evToAttach(ev) { return ({ onCast: 'launch', onHit: 'impact', onWall: 'wall', onExpire: 'expire' })[ev] || 'impact'; }
+
+  /* 敌方实体列表：供「敌方弹珠身上」的特效/粒子选靶。
+     当前对局是 1v1（G.player / G.enemy），这里已经预留多敌人扩展位：
+     后续把额外敌人放进 G.enemies 数组，最近 / 随机 / 全部 三种规则会自动覆盖它们。 */
+  function enemiesOf(ent) {
+    if (!ent) return [];
+    const out = [];
+    const add = e => {
+      if (!e || e === ent || e.dead) return;
+      if (e.side && ent.side && e.side === ent.side) return;
+      if (e.hp != null && e.hp <= 0) return;
+      if (out.indexOf(e) < 0) out.push(e);
+    };
+    add(ent.side === 'player' ? G.enemy : G.player);
+    (G.enemies || []).forEach(add);
+    return out;
+  }
+
+  /* 同组的印记持续时长：挂在敌方身上的循环特效据此跟随印记结束。
+     同组没有印记时回退到本技能其它事件组的印记，跨组配置（如命中挂印记、施放播特效）也能正确联动。 */
+  function groupMarkLifeOf(C, grp) {
+    const pick = g => ((g && g.mark) || []).reduce((a, m) => Math.max(a, Number(m.duration) || 0), 0);
+    let life = pick(grp);
+    if (!life && C && C.events) Object.keys(C.events).forEach(k => { life = Math.max(life, pick(C.events[k])); });
+    return life;
+  }
+
+  function spawnSkillBurst(C, x, y, rot, where, followEnt, contact, ctx) {
+    if (!SKILL_RT) return;
+    const ev = ({ launch: 'onCast', caster: 'onCast', impact: 'onHit', wall: 'onWall', expire: 'onExpire' })[where] || 'onHit';
+    const grp = (C.events && C.events[ev]) || C;
+    const SM = SKILL_RT.SM;
+    // 命中表现也按「每个模块自己的作用范围」筛：区域内没有任何合法目标时该模块不播。
+    // 空挥（ctx.targets 为空）不过滤，仍允许在判定点播一次表现。
+    const gate = m => {
+      if (!ctx || !ctx.desc || !SM || !SM.moduleTargets) return true;
+      const ts = ctx.targets || [];
+      if (!ts.length) return true;
+      return SM.moduleTargets(ts, m, ctx.desc, ctx).length > 0;
+    };
+    const fxList = (grp.fx || []).filter(gate);
+    const partList = (grp.particles || []).filter(gate);
+    // 「敌方弹珠身上」的选靶只从本次判定命中的目标里挑，不再挂到全图另一侧的敌人身上
+    const enemies = (ctx && ctx.targets && ctx.targets.length) ? ctx.targets.slice() : enemiesOf(followEnt);
+    // 同组里有印记时，挂在敌方身上的循环特效跟随印记一起结束（到期 / 被消耗 / 被引爆都会回收）
+    const markLife = groupMarkLifeOf(C, grp);
+    SKILL_RT.SE.spawnFx(fxList, where, x, y, rot, null, followEnt, contact, enemies, markLife).then(arr => {
+      (arr || []).forEach(a => {
+        // 贴合墙面的特效坐标已由接触面算出，不可被事件点覆盖（否则又会飘回释放点）
+        // 锚在实体上的（跟随弹珠 / 施法者身上 / 敌方弹珠身上）同理，位置由跟随实体决定
+        if (!a.wallFace && !(a.follow && typeof a.follow === 'object')) { a.x = x; a.y = y; }
+        a.born = performance.now();
+      });
+      // 同一目标上的同类特效默认「覆盖」：旧实例在并入列表时就销毁，不会越叠越多
+      SKILL_RT.SE.pushFx(G.skillFx, arr);
+    });
+    // 粒子已在编译期按 triggerEvent 归入对应事件组（events[ev].particles），
+    // attach 仅作视觉锚点，不再按 attach===where 过滤，否则默认 attach='impact' 的粒子在非命中事件中不生效
+    partList.forEach(p => {
+      G.skillParts = G.skillParts.concat(SKILL_RT.SE.burstParticles(p, x, y, rot, followEnt, contact, enemies));
+    });
+  }
+
+  function computeSkillDamage(grp, att, target, pctScale, ctx) {
+    const SM = SKILL_RT && SKILL_RT.SM;
+    const scoped = !!(ctx && ctx.desc && SM && SM.moduleInRange);
+    const pass = m => !scoped || SM.moduleInRange(m, ctx.desc, target, ctx);
+    const dmg = grp.damage || {}, els = (grp.elements || []).filter(pass);
+    let pct = 0, base = 0;
+    if (scoped && grp.damageList && grp.damageList.length) {
+      // 逐节点求和：只有「作用范围」覆盖这个目标的伤害节点才计入本次结算
+      grp.damageList.filter(pass).forEach(dd => {
+        base += Number(dd.base) || 0;
+        pct += Number(dd.pctMaxHp) || 0;
+      });
+    } else {
+      pct = dmg.pctMaxHp || 0; base = dmg.base || 0;
+    }
+    els.forEach(e => { base += (e.damage || 0); pct += (e.damagePct || 0); });
+    const critChance = CONFIG.CRIT_BASE + (att.mods.crit || 0) + els.reduce((a, e) => a + (e.critBonus || 0), 0);
+    const crit = Math.random() < critChance;
+    let mult = att.power;
+    if (crit) mult *= (CONFIG.CRIT_MULT_BASE + (att.mods.critMult || 0) + (dmg.critMult || 0));
+    if (target._weakUntil && G.clock < target._weakUntil) mult *= (1 + (target._weak || 0));
+    /* 「标记 · 印记」：按层数放大本次伤害，并按层数削减目标护甲（等效放大所有来源的伤害）。
+       效果快照存在 _markCfg 上，印记到期 / 引爆后被清空，不会残留。 */
+    let armorEff = Math.min(target.mods.armor || 0, 0.65);
+    if (target._markUntil && G.clock < target._markUntil && target._markStacks > 0 && target._markCfg) {
+      const mc = target._markCfg;
+      if (mc.damageAmp) mult *= (1 + (mc.damageAmp / 100) * target._markStacks);
+      if (mc.armorBreak) armorEff -= mc.armorBreak * target._markStacks;
+    }
+    mult /= (1 + Math.max(-0.5, armorEff));
+    let amount = (base + target.maxHp * (pct / 100)) * mult * EFFECTS.dmgScale;
+    if (pctScale != null) amount *= pctScale;
+    const ls = (dmg.lifesteal || 0) + els.reduce((a, e) => a + (e.lifesteal || 0), 0);
+    if (ls > 0) att.hp = Math.min(att.maxHp, att.hp + amount * ls);
+    return { amount: Math.max(0, amount), crit: crit };
+  }
+
+  function applyOneStatus(ent, st, power, dur, att, srcName) {
+    if (!ent || !st || st === 'none') return;
+    if (st === 'burn' || st === 'poison') {
+      ent.dotDps = Math.min(ent.maxHp * 0.12, ent.dotDps + ent.maxHp * (0.02 + power * 0.06));
+      ent.dotUntil = G.clock + dur;
+      // 持续伤害也要能归因到具体技能：记下施加者这一发技能名（未提供时保留原值）
+      if (srcName) ent._dotName = String(srcName).slice(0, 24);
+    } else if (st === 'slow' || st === 'freeze') {
+      ent.slowUntil = G.clock + dur;
+      ent.slowFactor = 1 - Math.min(0.7, power + (st === 'freeze' ? 0.25 : 0));
+      if (st === 'freeze') { ent.vx *= 0.2; ent.vy *= 0.2; }
+    } else if (st === 'stun') {
+      ent.slowUntil = G.clock + dur; ent.slowFactor = 0.05; ent.vx *= 0.1; ent.vy *= 0.1;
+    } else if (st === 'weaken') {
+      ent._weakUntil = G.clock + dur; ent._weak = Math.min(0.4, power);
+    } else if (st === 'heal') {
+      att.hp = Math.min(att.maxHp, att.hp + att.maxHp * (0.02 + power * 0.06));
+    } else if (st === 'shield') {
+      att.shield = Math.min(att.maxHp, att.shield + att.maxHp * (0.02 + power * 0.06));
+    }
+  }
+  // 应用某事件的「状态」集合：元素自带状态 + status 节点（self 标记作用于自身）
+  // ctx 带范围判定时，只把状态施加给「该模块作用范围」内的目标；
+  // mode='enemyOnly' 用于多目标结算时避免给自身叠 N 次护盾 / 治疗。
+  function applyStatusFromGroup(grp, att, target, ctx, mode, srcName) {
+    if (!grp) return;
+    const SM = SKILL_RT && SKILL_RT.SM;
+    const scoped = !!(ctx && ctx.desc && SM && SM.moduleInRange);
+    const pass = m => !scoped || SM.moduleInRange(m, ctx.desc, target, ctx);
+    const m = mode || 'both';
+    (grp.elements || []).forEach(e => {
+      if (m === 'selfOnly') return;
+      if (pass(e) && e.status && e.status !== 'none') applyOneStatus(target, e.status, e.statusPower || 0.3, e.statusDuration || 2.5, att, srcName);
+    });
+    (grp.status || []).forEach(s => {
+      const tgt = s.self ? att : target;
+      if (s.self && m === 'enemyOnly') return;
+      if (!s.self && m === 'selfOnly') return;
+      if (!s.self && !pass(s)) return;
+      applyOneStatus(tgt, s.status, s.statusPower || 0.3, s.statusDuration || 2.5, att, srcName);
+      // 自定义状态标签：后台「状态图标」里同 tag 的条目会据此显示在对局状态栏
+      const tag = s.statusTag == null ? '' : String(s.statusTag).trim();
+      if (tag) {
+        if (!tgt._statusTags) tgt._statusTags = {};
+        tgt._statusTags[tag] = G.clock + (s.statusDuration || 2.5);
+      }
+    });
+  }
+
+  /* 持续型载体（光环 / 区域残留）的绑定结算：
+     连到它的「伤害·结算 / 元素·属性」数值按「每秒伤害」解释，随 tick 间隔缩放；
+     「事件状态 / 元素状态」每次 tick 重新施加一次。这样伤害模块不再是光环 cfg.dps 的附属，
+     而是真正由模块组合出来。 */
+  function boundTickDamage(grp) {
+    if (!grp) return 0;
+    return (Number(grp.damage && grp.damage.base) || 0) +
+      (grp.elements || []).reduce((a, e) => a + (Number(e.damage) || 0), 0);
+  }
+  function applyBoundTickStatuses(grp, att, target, selfOnly, srcName) {
+    if (!grp) return;
+    const st = (grp.status || []).filter(s => !selfOnly || s.self);
+    applyStatusFromGroup({ status: st, elements: selfOnly ? [] : (grp.elements || []) }, att, target, null, undefined, srcName);
+  }
+
+  // 在某事件触发时，对 (att,target) 于 (x,y) 施加该事件的全部效果（伤害/范围/特效/粒子/状态）
+  // contact = {x,y,nx,ny}：球与墙的接触面，供「贴合墙面」特效与墙面残留伤害使用
+  function applyEventEffects(C, att, target, ev, x, y, rot, contact, ctx) {
+    const grp = (C.events && C.events[ev]) || C;
+    // 把施法弹珠(att)作为跟随目标传入，attach='marble' 的特效/粒子才会真正跟随移动
+    spawnSkillBurst(C, x, y, rot, evToAttach(ev), att, contact, ctx);
+    applyStatusFromGroup(grp, att, target, ctx, undefined, C && C.name);
+    applyExtraModules(grp, att, target, ev, x, y, contact, C, ctx);
+    // 墙面残留伤害规则统一来自「伤害·结算」模块；只要拿到接触面就生成区域，与 damage 节点挂在哪一个事件组无关
+    if (contact) spawnWallHazards(C, att, contact);
+  }
+
+  /* 墙面残留：在撞墙接触面生成一块持续伤害区，规则取自编译后的 C.wallHazard
+     （原先挂在像素特效节点上的 wallDps 等字段已全部迁移到「伤害·结算」模块）。
+     两种伤害方式可同时生效：
+       · 每秒对周围造成伤害：每 0.5 秒对半径内敌方弹珠结算半秒的量
+       · 敌方弹珠触碰区域时受伤：进入区域立即结算，停留在区内按触碰间隔重复结算 */
+  function spawnWallHazards(C, att, contact) {
+    if (!G.skillWallHazards) G.skillWallHazards = [];
+    const w = C.wallHazard || (C.events && C.events.onWall && C.events.onWall.wallHazard);
+    if (!w || !(w.wallDps > 0 || w.wallTouchDamage > 0)) return;   // 纯表现：不产生伤害
+    G.skillWallHazards.push({
+      owner: att, side: att.side, cfg: w, name: (C && C.name) || '',
+      x: contact.x, y: contact.y, nx: contact.nx, ny: contact.ny,
+      born: G.clock, life: Math.max(0.5, Number(w.wallDuration) || 3),
+      tick: 0, touchAt: {}, inside: {}
+    });
+  }
+
+  /* 伤害·结算模块的「持续伤害(跟随)」：触发后在跟随点留下一片持续掉血区，
+     规则取自编译后该事件组的 damage 节点（dotEnable / dotDps / dotRadius / dotInterval / dotFollow / dotDuration）。
+     与墙面残留同一归属：伤害数值统一在「伤害·结算」模块配置，特效模块只负责表现。
+     follow='caster'=跟随施法者自身弹珠；'target'=跟随命中目标；'impact'=固定落点。 */
+  function spawnDamageDot(att, d, followEnt, x, y, C) {
+    if (!G.skillDotZones) G.skillDotZones = [];
+    const sx = followEnt ? followEnt.x : x;
+    const sy = followEnt ? followEnt.y : y;
+    G.skillDotZones.push({
+      owner: att, side: att.side, cfg: d, C: C || null,
+      x: (sx == null ? x : sx), y: (sy == null ? y : sy),
+      followEnt: followEnt || null, age: 0,
+      life: Math.max(0.5, Number(d.dotDuration) || 6), tick: 0
+    });
+  }
+
+  /* ---------- 扩充模块：位移 / 护盾 / 标记 / 区域 / 回响 ---------- */
+  function applyExtraModules(grp, att, target, ev, x, y, contact, C, ctx) {
+    if (!grp || !att) return;
+    const SM = SKILL_RT.SM;
+    // 光环 / 区域是持续实体：把「连到它身上的模块」的专属视图一起存进实体，
+    // 之后每个 tick 都按这一组来结算伤害与状态，而不是只认自己 cfg 里写死的 dps。
+    const hostView = cfg => (C && SM.viewOfNode) ? SM.viewOfNode(C, cfg && cfg._nodeId) : null;
+    const scoped = !!(ctx && ctx.desc && SM && SM.moduleInRange);
+    const pass = (m, t) => !scoped || SM.moduleInRange(m, ctx.desc, t || target || att, ctx);
+    const hitTargets = (ctx && ctx.targets && ctx.targets.length) ? ctx.targets : [target];
+    (grp.motion || []).forEach(m => {
+      if (pass(m, target)) applyMotionModule(att, target, m, contact, ev);
+    });
+    (grp.shield || []).forEach(s => {
+      const amt = att.maxHp * (s.amount || 0) / 100;
+      if (amt > 0) {
+        if (!att._shieldUntil) att._shieldBase = att.shield || 0;   // 记录施放前的护盾基线
+        att._shieldUntil = G.clock + (s.duration || 5);
+        att.shield = Math.min(att.maxHp, (att.shield || 0) + amt);
+      }
+      if (s.thorns) att._thornsBoost = Math.max(att._thornsBoost || 0, s.thorns);
+    });
+    (grp.mark || []).forEach(m => {
+      // 多目标范围技：每个落在「该印记模块作用范围」里的敌人各挂一份
+      hitTargets.forEach(t => { if (t && pass(m, t)) applyMarkModule(att, t, m, C); });
+    });
+    (grp.zone || []).forEach(z => { if (pass(z, target)) spawnZoneModule(att, z, x, y, hostView(z)); });
+    (grp.aura || []).forEach(a => { if (pass(a, target)) spawnAuraModule(att, a, x, y, hostView(a)); });
+    (grp.echo || []).forEach(e => { if (pass(e, target)) scheduleEchoModule(grp, att, target, ev, x, y, e, C); });
+    // 伤害·结算模块的「持续伤害(跟随)」：触发后留下一片跟随目标的持续掉血区（与墙面残留同归属）
+    const dm = grp.damage;
+    if (dm && dm.dotEnable && Number(dm.dotDps) > 0) {
+      let followEnt = null;
+      const fm = dm.dotFollow || 'caster';
+      if (fm === 'target') followEnt = (target && !target.dead) ? target : null;
+      else if (fm === 'caster') followEnt = (att && !att.dead) ? att : null;
+      spawnDamageDot(att, dm, followEnt, x, y, C);
+    }
+  }
+
+  /* 位移模块 = 往目标弹珠挂一个「运动器」。
+     轨迹、方向来源、速度曲线、作用目标、叠加与收尾规则都由引擎逐帧解释，
+     这里是唯一的挂载入口：任何触发事件都可以调用，不绑定某个具体技能。
+     （旧实现是一帧内硬改坐标的瞬移，已由运动器取代。） */
+  // 运动器上下文：targetOf 始终把「对家」解析成真正的对手（对投射物同样成立）
+  function motionContextFor(ent, opp, origin) {
+    return {
+      self: ent, opponent: opp, pair: [ent, opp],
+      // 「环绕自身」的圆心：施法者自身弹珠（投射物绑定时是发射它的那颗弹珠，不是投射物自己）
+      origin: origin || ent,
+      w: CONFIG.ARENA_W, h: CONFIG.ARENA_H, now: G.clock,
+      targetOf: function (e) { return e === ent ? opp : ent; }
+    };
+  }
+
+  /* 把运动器绑定到一颗投射物：标记 _motionBound，让投射物引擎把「方向」交给运动器，
+     位移仍由投射物自己的 advance 结算（speed / accel / range / 撞墙处理都在那里）。 */
+  function bindMoverToProjectile(q, m, opp, origin) {
+    if (!MOTION || !q) return;
+    /* 位移距离=0 且非瞬移：运动器不推动弹体，但仍然必须绑定——
+       它承载「撞墙处理」（撞墙后消失 / 反弹次数），提前 return 会让规则丢掉。
+       step 只在 distance>0 时才交出 _motionDir，所以投射物照常按自身速度飞行，不会被冻结。 */
+    q._motionBound = true;
+    // 运动器结束后把投射物交还给它自己的飞行逻辑（否则 _motionBound 会让它停在原地）
+    const cx = Object.assign(motionContextFor(q, opp, origin), { onEnd: function () { q._motionBound = false; } });
+    MOTION.spawn(G.movers, Object.assign({}, m, { contact: null, _integrate: true }), cx);
+  }
+
+  /* onCast 阶段登记的「投射物绑定」运动器：在投射物真正创建后补挂。
+     只处理本次发射的 shots；按名称匹配（空 = 本次创建的全部投射物），命中即由运动器全权接管。 */
+  function resolvePendingProjMovers(shots, hostId) {
+    if (!G._pendingProjMovers || !G._pendingProjMovers.length) return;
+    const keep = [];
+    G._pendingProjMovers.forEach(pm => {
+      // 专属运动器只挂自己那个载体的弹；公共运动器对每一批弹都要挂，留到下一批
+      if (hostId && pm.hostId && pm.hostId !== hostId) { keep.push(pm); return; }
+      (shots || []).forEach(q => {
+        if (!q || q.dead) return;
+        if (pm.att && q._owner !== pm.att) return;
+        if (pm.hostId && q._hostId !== pm.hostId) return;
+        if (pm.name && (q._projName || '') !== pm.name) return;
+        bindMoverToProjectile(q, pm.m, pm.opp, pm.att);
+      });
+      if (!pm.hostId) keep.push(pm);
+    });
+    G._pendingProjMovers = keep;
+  }
+
+  function applyMotionModule(att, target, m, contact, ev) {
+    if (!MOTION || !att) return;
+    if (!G.movers) G.movers = [];
+    // 对手一律按阵营从对局状态解析，与触发事件传进来的 target 无关：
+    // onWall / onExpire 等事件的 target 常常就是施法者自己，若直接拿它当对手，
+    // 「朝向对手」会退化成「沿当前速度」，看起来就是完全没朝对手动。
+    const bySide = (att.side === 'player') ? G.enemy : G.player;
+    const opp = (bySide && bySide !== att) ? bySide : ((target && target !== att) ? target : null);
+
+    /* ---- 投射物绑定 ----
+       作用目标=投射物绑定：识别本技能创建的投射物并把运动器挂在它身上。
+       优先用「绑定投射物名称」（bindTarget）精确锁定；留空则回退到图结构自动识别的
+       前置投射物命名（_autoBind）；两者都为空 = 绑定本次施放创建的全部投射物。
+       onHit 等事件触发时投射物已存在 → 立即绑定；onCast 先于发射 → 登记待绑定，发射后结算。 */
+    if (m.scope === 'projectile') {
+      const nm = String(m.bindTarget || m._autoBind || '').trim();
+      // 编译期已按连线写入 _hostId：专属运动器绝不会误绑到另一个投射物载体的弹上
+      const match = q => q && !q.dead && q._owner === att &&
+        (nm === '' || (q._projName || '') === nm) && (!m._hostId || q._hostId === m._hostId);
+      // onCast 先于发射：一律等本次投射物创建后再绑定，避免误绑上一轮残留的同类投射物
+      const live = (ev === 'onCast') ? [] : (G.skillShots || []).filter(match);
+      if (live.length) {
+        live.forEach(q => bindMoverToProjectile(q, m, opp, att));
+      } else {
+        if (!G._pendingProjMovers) G._pendingProjMovers = [];
+        G._pendingProjMovers.push({ m: m, att: att, opp: opp, name: nm, hostId: m._hostId || '' });
+      }
+      return;
+    }
+
+    MOTION.spawn(G.movers, Object.assign({}, m, { contact: contact || null }), motionContextFor(att, opp, att));
+  }
+
+  function spawnZoneModule(att, z, x, y, hostC) {
+    if (!G.skillZones) G.skillZones = [];
+    G.skillZones.push({ owner: att, side: att.side, cfg: z, C: hostC || null, x: x, y: y, born: G.clock, life: z.duration || 3, tick: 0 });
+  }
+
+  /* 光环模块：以施法者为圆心持续展开的领域。
+     - 伤害型：每隔 tickInterval 对半径内敌方结算一次 dps×间隔 的伤害，并施加减益
+     - 增益型：每隔 tickInterval 对半径内己方（含自身）施加增益（治疗 / 护盾 等）
+     位置默认跟随施法者（以自身为圆心）；followCaster=false 时固定在施放瞬间的位置。
+     范围圈仅作为调试辅助在实时试放里绘制（见 admin.js seStartPreview），正式对局不画。 */
+  function spawnAuraModule(att, a, x, y, hostC) {
+    if (!G.skillAuras) G.skillAuras = [];
+    const cx = (att && att.x != null) ? att.x : x;
+    const cy = (att && att.y != null) ? att.y : y;
+    G.skillAuras.push({
+      owner: att, side: att.side, cfg: a, C: hostC || null,
+      x: cx, y: cy, ox: cx, oy: cy,
+      born: G.clock, life: Math.max(0.5, Number(a.duration) || 4),
+      tick: 0, follow: a.followCaster !== false
+    });
+    // 连到这个光环上的像素特效 / 粒子：生成时按「专属组」播一次（跨触发事件展平）
+    if (hostC && hostC._tickGrp && (hostC._tickGrp.fx.length || hostC._tickGrp.particles.length)) {
+      const tickView = { events: { onCast: hostC._tickGrp } };
+      spawnSkillBurst(tickView, cx, cy, 0, 'caster', att);
+    }
+  }
+
+  /* ---------- 指向性法术：锁定一个目标直接结算 ----------
+     与「投射物」同属投递方式，但不产生飞行物：
+       · 敌方目标 → 走 resolveAt 的「命中时」整条链路（伤害 / 元素 / 状态 / 印记 / 区域 / 回响 / 特效）
+       · 自身目标 → 不结算伤害，只把状态 / 护盾 / 增益 / 特效作用在自己身上
+     三种节奏：立即命中 / 延迟命中 / 持续引导（引导进 G.skillChannels 逐帧结算）。 */
+  function castTargetedModule(C, att, opp) {
+    const T = C.targeted || {};
+    const selfMode = T.targetSide === 'self';
+    const tgt = selfMode ? att : opp;
+    if (!att || !tgt || tgt.hp <= 0) return;
+    // 最大锁定距离：0 = 不限；超出则本次不生效（施放时的特效已由 onCast 组播放）
+    const range = Math.max(0, Number(T.maxRange) || 0);
+    if (!selfMode && range > 0 && Math.hypot(tgt.x - att.x, tgt.y - att.y) > range + tgt.r) return;
+    const mode = T.applyMode || 'instant';
+    const delay = Math.max(0, Number(T.delay) || 0);
+    if (mode !== 'channel' && delay <= 0) { targetedHit(C, att, tgt, selfMode); return; }
+    if (!G.skillChannels) G.skillChannels = [];
+    const gap = (mode === 'channel') ? Math.max(0.1, Number(T.channelInterval) || 0.5) : 0;
+    const start = G.clock + delay;
+    // 引导：从前摇结束开始计时，首次结算可配置为「立即」或「等一个间隔」
+    const first = start + ((mode === 'channel' && T.tickOnStart === false) ? gap : 0);
+    const end = (mode === 'channel') ? start + Math.max(0.1, Number(T.channelDuration) || 2) : start;
+    if (mode === 'channel' && first > end + 1e-6) return;   // 时长撑不满一个间隔：不产生结算
+    G.skillChannels.push({
+      C: C, att: att, tgt: tgt, self: selfMode,
+      next: first, end: end, gap: gap,
+      single: mode !== 'channel',                   // 延迟命中 = 只有一段的引导
+      interrupt: T.interruptOnDeath !== false
+    });
+  }
+
+  // 一次指向性命中：敌方走完整命中链路，自身只走状态 / 增益 / 表现
+  function targetedHit(C, att, tgt, selfMode) {
+    if (!att || !tgt || tgt.hp <= 0) return;
+    if (selfMode) {
+      const grp = (C.events && C.events.onHit) || C;
+      spawnSkillBurst(C, att.x, att.y, 0, 'impact', att);
+      applyStatusFromGroup(grp, att, att);
+      applyExtraModules(grp, att, att, 'onHit', att.x, att.y, null, C);
+      return;
+    }
+    targetedResolve(C, att, tgt);
+  }
+
+  function targetedResolve(C, att, tgt) {
+    const ang = Math.atan2(tgt.y - att.y, tgt.x - att.x) || 0;
+    resolveAt(C, att, tgt.x, tgt.y, ang, 'onHit', [tgt]);
+  }
+
+  // 推进指向性队列：延迟命中结算一次即出队；引导到期或目标 / 施法者死亡则中断
+  function stepSkillChannels() {
+    if (!G.skillChannels || !G.skillChannels.length) return;
+    G.skillChannels = G.skillChannels.filter(ch => {
+      if (!ch.tgt || ch.tgt.hp <= 0) return false;
+      if (ch.interrupt && (!ch.att || ch.att.hp <= 0)) return false;
+      if (G.clock < ch.next) return true;
+      targetedHit(ch.C, ch.att, ch.tgt, ch.self);
+      if (ch.single) return false;
+      ch.next += ch.gap;
+      return ch.next <= ch.end + 1e-6;
+    });
+  }
+
+  /* ---------- 印记（mark）：可叠加 / 多效果 / 可引爆 ----------
+     目标身上用扁平字段保存，伤害结算与绘制直接读取：
+       _markStacks 层数、_markUntil 到期时刻、_markCfg 效果快照、_markConsume 命中即清空、_markOwner 施加者
+     每层效果都是「层数 × 配置值」；0 表示不启用，可同时生效。 */
+  function markCfgOf(m) {
+    const sp = (m.detonateSplash == null) ? 50 : Number(m.detonateSplash);
+    return {
+      damageAmp: Math.max(0, Number(m.damageAmp) || 0),
+      dotDps: Math.max(0, Number(m.dotDps) || 0),
+      armorBreak: Math.max(0, Number(m.armorBreak) || 0) / 100,
+      slowPct: Math.max(0, Number(m.slowPct) || 0) / 100,
+      detonate: m.detonate || 'none',
+      detonateDamage: Math.max(0, Number(m.detonateDamage) || 0),
+      detonateRadius: Math.max(0, Number(m.detonateRadius) || 0),
+      detonateSplash: Math.max(0, Math.min(1, sp / 100)),
+      color: m.color || '#e8c85a'
+    };
+  }
+
+  function applyMarkModule(att, target, m, C) {
+    if (!att || !target || target === att || target.side === att.side || target.hp <= 0) return;
+    const cfg = markCfgOf(m);
+    // 旧存档没有「层数上限」：按当年的硬编码 9 层兜底，与 compile 的补齐规则一致
+    const max = Math.max(1, Math.round(m.maxStacks == null ? 9 : (Number(m.maxStacks) || 5)));
+    const add = Math.max(1, Math.round(Number(m.stacks) || 1));
+    const active = target._markStacks > 0 && G.clock < (target._markUntil || 0);
+    const cur = active ? target._markStacks : 0;
+    const mode = m.stackMode || 'add';
+    /* 覆盖（replace）：丢弃旧印记，层数 / 每层效果 / 持续时间全部按本次重算；
+       只刷新时长（refresh）与取较高层数（max）：层数不下调；
+       累加（add，默认）：继续往上叠，封顶 maxStacks。 */
+    let next = (mode === 'replace') ? add
+      : ((mode === 'refresh' || mode === 'max') ? Math.max(cur, add) : cur + add);
+    next = Math.min(max, next);
+    // 效果取「更强的一方」：后上的弱印记不会把前面的强印记冲淡；覆盖模式下整份替换
+    const old = (active && target._markCfg) ? target._markCfg : null;
+    target._markCfg = (old && mode !== 'replace') ? {
+      damageAmp: Math.max(old.damageAmp, cfg.damageAmp),
+      dotDps: Math.max(old.dotDps, cfg.dotDps),
+      armorBreak: Math.max(old.armorBreak, cfg.armorBreak),
+      slowPct: Math.max(old.slowPct, cfg.slowPct),
+      detonate: cfg.detonate !== 'none' ? cfg.detonate : old.detonate,
+      detonateDamage: Math.max(old.detonateDamage, cfg.detonateDamage),
+      detonateRadius: Math.max(old.detonateRadius, cfg.detonateRadius),
+      detonateSplash: Math.max(old.detonateSplash, cfg.detonateSplash),
+      color: cfg.color
+    } : cfg;
+    if (mode === 'replace') target._markTick = 0;   // 重新计时：撕裂不会因为旧计时器提前结算
+    target._markStacks = next;
+    target._markUntil = G.clock + Math.max(1, Number(m.duration) || 4);
+    target._markConsume = !!m.consumeOnHit;
+    target._markOwner = att;
+    // 印记也记住来源技能名：到期引爆 / 撕裂的伤害同样能归因到具体技能
+    if (C && C.name) target._markSkill = String(C.name).slice(0, 24);
+    // 满层引爆：叠满瞬间清空印记并结算一次爆炸
+    const dc = target._markCfg;
+    if ((dc.detonate === 'onMax' || dc.detonate === 'both') && next >= max) {
+      detonateMark(target, next, dc, att);
+      clearMark(target, false);
+    }
+  }
+
+  function detonateMark(target, stacks, cfg, owner) {
+    if (!target || target.hp <= 0 || !(stacks > 0) || !cfg) return;
+    const dmg = (cfg.detonateDamage || 0) * stacks * EFFECTS.dmgScale;
+    const R = cfg.detonateRadius || 0;
+    const lbl = target._markSkill ? { name: target._markSkill, tag: '印记·引爆' } : '印记·引爆';
+    if (dmg > 0) {
+      applyDamage(target, dmg, owner, false, false, lbl);
+      if (R > 0) {
+        [G.player, G.enemy].forEach(t => {
+          // 溅射只波及「被引爆者的同阵营」其他单位，绝不会误伤施法者自己
+          if (!t || t === target || t.hp <= 0 || t.side !== target.side) return;
+          if (Math.hypot(t.x - target.x, t.y - target.y) > R + t.r) return;
+          applyDamage(t, dmg * (cfg.detonateSplash == null ? 0.5 : cfg.detonateSplash), owner, false, false, lbl);
+        });
+      }
+    }
+    if (SKILL_RT) {
+      G.skillParts = G.skillParts.concat(SKILL_RT.SE.burstParticles({
+        count: Math.min(48, 12 + stacks * 6), shape: 'spark', size: 3, sizeVar: 2,
+        speed: 150 + stacks * 22, speedVar: 90, spread: 360, life: 0.55, lifeVar: 0.25,
+        gravity: 0, drag: 0.9, color: cfg.color || '#e8c85a', color2: '#ff7a30',
+        fade: true, additive: true, enabled: true
+      }, target.x, target.y, 0));
+    }
+    G.trauma = Math.min(1, G.trauma + 0.12 + stacks * 0.02);
+  }
+
+  // detonateOnExpire=true 时按配置结算「结束引爆」，其余情况只清空
+  function clearMark(target, detonateOnExpire) {
+    if (!target) return;
+    const cfg = target._markCfg, stacks = target._markStacks || 0;
+    if (detonateOnExpire && cfg && stacks > 0 && (cfg.detonate === 'onExpire' || cfg.detonate === 'both')) {
+      detonateMark(target, stacks, cfg, target._markOwner);
+    }
+    target._markStacks = 0;
+    target._markUntil = 0;
+    target._markCfg = null;
+    target._markConsume = false;
+    target._markOwner = null;
+    target._markSkill = '';
+    target._markTick = 0;
+  }
+
+  /* 印记「每层迟滞」的位移倍率：只按当前印记状态派生，不写回实体。
+     上限 70% 与原配置一致；印记到期 / 被消耗 / 被引爆后 _markStacks 归零，下一帧自动回到 1。 */
+  function markSlowMul(ent) {
+    if (!ent || !(ent._markStacks > 0) || !(G.clock < (ent._markUntil || 0))) return 1;
+    const cfg = ent._markCfg;
+    if (!cfg || !(cfg.slowPct > 0)) return 1;
+    return Math.max(0.3, 1 - Math.min(0.7, cfg.slowPct * ent._markStacks));
+  }
+
+  // 印记逐帧结算：到期引爆、撕裂按 0.5 秒结算（迟滞移到物理积分处派生）
+  function stepMarks(dt) {
+    [G.player, G.enemy].forEach(t => {
+      if (!t || !(t._markStacks > 0)) return;
+      if (t.hp <= 0) { clearMark(t, false); return; }
+      if (G.clock >= (t._markUntil || 0)) { clearMark(t, true); return; }
+      const cfg = t._markCfg;
+      if (!cfg) return;
+      /* 「每层迟滞」不在这里写 slowFactor / slowUntil：那套机制用速度上限 cap 削掉 vx/vy，
+         印记到期后没有任何东西把速度加回来，减速就永久粘在弹珠上。
+         改为在物理积分处按当前印记状态派生「位移倍率」，印记一消失当帧即恢复原速。 */
+      if (cfg.dotDps > 0) {
+        t._markTick = (t._markTick || 0) - dt;
+        if (t._markTick <= 0) {
+          t._markTick = 0.5;
+          const d = cfg.dotDps * t._markStacks * 0.5 * EFFECTS.dmgScale;
+          if (d > 0) applyDamage(t, d, t._markOwner, false, false,
+            t._markSkill ? { name: t._markSkill, tag: '印记·撕裂' } : '印记·撕裂');
+        }
+      }
+    });
+  }
+
+  function scheduleEchoModule(grp, att, target, ev, x, y, cfg, C) {
+    if (!G.skillEchoes) G.skillEchoes = [];
+    const n = Math.max(1, Math.round(cfg.times || 1));
+    const gap = cfg.delay || 0.5;
+    for (let i = 1; i <= n; i++) {
+      G.skillEchoes.push({
+        at: G.clock + gap * i,
+        C: { events: { [ev]: grp } }, att: att, target: target, ev: ev, x: x, y: y,
+        name: (C && C.name) || '',   // 回响伤害同样要能归因到原技能
+        scale: (cfg.powerScale || 60) / 100
+      });
+    }
+  }
+
+  function spawnSplitModule(parent, C, caster, s) {
+    const base = Math.atan2(parent.vy, parent.vx) || 0;
+    const src = C.projectile || {};
+    const P = Object.assign({}, src, {
+      count: Math.max(2, Math.round(s.count || 3)),
+      spread: s.spread == null ? 360 : s.spread,
+      speed: Math.max(40, (src.speed || 300) * (s.speedScale || 70) / 100),
+      size: Math.max(2, (src.size || 9) * (s.sizeScale || 60) / 100),
+      range: s.range || 260, dieOnWall: true, wallBounce: 0, pierce: 0, homing: 0, gravity: 0,
+      spawnOffset: 0, gap: 0, jitter: 0, trail: false, lifetime: 2.5, accel: 0
+    });
+    const CC = Object.assign({}, C, { projectile: P });
+    // 分裂子弹沿用父弹的施法者引用：父弹「绑定施法者」时，子弹同样跟着施法者走
+    const splitCaster = parent._casterRef || { x: parent.x, y: parent.y, r: parent.r, side: parent.side };
+    const shots = SKILL_RT.SE.spawnProjectiles(CC, splitCaster, null, base);
+    shots.forEach(q => {
+      q._owner = caster; q._C = C; q._quiet = true;   // 子弹命中只结算伤害，不再触发分裂/区域/回响
+      q._dmgScale = Math.max(0, (s.damageScale || 50) / 100);
+      G.skillShots.push(q);
+    });
+  }
+  // 以 (x,y) 为中心、按该事件 impact 配置炸开（撞墙/消失爆炸复用）
+  function areaBlast(C, caster, grp, x, y, ctx) {
+    const imp = grp.impact || { aoeRadius: 0, aoePct: 1 };
+    const SM = SKILL_RT.SM;
+    let rctx = ctx;
+    if (!rctx && SM && SM.rangeDescriptor) {
+      rctx = {
+        caster: caster, opponent: caster.side === 'player' ? G.enemy : G.player,
+        entities: [G.player, G.enemy].concat(G.enemies || []),
+        angle: 0, point: { x: x, y: y }, targets: []
+      };
+      rctx.desc = SM.rangeDescriptor(C, rctx);
+    }
+    const nodes = (grp.impactList && grp.impactList.length) ? grp.impactList : [imp];
+    [G.player, G.enemy].concat(G.enemies || []).forEach(t => {
+      if (!t || t.side === caster.side) return;
+      const ok = (rctx && rctx.desc && SM && SM.moduleInRange)
+        ? nodes.filter(m => SM.moduleInRange(m, rctx.desc, t, rctx)) : nodes;
+      const R = ok.reduce((a, m) => Math.max(a, Number(m.aoeRadius) || 0), 0);
+      const pct = ok.reduce((a, m) => Math.max(a, Number(m.aoePct) || 0), 1);
+      if (R <= 0 || Math.hypot(t.x - x, t.y - y) > R + t.r) return;
+      const d = computeSkillDamage(grp, caster, t, pct || 1, rctx);
+      applyDamage(t, d.amount, caster, d.crit, false, skillLabel(C, '爆炸'));
+      applyStatusFromGroup(grp, caster, t, rctx, 'enemyOnly', C && C.name);
+    });
+  }
+
+  function resolveAt(C, att, x, y, rot, ev, targets, dmgScale, ctx) {
+    const grp = (C.events && C.events[ev]) || C;
+    const sc = (dmgScale == null ? 1 : dmgScale);
+    const SM = SKILL_RT && SKILL_RT.SM;
+    /* 结算上下文：判定区域 + 命中点 + 本次合法目标。
+       没有 ctx 时（旧调用 / 施放事件）按编译视图补一份，口径与即时形态完全一致。 */
+    const rctx = ctx || (SM && SM.rangeDescriptor ? {
+      caster: att, opponent: (targets && targets[0]) || null,
+      entities: [G.player, G.enemy].concat(G.enemies || []),
+      angle: rot, point: { x: x, y: y }, targets: targets || []
+    } : null);
+    if (rctx) {
+      if (!rctx.point) rctx.point = { x: x, y: y };
+      if (rctx.angle == null) rctx.angle = rot;
+      if (!rctx.targets) rctx.targets = targets || [];
+      if (!rctx.desc && SM && SM.rangeDescriptor) rctx.desc = SM.rangeDescriptor(C, rctx);
+    }
+    const hitList = (targets || []).filter(t => t && t.side !== att.side);
+    hitList.forEach(t => {
+      const d = computeSkillDamage(grp, att, t, sc, rctx);
+      applyDamage(t, d.amount, att, d.crit, false, skillLabel(C));
+      // 「印记」设定为命中即消耗时，本次结算后清空（不触发结束引爆）
+      if (t._markConsume) clearMark(t, false);
+    });
+    G.trauma = Math.min(1, G.trauma + (grp.impact.shake || 0.1));
+    spawnSkillBurst(C, x, y, rot, evToAttach(ev), att, null, rctx);
+    // 多目标：敌方状态逐个施加，自身状态只施加一次
+    hitList.forEach((t, i) => applyStatusFromGroup(grp, att, t, rctx, i === 0 ? 'both' : 'enemyOnly', C && C.name));
+    if (!hitList.length) applyStatusFromGroup(grp, att, att, rctx, 'selfOnly', C && C.name);
+    applyExtraModules(grp, att, hitList[0] || null, ev, x, y, null, C, rctx);
+    const imp = grp.impact;
+    /* 溅射范围也按「每个命中·爆发模块自己的作用范围」逐条筛，
+       不再让一个默认爆炸半径把全图敌人一起卷进来。 */
+    const impNodes = (grp.impactList && grp.impactList.length) ? grp.impactList : [imp];
+    if (imp.aoeRadius > 0) {
+      [G.player, G.enemy].concat(G.enemies || []).forEach(t => {
+        if (!t || hitList.indexOf(t) >= 0 || t.side === att.side) return;
+        const ok = (rctx && rctx.desc && SM && SM.moduleInRange)
+          ? impNodes.filter(m => SM.moduleInRange(m, rctx.desc, t, rctx)) : impNodes;
+        const R = ok.reduce((a, m) => Math.max(a, Number(m.aoeRadius) || 0), 0);
+        const pct = ok.reduce((a, m) => Math.max(a, Number(m.aoePct) || 0), 0);
+        if (R <= 0 || Math.hypot(t.x - x, t.y - y) > R + t.r) return;
+        const d2 = computeSkillDamage(grp, att, t, pct * sc, rctx);
+        applyDamage(t, d2.amount, att, d2.crit, false, skillLabel(C, '溅射'));
+        applyStatusFromGroup(grp, att, t, rctx, 'enemyOnly', C && C.name);
+        spawnSkillBurst(C, t.x, t.y, 0, evToAttach(ev), att, null, rctx);
+      });
+    }
+  }
+
+  /* 直接命中：技能既没有「投射物」也没有「指向性」模块时使用。
+     把「命中时」整组模块（伤害 / 元素 / 状态 / 印记 / 区域 / 回响 / 光环 / 特效 / 粒子）
+     直接结算在对手身上，等价于一个必中的单体指向技能。
+     判定「命中时组是否有内容」与试放共用 SM.hitHasContent，两端行为严格一致。 */
+  function directHit(C, att, opp) {
+    if (!C || !att || !opp || opp === att) return;
+    if (opp.hp != null && opp.hp <= 0) return;
+    const grp = (C.events && C.events.onHit) || C;
+    const has = (SKILL_RT && SKILL_RT.SM && SKILL_RT.SM.hitHasContent)
+      ? SKILL_RT.SM.hitHasContent(grp) : true;
+    if (!has) return;   // 「命中时」组为空：纯施放型技能，不凭空产生一次命中
+    const rot = Math.atan2(opp.y - att.y, opp.x - att.x);
+    resolveAt(C, att, opp.x, opp.y, rot, 'onHit', [opp]);
+  }
+
+  /* 旧入口保留为兼容包装：全部委托给编译层范围判定，杜绝两套口径漂移。
+     旧的 formTargets('melee') 无条件 return [opp]、aoe 落点取「到对手的距离」，
+     正是「全图范围判定」的根因，已不再被主链路调用。 */
+  function formPoint(C, att, opp, angle, form) {
+    const SM = SKILL_RT.SM;
+    if (!SM || !SM.rangeDescriptor) {
+      const a = (angle == null) ? Math.atan2(opp.y - att.y, opp.x - att.x) : angle;
+      const p = C.projectile || {};
+      const d = form === 'aoe' ? (p.range || 260) : ((p.meleeRange || 60) + att.r + opp.r);
+      return { x: att.x + Math.cos(a) * d, y: att.y + Math.sin(a) * d };
+    }
+    const ctx = {
+      caster: att, opponent: opp,
+      entities: [G.player, G.enemy].concat(G.enemies || []),
+      angle: angle, point: null, targets: []
+    };
+    const d = SM.rangeDescriptor(C, ctx);
+    return SM.rangePoint(d, ctx);
+  }
+  function formTargets(C, att, opp, pt, form) {
+    const SM = SKILL_RT.SM;
+    if (!SM || !SM.rangeDescriptor) return (opp && opp.side !== att.side) ? [opp] : [];
+    const ctx = {
+      caster: att, opponent: opp,
+      entities: [G.player, G.enemy].concat(G.enemies || []),
+      angle: Math.atan2(pt.y - att.y, pt.x - att.x), point: pt, targets: []
+    };
+    const d = SM.rangeDescriptor(C, ctx);
+    return SM.targetsInRange(d, ctx);
+  }
+
+  function skillShotHit(q, target) {
+    const caster = q._owner, C = q._C; if (!caster || !C) return;
+    const ang = Math.atan2(q.vy, q.vx);
+    const SM = SKILL_RT.SM;
+    // 碰撞型载体：命中目标由物理给出，但模块级「自定义作用范围」仍要逐条筛
+    const ctx = {
+      caster: caster, opponent: target,
+      entities: [G.player, G.enemy].concat(G.enemies || []),
+      angle: ang, point: { x: q.x, y: q.y },
+      targets: (target && target.side !== caster.side) ? [target] : []
+    };
+    if (SM && SM.rangeDescriptor) ctx.desc = SM.rangeDescriptor(C, ctx);
+    if (q._quiet) {
+      // 分裂子弹：只结算伤害与命中特效，避免二次分裂 / 区域雪球
+      const grp = (C.events && C.events.onHit) || C;
+      if (target && target.side !== caster.side) {
+        const d = computeSkillDamage(grp, caster, target, q._dmgScale, ctx);
+        applyDamage(target, d.amount, caster, d.crit, false, skillLabel(C, '分裂'));
+      }
+      spawnSkillBurst(C, q.x, q.y, ang, 'impact', caster, null, ctx);
+      return;
+    }
+    resolveAt(C, caster, q.x, q.y, ang, 'onHit', [target], q._dmgScale, ctx);
+    const grp = (C.events && C.events.onHit) || C;
+    (grp.split || []).forEach(s => spawnSplitModule(q, C, caster, s));
+  }
+  function skillShotWall(q, contact) {
+    const caster = q._owner, C = q._C; if (!C) return;
+    /* 墙体不参与判定时（碰撞对象不含障碍物 / 触墙后行为=继续按运动器移动），
+       撞墙事件整体作废：不交还运动器、不播撞墙特效、不结算撞墙组。
+       源头已在 integrateShot 拦掉，这里再兜一层，防止以后新增调用点又踩到。 */
+    if (q._hitWall === false || q._wallAction === 'continue') return;
+    /* 被运动器接管的投射物撞墙：立刻交还控制权（保留这一帧的反弹速度）。
+       否则运动器会每帧继续把它往墙里推，表现为「贴着墙抖动」。 */
+    if (q._motionBound && MOTION && G.movers) {
+      MOTION.noticeWall(G.movers, q, { now: G.clock, w: CONFIG.ARENA_W, h: CONFIG.ARENA_H }, true);
+    }
+    const grp = C.events.onWall;
+    const ct = contact || q.wallContact || { x: q.x, y: q.y, nx: 0, ny: -1 };
+    const opp = (caster && caster.side === 'player') ? G.enemy : G.player;
+    if (grp && grp.impact && grp.impact.explodeOnWall) areaBlast(C, caster, grp, ct.x, ct.y);
+    // target 传对手：撞墙分组里的灼烧 / 中毒等状态应作用于敌方，而非施法者自己
+    applyEventEffects(C, caster, opp || caster, 'onWall', ct.x, ct.y, Math.atan2(ct.ny, ct.nx), ct);
+  }
+  function skillShotExpire(q) {
+    const caster = q._owner, C = q._C; if (!C) return;
+    const grp = C.events.onExpire;
+    if (grp && grp.impact && grp.impact.explodeOnExpire) areaBlast(C, caster, grp, q.x, q.y);
+    /* target 传对手（此前传的是施法者自己）：否则「消失时 → 标记 / 减速」会落到施法者身上、
+       甚至被 applyMarkModule 的同阵营守卫直接丢掉，表现在编辑器里配了却完全不生效。
+       自身向的状态仍由 status.self 决定，不受这里影响。 */
+    const opp = (caster.side === 'player') ? G.enemy : G.player;
+    applyEventEffects(C, caster, opp || caster, 'onExpire', q.x, q.y, 0);
+  }
+
+  function stepSkillRuntime(dt) {
+    if (!SKILL_RT) return;
+    // 技能护盾到期：回落到施放前的护盾基线
+    [G.player, G.enemy].forEach(f => {
+      if (!f || !f._shieldUntil) return;
+      if (G.clock >= f._shieldUntil) {
+        f.shield = Math.min(f.shield || 0, f._shieldBase || 0);
+        f._shieldUntil = 0; f._shieldBase = 0;
+      }
+    });
+    // 充能推进：开局从 0 起步，未满的按各自充能时间回充；放完清零进入下一轮充能
+    [G.player, G.enemy].forEach(f => {
+      if (!f || !f._skillCasters) return;
+      f._skillCasters.forEach(c => {
+        if (c.charge >= 1) return;
+        c.charge = Math.min(1, c.charge + dt / skillChargeTime(c.C));
+      });
+    });
+    // 计时/充能型 source（回合开始 / 定时循环 / 充能完成时）
+    // 「回合开始」是事件型触发：回合开始即放，不要求充能条已满 —— 它才是一开局唯一能释放的类型；
+    // 「定时循环」「充能完成时」以及 onHit/onWall/onLowHp/onCast 都必须先充满才能放第一发。
+    [G.player, G.enemy].forEach(f => {
+      if (!f._skillCasters) return;
+      f._skillCasters.forEach(caster => {
+        caster.sources.forEach(s => {
+          const tr = s.src.trigger;
+          if (tr === 'roundStart' || tr === 'interval' || tr === 'onCharge') {
+            if (tr !== 'roundStart' && caster.charge < 1) return;
+            if (s.src.maxCasts > 0 && s.n >= s.src.maxCasts) return;
+            if (tr === 'roundStart' || tr === 'interval') {
+              if (s.at > G.clock) return;            // 未到编排的时间点
+              s.at = G.clock + (tr === 'interval' ? (s.src.interval || 2.2) : 1e9);
+            }
+            // tr === 'onCharge'：充能条一满即放；所有施放共用一条充能，放完清零重新回充
+            caster.charge = 0;
+            fireSkillCast(f, caster.C, s.src, false);
+            s.n += 1;
+          }
+        });
+      });
+    });
+    // 生命过低触发
+    [G.player, G.enemy].forEach(f => { if (f && f.hp > 0 && f.hp / f.maxHp < 0.4) triggerSkillEvent(f, 'onLowHp'); });
+    // 推进投射物（命中 / 撞墙 / 消失回调）
+    if (G.skillShots && G.skillShots.length) {
+      SKILL_RT.SE.advance(G.skillShots, dt, {
+        w: CONFIG.ARENA_W, h: CONFIG.ARENA_H,
+        targets: [G.player, G.enemy],
+        onHit: skillShotHit, onWall: skillShotWall, onExpire: skillShotExpire
+      });
+    }
+    // 指向性法术：延迟命中 / 持续引导的逐帧结算
+    stepSkillChannels();
+    // 区域残留：每 0.5 秒对范围内敌人结算一次
+    if (G.skillZones && G.skillZones.length) {
+      G.skillZones = G.skillZones.filter(z => {
+        if (G.clock - z.born > z.life) return false;
+        if (z.cfg.followCaster && z.owner && !z.owner.dead) { z.x = z.owner.x; z.y = z.owner.y; }
+        z.tick -= dt;
+        if (z.tick <= 0) {
+          z.tick = 0.5;
+          const R = z.cfg.radius || 70;
+          [G.player, G.enemy].forEach(t => {
+            if (!t || t.hp <= 0 || t.side === z.side) return;
+            if (Math.hypot(t.x - z.x, t.y - z.y) > R + t.r) return;
+            const grp = z.C && z.C._tickGrp;
+            const dmg = ((z.cfg.dps || 0) + boundTickDamage(grp)) * 0.5 * EFFECTS.dmgScale;
+            if (dmg > 0) applyDamage(t, dmg, z.owner, false, false,
+              (z.C && z.C.name) ? { name: z.C.name, tag: '区域残留' } : '区域残留');
+            applyBoundTickStatuses(grp, z.owner, t, false, z.C && z.C.name);
+            if (z.cfg.slowPct > 0) {
+              t.slowUntil = G.clock + 0.7;
+              // 直接赋值而不是 Math.min：后者会让减速系数单调递减、再也回不到 1（粘滞在弹珠上）
+              t.slowFactor = 1 - Math.min(0.8, Math.max(0, Number(z.cfg.slowPct) || 0));
+            }
+          });
+        }
+        return true;
+      });
+    }
+    // 光环：以施法者为圆心的持续领域（伤害型打敌方 / 增益型给己方，含自身）
+    if (G.skillAuras && G.skillAuras.length) {
+      G.skillAuras = G.skillAuras.filter(a => {
+        if (G.clock - a.born > a.life) return false;
+        if (a.follow && a.owner && !a.owner.dead) { a.x = a.owner.x; a.y = a.owner.y; }
+        a.tick -= dt;
+        if (a.tick > 0) return true;
+        const gap = Math.max(0.1, Number(a.cfg.tickInterval) || 0.5);
+        a.tick = gap;
+        const R = Number(a.cfg.radius) || 90;
+        const grp = a.C && a.C._tickGrp;
+        if (a.cfg.auraType === 'buff') {
+          // 增益型：对半径内同阵营（含自身）持续施加增益；治疗/护盾按 applyOneStatus 的规则作用于目标自身
+          [G.player, G.enemy].forEach(t => {
+            if (!t || t.hp <= 0 || t.side !== a.side) return;
+            if (Math.hypot(t.x - a.x, t.y - a.y) > R + t.r) return;
+            if (a.cfg.buff && a.cfg.buff !== 'none') {
+              applyOneStatus(t, a.cfg.buff, a.cfg.buffPower || 0.3, a.cfg.buffDuration || 2, t);
+            }
+            applyBoundTickStatuses(grp, t, t, true, a.C && a.C.name);
+          });
+        } else {
+          // 伤害型：光环自身 dps ＋ 连到它的伤害 / 元素模块，按结算间隔缩放
+          [G.player, G.enemy].forEach(t => {
+            if (!t || t.hp <= 0 || t.side === a.side) return;
+            if (Math.hypot(t.x - a.x, t.y - a.y) > R + t.r) return;
+            const dmg = ((a.cfg.dps || 0) + boundTickDamage(grp)) * gap * EFFECTS.dmgScale;
+            if (dmg > 0) applyDamage(t, dmg, a.owner, false, false,
+              (a.C && a.C.name) ? { name: a.C.name, tag: '光环' } : '光环');
+            if (a.cfg.debuff && a.cfg.debuff !== 'none') {
+              applyOneStatus(t, a.cfg.debuff, a.cfg.debuffPower || 0.3, a.cfg.debuffDuration || 2, a.owner);
+            }
+            applyBoundTickStatuses(grp, a.owner, t, false, a.C && a.C.name);
+          });
+        }
+        return true;
+      });
+    }
+    // 印记：到期引爆 / 迟滞续期 / 撕裂持续伤害
+    stepMarks(dt);
+    // 墙面残留：每秒对周围伤害 + 敌方弹珠触碰区域伤害（两种规则由伤害·结算模块配置，可同时生效）
+    if (G.skillWallHazards && G.skillWallHazards.length) {
+      G.skillWallHazards = G.skillWallHazards.filter(h => {
+        if (G.clock - h.born > h.life) return false;
+        const w = h.cfg, R = w.wallRadius || 60;
+        const foes = [G.player, G.enemy].filter(t => t && t.hp > 0 && t.side !== h.side);
+        // 触碰伤害：进入区域立刻结算一次；停留在区域内时按「触碰间隔」重复结算（间隔 0 = 只结算进入那一次）
+        if (w.wallTouchDamage > 0) {
+          foes.forEach(t => {
+            const inZone = Math.hypot(t.x - h.x, t.y - h.y) <= R + t.r;
+            const key = t.side, gap = w.wallTouchInterval || 0;
+            const entered = inZone && !h.inside[key];
+            const repeat = gap > 0 && inZone && (h.touchAt[key] == null || G.clock - h.touchAt[key] >= gap);
+            if (inZone && (entered || repeat)) {
+              applyDamage(t, w.wallTouchDamage * EFFECTS.dmgScale, h.owner, false, false,
+                h.name ? { name: h.name, tag: '墙面·触碰' } : '墙面残留·触碰');
+              h.touchAt[key] = G.clock;
+            }
+            h.inside[key] = inZone;
+          });
+        }
+        // 每秒伤害：每 0.5 秒结算半秒的量
+        h.tick -= dt;
+        if (h.tick <= 0) {
+          h.tick = 0.5;
+          if (w.wallDps > 0) foes.forEach(t => {
+            if (Math.hypot(t.x - h.x, t.y - h.y) > R + t.r) return;
+            applyDamage(t, w.wallDps * 0.5 * EFFECTS.dmgScale, h.owner, false, false,
+              h.name ? { name: h.name, tag: '墙面·持续' } : '墙面残留·每秒');
+          });
+        }
+        return true;
+      });
+    }
+    // 回响：到期重放同组伤害与特效
+    if (G.skillEchoes && G.skillEchoes.length) {
+      G.skillEchoes = G.skillEchoes.filter(e => {
+        if (e.at > G.clock) return true;
+        const grp = (e.C.events && e.C.events[e.ev]) || e.C;
+        const t = e.target;
+        const SM = SKILL_RT.SM;
+        const ectx = {
+          caster: e.att, opponent: t,
+          entities: [G.player, G.enemy].concat(G.enemies || []),
+          angle: 0, point: { x: t ? t.x : e.x, y: t ? t.y : e.y },
+          targets: (t && t.side !== e.att.side) ? [t] : []
+        };
+        if (SM && SM.rangeDescriptor) ectx.desc = SM.rangeDescriptor(e.C, ectx);
+        if (t && t.hp > 0 && t.side !== e.att.side) {
+          const d = computeSkillDamage(grp, e.att, t, e.scale, ectx);
+          applyDamage(t, d.amount, e.att, d.crit, false,
+            e.name ? { name: e.name, tag: '回响' } : '回响');
+        }
+        spawnSkillBurst(e.C, ectx.point.x, ectx.point.y, 0, evToAttach(e.ev), e.att, null, ectx);
+        return false;
+      });
+    }
+    // 特效步进 + 跟随投射物定位 + 清理
+    const now = performance.now();
+    G.skillFx.forEach(q => {
+      if (q.follow && typeof q.follow === 'object' && !q.follow.dead) {
+        q.x = q.follow.x; q.y = q.follow.y;
+        // 「效果不跟随挂载位置旋转」勾选时不覆盖角度：位置照跟，角度冻结在释放时的朝向
+        if (!(q.cfg && q.cfg.noRotFollow) && q.follow.rot != null) q.rot = q.follow.rot;
+      }
+    });
+    /* 「伤害·结算」模块的「持续伤害(跟随)」：本帧推进所有持续掉血区（跟随圆心 / 到期回收 / 半径内结算），
+       与试放沙盘共用 skill-effects 里的同一份结算口径（stepDotZones）。伤害数值统一由本模块结算。 */
+    if (G.skillDotZones && G.skillDotZones.length) {
+      G.skillDotZones = SKILL_RT.SE.stepDotZones(G.skillDotZones, dt, {
+        targets: [G.player, G.enemy], scale: EFFECTS.dmgScale,
+        onTick: (t, dmg, z) => {
+          // 飘字显示每秒伤害(= dotDps × 倍率)，而非把每 tick 的 0.6 取整成 1；实际扣血仍按 tick 真实结算
+          const perSec = dmg / Math.max(0.1, Number(z.cfg.dotInterval) || 0.5);
+          applyDamage(t, dmg, z.owner, false, false,
+            (z.C && z.C.name) ? { name: z.C.name, tag: '持续伤害' } : '持续伤害', perSec);
+        }
+      });
+    }
+    SKILL_RT.SE.stepFx(G.skillFx, dt);
+    SKILL_RT.SE.updateParticles(G.skillParts, dt);
+    // 每帧兜底去重：任何路径（含绕过 pushFx 的投射物特效）都不允许同宿主叠多份
+    if (SKILL_RT.SE.dedupeFx) SKILL_RT.SE.dedupeFx(G.skillFx);
+    G.skillFx = G.skillFx.filter(q => {
+      if (q.follow && typeof q.follow === 'object' && q.follow.dead) { if (q.inst) q.inst.kill(); return false; }
+      /* 挂在敌方身上的特效若与「标记·印记」同组：印记一旦失效（到期 / 被消耗 / 被引爆），
+         特效同步销毁。此前这里只判「跟随实体是否死亡」，循环特效会一直留着 → 越叠越多。 */
+      if (q.markFx) {
+        const host = (q.follow && typeof q.follow === 'object') ? q.follow : null;
+        const markOn = !!host && host._markStacks > 0 && G.clock < (host._markUntil || 0);
+        if (!markOn) { if (q.inst) q.inst.kill(); return false; }
+      }
+      // 显式「存在时长」到点回收
+      if (q.ttl > 0 && (q.age || 0) > q.ttl) { if (q.inst) q.inst.kill(); return false; }
+      if (q.inst && q.inst.done() && !(SKILL_RT.SE.isLooping ? SKILL_RT.SE.isLooping(q) : (q.cfg && q.cfg.loop))) { if (q.inst) q.inst.kill(); return false; }
+      // 跟随投射物的特效由投射物存亡决定，不受固定寿命限制。
+      // 贴合墙面的残留特效按「伤害·结算」模块里的墙面残留持续秒数存活（至少 3.2 秒），到点才收。
+      // 显式填了「存在时长」的以数值为准（否则 5 秒的循环特效会在 3.2 秒被这条兜底提前掐掉）。
+      const fxLife = q.wallFace ? Math.max(3200, (q.cfg._wallDuration || 3) * 1000) : 3200;
+      if (!q.follow && !(q.ttl > 0) && now - (q.born || now) > fxLife) { if (q.inst) q.inst.kill(); return false; }
+      return true;
+    });
+  }
+
+  function drawSkillLayer() {
+    if (!SKILL_RT) return;
+    /* 残留伤害的「半径圈」属于判定范围调试辅助：
+       只在技能编辑器 → 实时试放沙盘（admin.js seStartPreview，头部「半径圈」勾选框可控）里绘制；
+       正式对局不画任何半径指示，只保留像素特效本体、粒子与伤害跳字（伤害结算照常进行）。
+       若需在真实对局里临时核对判定范围，把下面开关改成 true 即可（默认关闭）。 */
+    const SHOW_HAZARD_RADIUS = false;
+    if (SHOW_HAZARD_RADIUS) {
+      // 区域残留：半透明圆 + 呼吸描边
+      (G.skillZones || []).forEach(z => {
+        const R = z.cfg.radius || 70;
+        const k = Math.max(0, 1 - (G.clock - z.born) / Math.max(0.001, z.life));
+        const col = z.cfg.color || '#ff7a30';
+        ctx.save();
+        ctx.globalAlpha = 0.13 * (0.4 + k * 0.6);
+        ctx.fillStyle = col;
+        ctx.beginPath(); ctx.arc(z.x, z.y, R, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 0.42 * (0.4 + k * 0.6);
+        ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
+        ctx.restore();
+      });
+      // 光环：以施法者为圆心的半透明圆 + 描边（增益型用暖色、伤害型用配置色）
+      (G.skillAuras || []).forEach(a => {
+        const R = Number(a.cfg.radius) || 90;
+        const k = Math.max(0, 1 - (G.clock - a.born) / Math.max(0.001, a.life));
+        const col = a.cfg.color || '#b98cff';
+        ctx.save();
+        ctx.globalAlpha = 0.13 * (0.4 + k * 0.6);
+        ctx.fillStyle = col;
+        ctx.beginPath(); ctx.arc(a.x, a.y, R, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 0.42 * (0.4 + k * 0.6);
+        ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
+        ctx.restore();
+      });
+      // 墙面残留伤害区：贴着墙面的半圆 + 接触点标记，随剩余时间淡出
+      (G.skillWallHazards || []).forEach(h => {
+        const R = h.cfg.wallRadius || 60;
+        const k = Math.max(0, 1 - (G.clock - h.born) / Math.max(0.001, h.life));
+        const a = Math.atan2(h.ny, h.nx);
+        ctx.save();
+        ctx.globalAlpha = 0.42 * (0.4 + k * 0.6);
+        ctx.strokeStyle = '#ffb066'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(h.x, h.y, R, a - Math.PI / 2, a + Math.PI / 2); ctx.stroke();
+        ctx.fillStyle = '#ff7a30';
+        ctx.beginPath(); ctx.arc(h.x, h.y, 3.5, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      });
+    }
+    SKILL_RT.SE.drawParticles(ctx, G.skillParts || []);
+    (G.skillShots || []).forEach(q => {
+      const col = (q._C && q._C.elements[0] && q._C.elements[0].color) || '#ffb35a';
+      // 多发间隔还没轮到的弹：停在出生点待发，不绘制（否则会看到好几发叠在一起）
+      if (q.gap > 0) return;
+      /* 拖尾先画，且不受 _skinFx 影响：这颗弹挂了像素特效时，弹体由特效渲染，
+         但尾迹仍然是投射物模块的事（之前整段 return 导致「勾了拖尾却看不到」）。 */
+      if (SKILL_RT.SE.drawShotTrail) SKILL_RT.SE.drawShotTrail(ctx, q, col);
+      // 该弹已挂上像素特效时，由特效充当外观，不再画默认手绘弹体
+      if (q._skinFx) return;
+      // 上传过 PNG 素材时按素材绘制（随自转旋转）；没有素材才画默认手绘弹体
+      if (!(SKILL_RT.SE.drawShotImage && SKILL_RT.SE.drawShotImage(ctx, q))) {
+        ctx.beginPath(); ctx.arc(q.x, q.y, q.r, 0, Math.PI * 2);
+        ctx.fillStyle = col; ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1; ctx.stroke();
+      }
+    });
+    SKILL_RT.SE.drawFx(ctx, G.skillFx || [], null);
+    // 印记：目标头顶按层数画点（颜色取印记配置），最多显示 10 个
+    [G.player, G.enemy].forEach(t => {
+      if (!t || !(t._markStacks > 0) || G.clock >= (t._markUntil || 0)) return;
+      const col = (t._markCfg && t._markCfg.color) || '#e8c85a';
+      const n = Math.min(10, t._markStacks);
+      for (let i = 0; i < n; i++) {
+        ctx.beginPath();
+        ctx.arc(t.x - (n - 1) * 2.4 + i * 4.8, t.y - t.r - 10, 2.2, 0, Math.PI * 2);
+        ctx.fillStyle = col; ctx.fill();
+      }
+    });
   }
 
   function step(dt) {
@@ -1266,6 +2673,16 @@
     const p = G.player, e = G.enemy;
     const list = [p, e];
     const slip = weatherSlip();   // 下雨湿滑：反弹系数整体放大
+
+    // 运动器：先于物理积分统一算出被接管弹珠本帧的速度。
+    // 对局自带 f.x += vx*dt 的积分与碰撞，所以引擎不重复积分（integrate=false）。
+    if (MOTION && G.movers && G.movers.length) {
+      MOTION.step(G.movers, dt, {
+        w: CONFIG.ARENA_W, h: CONFIG.ARENA_H, now: G.clock, integrate: false,
+        // 按阵营解析对手：弹珠与「被绑定的投射物」都适用（投射物不在 p/e 之列，不能用 ent===p 判断）
+        targetOf: function (ent) { return (ent && ent.side === 'player') ? e : p; }
+      });
+    }
 
     list.forEach((f, i) => {
       // 无追踪加速度、无速度衰减：全程只靠初始发射方向与反弹推进
@@ -1276,34 +2693,67 @@
         const gust = 1 + G.weather.sway * Math.sin(G.clock * 2.1 + (f.side === 'player' ? 0 : 1.7));
         f.vx += G.weather.dir * G.weather.force * gust * dt;
       }
+      // 天气 · 下雨：持续向下力（加速度，rainForce），让雨幕把弹珠往下压；同样受速度上限约束
+      if (G.weather && G.weather.id === 'rain' && G.weather.rainForce) {
+        f.vy += G.weather.rainForce * dt;
+      }
 
       const sp = Math.hypot(f.vx, f.vy);
-      const cap = CONFIG.MAX_SPEED * f.speed * slowActive;
+      // 运动器接管期间 / 刚交还控制权的短时间内放宽速度上限，
+      // 否则加速冲刺与附加冲量会在同一帧被 cap 直接吃掉，看起来又变成「没动」。
+      const mvNeed = MOTION ? MOTION.maxNeed(G.movers, f) : 0;
+      const mvBoost = G.clock < (f._motionCapUntil || 0) ? (f._motionCap || 0) : 0;
+      const cap = Math.max(CONFIG.MAX_SPEED * f.speed * slowActive, mvNeed, mvBoost);
       if (sp > cap) { f.vx = f.vx / sp * cap; f.vy = f.vy / sp * cap; }
 
-      f.x += f.vx * dt;
-      f.y += f.vy * dt;
+      // 印记迟滞只缩放本帧位移，不动 vx/vy：印记消失当帧即恢复原速
+      const markMul = markSlowMul(f);
+      f.x += f.vx * dt * markMul;
+      f.y += f.vy * dt * markMul;
 
       // 边界反弹（下雨湿滑：反弹更有弹性）
       const wr = CONFIG.WALL_RESTITUTION * slip;
-      if (f.x - f.r < 0) { f.x = f.r; f.vx = Math.abs(f.vx) * wr; }
-      if (f.x + f.r > CONFIG.ARENA_W) { f.x = CONFIG.ARENA_W - f.r; f.vx = -Math.abs(f.vx) * wr; }
-      if (f.y - f.r < 0) { f.y = f.r; f.vy = Math.abs(f.vy) * wr; }
-      if (f.y + f.r > CONFIG.ARENA_H) { f.y = CONFIG.ARENA_H - f.r; f.vy = -Math.abs(f.vy) * wr; }
-
-      resolveObstacles(f);
+      let wb = false, wallContact = null;
+      // 记录墙面接触点与法线（法线指向场内），供「贴合墙面」特效 / 墙面残留伤害定位
+      if (f.x - f.r < 0) { f.x = f.r; f.vx = Math.abs(f.vx) * wr; wb = true; wallContact = { x: 0, y: f.y, nx: 1, ny: 0 }; }
+      if (f.x + f.r > CONFIG.ARENA_W) { f.x = CONFIG.ARENA_W - f.r; f.vx = -Math.abs(f.vx) * wr; wb = true; wallContact = { x: CONFIG.ARENA_W, y: f.y, nx: -1, ny: 0 }; }
+      if (f.y - f.r < 0) { f.y = f.r; f.vy = Math.abs(f.vy) * wr; wb = true; wallContact = { x: f.x, y: 0, nx: 0, ny: 1 }; }
+      if (f.y + f.r > CONFIG.ARENA_H) { f.y = CONFIG.ARENA_H - f.r; f.vy = -Math.abs(f.vy) * wr; wb = true; wallContact = { x: f.x, y: CONFIG.ARENA_H, nx: 0, ny: -1 }; }
+      const obHit = resolveObstacles(f);
+      // 撞到场地边界 / 地图障碍：立刻交还控制权，保留这一帧的反弹速度
+      if ((wb || obHit) && MOTION) {
+        MOTION.noticeWall(G.movers, f, { now: G.clock, w: CONFIG.ARENA_W, h: CONFIG.ARENA_H }, true);
+      }
+      // onWall 事件放在物理处理之后：旧运动器已收尾，该事件分组可以再挂新的运动器
+      if (wb) triggerSkillEvent(f, 'onWall', wallContact);
 
       // 持续回复
       if (f.mods.regen > 0 && f.hp > 0) f.hp = Math.min(f.maxHp, f.hp + f.maxHp * f.mods.regen * dt);
-      // 持续伤害
+      // 持续伤害（dot）：逐帧扣血，按 0.5 秒聚合成一条战斗记录，避免逐帧刷屏；统计不丢任何一笔
       if (G.clock < f.dotUntil && f.dotDps > 0 && f.hp > 0) {
-        let dot = f.dotDps * dt;
+        const rawDot = f.dotDps * dt;
+        let dot = rawDot;
         if (f.shield > 0) {
           const a = Math.min(f.shield, dot);
           f.shield -= a; dot -= a;
         }
         f.hp = Math.max(0, f.hp - dot);
+        f._dotAccum = (f._dotAccum || 0) + rawDot;
+        if (f._dotLogAt == null) f._dotLogAt = G.clock;
+        if (G.clock - f._dotLogAt >= 0.5) {
+          const accum = f._dotAccum;
+          f._dotAccum = 0; f._dotLogAt = G.clock;
+          // dot 由对手施加：受害方是我方则统计到对手，反之统计到我方
+          recordDamage(f, accum, { side: f.side === 'player' ? 'enemy' : 'player' }, false,
+            f._dotName ? { name: f._dotName, tag: '持续伤害' } : '持续伤害');
+        }
         if (Math.random() < dt * 8) spawnSparks(f.x + rand(-f.r, f.r), f.y + rand(-f.r, f.r), 0, -1, 1, '#a06ce0', '#a06ce0');
+      } else if (f._dotAccum > 0) {
+        // dot 提前结束（回合重置 / 护盾清完）：不足 0.5 秒的尾量也计入统计
+        const accum = f._dotAccum;
+        f._dotAccum = 0; f._dotLogAt = null;
+        recordDamage(f, accum, { side: f.side === 'player' ? 'enemy' : 'player' }, false,
+          f._dotName ? { name: f._dotName, tag: '持续伤害' } : '持续伤害');
       }
       f.squash = Math.max(0, f.squash - dt * 2.6);
     });
@@ -1340,9 +2790,13 @@
         if (vn > CONFIG.MIN_IMPACT && G.clock - G.lastImpact > CONFIG.IMPACT_CD) {
           G.lastImpact = G.clock;
           resolveHit(p, e, nx, ny, vn);
+          triggerSkillEvent(p, 'onHit'); triggerSkillEvent(e, 'onHit');
         }
       }
     }
+
+    // 模块化技能：推进计时触发、投射物、特效与粒子
+    stepSkillRuntime(dt);
   }
 
   /* ---------------------------------------------------------
@@ -1455,7 +2909,7 @@
       label = G.weather.name + ' ' + (G.weather.dir > 0 ? '→' : '←') + s;
       color = 'rgba(140,190,255,0.92)';
     } else if (G.weather.id === 'rain') {
-      label = G.weather.name + ' · 湿滑';
+      label = G.weather.name + ' · 湿滑 · 下压' + Math.round(G.weather.rainForce || 0);
       color = 'rgba(150,196,255,0.92)';
     } else {
       label = G.weather.name;
@@ -1496,18 +2950,30 @@
 
     const AW = CONFIG.ARENA_W, AH = CONFIG.ARENA_H;
 
-    // 背景（主题来自当前地图配置）
+    // 背景（主题来自当前地图配置；上传过背景图则整张铺满，覆盖渐变与网格）
     const theme = (MAP && MAP.theme) || { bgTop: '#0d1420', bgBottom: '#080c14', grid: '#182233', border: '#26344a', accent: '#2b3a52' };
-    const bg = ctx.createLinearGradient(0, 0, 0, AH);
-    bg.addColorStop(0, theme.bgTop);
-    bg.addColorStop(1, theme.bgBottom);
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, AW, AH);
-
-    ctx.strokeStyle = theme.grid;
-    ctx.lineWidth = 1;
-    for (let x = 0; x <= AW; x += 45) { ctx.beginPath(); ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, AH); ctx.stroke(); }
-    for (let y = 0; y <= AH; y += 45) { ctx.beginPath(); ctx.moveTo(0, y + .5); ctx.lineTo(AW, y + .5); ctx.stroke(); }
+    let drewBgImg = false;
+    if (MAP && MAP.bgImg) {
+      if (MAPBG.key !== MAP.bgImg || !MAPBG.img) {
+        MAPBG.key = MAP.bgImg;
+        const im = new Image();
+        im.onload = () => { MAPBG.img = im; };
+        im.src = MAP.bgImg;
+        MAPBG.img = im;
+      }
+      if (MAPBG.img.complete && MAPBG.img.naturalWidth) {
+        ctx.drawImage(MAPBG.img, 0, 0, AW, AH);
+        drewBgImg = true;
+      }
+    }
+    if (!drewBgImg) {
+      const bg = ctx.createLinearGradient(0, 0, 0, AH);
+      bg.addColorStop(0, theme.bgTop);
+      bg.addColorStop(1, theme.bgBottom);
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, AW, AH);
+    }
+    // 网格已整体移除（编辑器与游戏端一致）
 
     ctx.strokeStyle = theme.border;
     ctx.lineWidth = 2;
@@ -1532,6 +2998,7 @@
     if (G.phase === 'aim' && G.player) drawAimArrow();
     drawParticles();
     drawFloaters();
+    drawSkillLayer();   // 模块化技能的投射物 / 像素特效 / 粒子
     ctx.restore();
 
     drawWeatherFront();   // 雨滴与天气牌画在弹珠前面
@@ -1541,6 +3008,9 @@
       ctx.fillRect(0, 0, AW, AH);
     }
   }
+
+  // 地图背景图缓存：src 未变时复用已解码图片，避免每帧重新加载
+  const MAPBG = { key: '', img: null };
 
   function drawObstacles() {
     if (!MAP || !MAP.obstacles) return;
@@ -1699,6 +3169,96 @@
   /* ---------------------------------------------------------
      16. HUD / 日志 / 横幅
      --------------------------------------------------------- */
+  /* ---- 双方卡片的 BUFF / DEBUFF 图标栏 ----
+     目录来自后台「状态图标」页（DATA.statuses）：名称 / 类型 / 颜色 / 图标 / 说明 / 排序全部可编辑。
+     这里只负责采集弹珠上「真正生效」的状态并渲染；没有上传 PNG 时用内置矢量图标（不使用 emoji）。 */
+  const STATUS_GLYPHS = {
+    shield: '<path d="M12 2.5 20 6v6c0 5-3.4 8-8 9.5C7.4 20 4 17 4 12V6z"/><path d="M8.5 12h7"/>',
+    aura: '<circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="8.2"/>',
+    combo: '<path d="M13 2 5 13h6l-1 9 8-11h-6z"/>',
+    mark: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1"/>',
+    slow: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/>',
+    dot: '<path d="M12 3c3 4 5 6 5 10a5 5 0 0 1-10 0c0-2 1-4 2.5-6 .3 2 1 3 2 3 0-2 .2-4 .5-7z"/>',
+    stun: '<path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l3 3M16 16l3 3M19 5l-3 3M8 16l-3 3"/><circle cx="12" cy="12" r="3"/>',
+    weaken: '<path d="M12 3v14M7 12l5 5 5-5"/><path d="M5 21h14"/>',
+    custom: '<path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/>'
+  };
+  const STATUS_SOURCES = ['shield', 'aura', 'combo', 'mark', 'slow', 'dot', 'stun', 'weaken', 'custom'];
+  // 预览模式写入的临时配置可能没有 statuses，回退到内置默认，保证状态栏不空白
+  const STATUS_RAW = (Array.isArray(DATA.statuses) && DATA.statuses.length) ? DATA.statuses
+    : ((window.WOWPINBALL_DEFAULT && window.WOWPINBALL_DEFAULT.statuses) || []);
+  const STATUS_DEFS = STATUS_RAW
+    .filter(s => s && s.enabled !== false && STATUS_SOURCES.indexOf(s.source) >= 0)
+    .slice().sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.id).localeCompare(String(b.id)));
+
+  function statusColorVars(color) {
+    const ok = /^#[0-9a-fA-F]{6}$/.test(color || '');
+    const hex = ok ? color : '#8fa3c0';
+    const c = ok ? parseHex(hex) : [143, 163, 192];
+    return '--st-color:' + hex + ';--st-bg:rgba(' + c.join(',') + ',.16);--st-glow:rgba(' + c.join(',') + ',.32)';
+  }
+
+  /* 采集一名弹珠当前实际生效的状态：返回 [{def, stacks, remain}] */
+  function collectStatuses(f) {
+    if (!f) return [];
+    const now = G.clock, out = [];
+    const add = (source, stacks, remain, tag) => {
+      STATUS_DEFS.forEach(def => {
+        if (def.source !== source) return;
+        if (source === 'custom' && String(def.tag || '') !== String(tag || '')) return;
+        out.push({ def: def, stacks: stacks || 0, remain: Math.max(0, remain || 0) });
+      });
+    };
+    // 增益：护盾 / 光环 / 连击
+    if (f.shield > 0.5) add('shield', 0, 0);
+    if (f.combo > 0) add('combo', f.combo, 0);
+    const auraOn = (G.skillAuras || []).filter(a => a && a.side === f.side && a.cfg && a.cfg.auraType === 'buff' && now - a.born < a.life);
+    if (auraOn.length) add('aura', auraOn.length, Math.max.apply(null, auraOn.map(a => a.born + a.life - now)));
+    // 减益：印记 / 眩晕 / 迟滞 / 撕裂 / 易伤
+    const markOn = f._markStacks > 0 && now < (f._markUntil || 0);
+    if (markOn) add('mark', f._markStacks, f._markUntil - now);
+    const stunOn = now < (f.slowUntil || 0) && f.slowFactor <= 0.1;
+    if (stunOn) add('stun', 0, f.slowUntil - now);
+    else {
+      const markSlow = markOn && f._markCfg && f._markCfg.slowPct > 0;
+      if (markSlow) add('slow', f._markStacks, f._markUntil - now);
+      else if (now < (f.slowUntil || 0) && f.slowFactor < 1) add('slow', 0, f.slowUntil - now);
+    }
+    if (f.dotDps > 0 && now < (f.dotUntil || 0)) add('dot', 0, f.dotUntil - now);
+    if (f._weakUntil && now < f._weakUntil) add('weaken', 0, f._weakUntil - now);
+    // 自定义标签：技能「事件状态」模块填写的 statusTag 会写进 _statusTags
+    const tags = f._statusTags || {};
+    Object.keys(tags).forEach(tag => { if (tags[tag] > now) add('custom', 0, tags[tag] - now, tag); });
+    return out.sort((a, b) => (Number(a.def.order) || 0) - (Number(b.def.order) || 0));
+  }
+
+  /* 只在内容或整数秒变化时重排 DOM，避免每帧 innerHTML 造成抖动 */
+  const buffSig = { player: null, enemy: null };
+  function renderBuffBar(side, f) {
+    const el = side === 'player' ? dom.pBuffs : dom.eBuffs;
+    if (!el) return;
+    const list = collectStatuses(f);
+    const sig = list.map(x => x.def.id + ':' + x.stacks + ':' + Math.ceil(x.remain)).join('|');
+    if (buffSig[side] === sig) return;
+    buffSig[side] = sig;
+    el.innerHTML = list.map(x => {
+      const d = x.def;
+      const color = /^#[0-9a-fA-F]{6}$/.test(d.color || '') ? d.color : '#8fa3c0';
+      const glyph = STATUS_GLYPHS[d.source] || STATUS_GLYPHS.custom;
+      const icon = d.icon
+        ? '<img class="st-icon" alt="" src="' + escHtml(d.icon) + '">'
+        : '<svg class="st-glyph" viewBox="0 0 24 24" aria-hidden="true">' + glyph + '</svg>';
+      const badge = x.stacks > 1 ? '×' + x.stacks : (x.remain > 0 ? Math.ceil(x.remain) + 's' : '');
+      const tip = (d.name || '状态') + (d.kind === 'buff' ? ' · 增益' : ' · 减益') +
+        (d.desc ? ' · ' + d.desc : '') +
+        (x.stacks > 1 ? ' · ' + x.stacks + ' 层' : '') +
+        (x.remain > 0 ? ' · 剩余 ' + Math.ceil(x.remain) + ' 秒' : '');
+      return '<span class="buff-chip" data-kind="' + (d.kind === 'buff' ? 'buff' : 'debuff') +
+        '" style="' + statusColorVars(color) + '" title="' + escHtml(tip) + '">' +
+        icon + '<i class="st-kind"></i><i class="st-stack">' + escHtml(badge) + '</i></span>';
+    }).join('');
+  }
+
   function updateHud() {
     if (!G.player || !G.enemy) return;
     const p = G.player, e = G.enemy;
@@ -1710,12 +3270,17 @@
     dom.eHpText.textContent = Math.ceil(e.hp) + ' / ' + e.maxHp + (e.shield > 0.5 ? '  +' + Math.ceil(e.shield) + '盾' : '');
     dom.pScore.textContent = '回合胜 ' + G.scores.player;
     dom.eScore.textContent = '回合胜 ' + G.scores.enemy;
+    syncSkillCharge(false);
+    renderBuffBar('player', p);
+    renderBuffBar('enemy', e);
   }
 
   function updateMeta() {
     if (!G.player || !G.enemy) return;
     dom.pSkills.innerHTML = renderMiniSkills(G.playerSkills);
     dom.eSkills.innerHTML = renderMiniSkills(G.enemySkills);
+    cacheSkillBars();
+    syncSkillCharge(true);
     // 瞄准阶段时，回合尚未开始，标签与高亮显示「即将到来的回合」
     const upcoming = G.phase === 'aim' ? G.round + 1 : G.round;
     dom.roundLabel.textContent = '第 ' + Math.max(1, upcoming) + ' / ' + CONFIG.TOTAL_ROUNDS + ' 回合';
@@ -1735,16 +3300,55 @@
     const count = Math.max(3, skills.length);
     const slots = Array.from({ length: count }, (_, i) => {
       const s = skills[i];
-      return s
-        ? '<span class="mini-skill" data-tier="' + s.tier + '" title="' + s.desc + '">' + s.name + '</span>'
-        : '<span class="mini-skill empty">技能位 ' + (i + 1) + '</span>';
+      if (!s) return '<div class="mini-skill empty">技能位 ' + (i + 1) + '</div>';
+      const t = (s.charge > 0 ? s.charge : 3).toFixed(1);
+      const isActive = !!(s.compiled && s.compiled.active);
+      const tip = s.intro ? s.intro + ' · ' + (s.desc || s.name) : (s.desc || s.name);
+      return '<div class="mini-skill has-cd" data-tier="' + escHtml(s.tier) + '" data-sid="' + escHtml(s.id) + '" title="' + escHtml(tip) +
+        (isActive ? ' · 充能 ' + t + 's' : ' · 被动 · 无需充能') + '">' +
+        '<span class="ms-name">' + escHtml(s.name) + '</span>' +
+        '<span class="ms-cd"><i></i></span></div>';
     });
     return slots.join('');
   }
 
+  /* 技能图标下方的充能条：只在数值变化时写样式，避免每帧重排 */
+  const skillBars = { player: [], enemy: [] };
+  function cacheSkillBars() {
+    ['player', 'enemy'].forEach(side => {
+      const host = side === 'player' ? dom.pSkills : dom.eSkills;
+      skillBars[side] = host ? Array.prototype.slice.call(host.querySelectorAll('.mini-skill[data-sid]')) : [];
+    });
+  }
+  function syncSkillCharge(force) {
+    ['player', 'enemy'].forEach(side => {
+      const f = side === 'player' ? G.player : G.enemy;
+      const nodes = skillBars[side] || [];
+      if (!f || !nodes.length) return;
+      const casters = f._skillCasters || [];
+      nodes.forEach(el => {
+        const sid = el.getAttribute('data-sid');
+        let charge = -1;
+        for (let i = 0; i < casters.length; i++) {
+          if (casters[i].sid === sid) { charge = casters[i].charge; break; }
+        }
+        const passive = charge < 0;    // 纯被动技能没有施放行为，不做充能
+        const pct = Math.round(clamp(passive ? 1 : charge, 0, 1) * 100);
+        if (!force && el._cpct === pct && el._cpsv === passive) return;
+        el._cpct = pct; el._cpsv = passive;
+        const fill = el._cfill || (el._cfill = el.querySelector('.ms-cd i'));
+        if (fill) fill.style.width = pct + '%';
+        el.classList.toggle('passive', passive);
+        el.classList.toggle('ready', !passive && pct >= 100);
+        el.classList.toggle('charging', !passive && pct < 100);
+      });
+    });
+  }
+
   function addLog(text, kind) {
     G.logLines.unshift({ text: text, kind: kind || '' });
-    if (G.logLines.length > 40) G.logLines.pop();
+    // 逐笔伤害明细也写进战斗记录，容量放宽（弹层本身可滚动），避免把回合事件挤掉
+    if (G.logLines.length > 300) G.logLines.pop();
     dom.battleLog.innerHTML = G.logLines.map(l => '<div class="log-line ' + l.kind + '">' + l.text + '</div>').join('');
   }
 
@@ -1838,7 +3442,7 @@
 
   function buildCol(title, color, skills) {
     return '<div class="br-col"><h4 style="color:' + color + '">' + title + '</h4><div class="br-list">' +
-      skills.map(s => '<span class="mini-skill" data-tier="' + s.tier + '" title="' + s.desc + '">' + s.name + '</span>').join('') +
+      skills.map(s => '<span class="mini-skill" data-tier="' + escHtml(s.tier) + '" title="' + escHtml(s.intro ? s.intro + ' · ' + s.desc : s.desc) + '">' + escHtml(s.name) + '</span>').join('') +
       '</div></div>';
   }
 
@@ -1876,6 +3480,7 @@
     G.particles = [];
     G.floaters = [];
     G.trauma = 0;
+    resetDmgStats();
     dom.battleLog.innerHTML = '';
 
     syncMatchNames(cls.name, G.enemyClass.name, cls.color, G.enemyClass.color);
@@ -1900,7 +3505,7 @@
   }
 
   function randSkillOf(cls) {
-    const pool = SKILLS.filter(s => (!s.cls || s.cls === cls.id) && s.enabled !== false);
+    const pool = SKILLS.filter(s => (s.cls.length === 0 || s.cls.indexOf(cls.id) >= 0) && s.enabled !== false);
     return pool.length ? pool[randInt(pool.length)] : null;
   }
 
@@ -1925,6 +3530,7 @@
     G.round = 0; G.roundTime = 0; G.scores = { player: 0, enemy: 0, draw: 0 };
     G.roundResults = []; G.playerSkills = []; G.enemySkills = [];
     G.logLines = []; G.particles = []; G.floaters = []; G.trauma = 0;
+    resetDmgStats();
     dom.battleLog.innerHTML = '';
 
     const ps = randSkillOf(pc), es = randSkillOf(ec);
@@ -2011,8 +3617,10 @@
   dom.closeRulesBtn.addEventListener('click', () => { dom.rulesModal.hidden = true; });
   dom.rulesModal.addEventListener('click', ev => { if (ev.target === dom.rulesModal) dom.rulesModal.hidden = true; });
 
-  // 战斗记录弹层
-  dom.logBtn.addEventListener('click', () => { dom.logModal.hidden = false; });
+  // 战斗记录弹层：打开时刷新一次伤害统计摘要（平时由 recordDamage 实时更新）
+  renderDmgSummary();
+  dom.logBtn.addEventListener('click', () => { renderDmgSummary(); dom.logModal.hidden = false; });
+  dom.logResultBtn.addEventListener('click', () => { renderDmgSummary(); dom.logModal.hidden = false; });
   dom.closeLogBtn.addEventListener('click', () => { dom.logModal.hidden = true; });
   dom.logModal.addEventListener('click', ev => { if (ev.target === dom.logModal) dom.logModal.hidden = true; });
 
@@ -2181,30 +3789,14 @@
   }
 
   // 在玩家弹球上绘制可拖动的发射方向箭头 + 呼吸光环
+  /* 瞄准箭头：外观由界面编辑器「瞄准箭头（画布）」图层决定。
+     绘制实现放在 ui-layout.js（后台预览与游戏共用同一份），这里只负责取位置与角度。 */
   function drawAimArrow() {
     const f = G.player;
     if (!f) return;
-    const a = G.playerAim, L = 84;
-    const ex = f.x + Math.cos(a) * L, ey = f.y + Math.sin(a) * L;
-    ctx.save();
-    ctx.setLineDash([5, 6]);
-    ctx.strokeStyle = 'rgba(124,196,255,0.5)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(ex, ey); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.strokeStyle = '#7cc4ff'; ctx.fillStyle = '#7cc4ff'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(ex, ey); ctx.stroke();
-    const ah = 13;
-    ctx.beginPath();
-    ctx.moveTo(ex, ey);
-    ctx.lineTo(ex - Math.cos(a - 0.42) * ah, ey - Math.sin(a - 0.42) * ah);
-    ctx.lineTo(ex - Math.cos(a + 0.42) * ah, ey - Math.sin(a + 0.42) * ah);
-    ctx.closePath(); ctx.fill();
-    ctx.beginPath(); ctx.arc(ex, ey, 8, 0, Math.PI * 2); ctx.fill();
-    const t = performance.now() / 1000;
-    const pr = f.r + 6 + Math.sin(t * 4) * 3;
-    ctx.strokeStyle = 'rgba(124,196,255,0.55)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(f.x, f.y, pr, 0, Math.PI * 2); ctx.stroke();
-    ctx.restore();
+    const UI2 = window.WowPinballUI;
+    if (!UI2 || !UI2.drawAim) return;
+    UI2.drawAim(ctx, f.x, f.y, G.playerAim, UI2.canvasPatch('battle', 'aimArrow'), f.r);
   }
 
   /* ---------------------------------------------------------

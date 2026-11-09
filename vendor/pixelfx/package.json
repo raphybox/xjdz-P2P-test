@@ -1,0 +1,7 @@
+{
+  "name": "pixelfx-vendor",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "source": "https://github.com/patch-gg/pixelfx"
+}

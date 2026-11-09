@@ -64,6 +64,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   background: #6ba8e8; box-shadow: 0 0 12px #6ba8e888;
 }
 /* 品牌图标上传了自己的 LOGO 后，隐藏原本的手绘圆点装饰，避免遮挡素材 */
+/* 界面编辑器：勾了「子级字号统一」后，元素内部写死 px 的字号（如倒计时里的「秒」）
+   全部继承外层，避免只放大了主数字、后缀还是小字。只作用于后代，元素自身不受影响。 */
+.__wowFsUniform * { font-size: inherit !important; }
 .brand-mark.__hasImg span { display: none; }
 .brand-text h1 { margin: 0; font-size: 19px; letter-spacing: 2px; font-weight: 700; }
 .brand-text p { margin: 3px 0 0; font-size: 11.5px; color: var(--text-faint); letter-spacing: .6px; }
@@ -226,13 +229,50 @@ canvas.cc-orb { background: none; display: block; }
 .fp-bottom { display: flex; justify-content: space-between; margin-top: 7px; font-size: 11px; color: var(--text-dim); }
 .hp-text { font-variant-numeric: tabular-nums; }
 .score-text { color: var(--accent-2); }
+/* 对局双方卡片：BUFF / DEBUFF 图标栏（图标、颜色、名称、说明均由后台「状态图标」页配置） */
+.buff-bar { display: flex; gap: 5px; margin-top: 8px; flex-wrap: wrap; align-items: center; min-height: 0; }
+.buff-bar:empty { display: none; }
+.enemy-panel .buff-bar { justify-content: flex-end; }
+.buff-chip {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex: 0 0 28px; border-radius: 8px;
+  border: 1px solid var(--st-color, #6b7a96);
+  background: var(--st-bg, rgba(120, 140, 170, .14));
+  box-shadow: 0 0 8px var(--st-glow, transparent), inset 0 0 0 1px rgba(0, 0, 0, .18);
+  cursor: help; transition: transform .12s ease, box-shadow .12s ease;
+}
+.buff-chip:hover { transform: translateY(-2px); box-shadow: 0 0 12px var(--st-glow, transparent); z-index: 2; }
+.buff-chip .st-icon { width: 18px; height: 18px; object-fit: contain; pointer-events: none; }
+.buff-chip .st-glyph { width: 18px; height: 18px; display: block; pointer-events: none; }
+.buff-chip .st-glyph path, .buff-chip .st-glyph circle, .buff-chip .st-glyph rect, .buff-chip .st-glyph line { fill: none; stroke: var(--st-color, #c7d2e3); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.buff-chip[data-kind="buff"] .st-kind { position: absolute; left: -2px; top: -2px; width: 5px; height: 5px; border-radius: 50%; background: var(--st-color); }
+.buff-chip[data-kind="debuff"] .st-kind { position: absolute; left: -2px; top: -2px; width: 5px; height: 5px; border-radius: 50%; border: 1.5px solid var(--st-color); background: #0d1522; }
+.buff-chip .st-stack {
+  position: absolute; right: -4px; bottom: -5px; min-width: 14px; height: 14px; padding: 0 2px;
+  border-radius: 7px; background: #0d1522; border: 1px solid var(--st-color);
+  color: var(--st-color); font-size: 9px; line-height: 12px; text-align: center;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.buff-chip .st-stack:empty { display: none; }
 .mini-skills { display: flex; gap: 5px; margin-top: 10px; flex-wrap: wrap; min-height: 20px; }
 .enemy-panel .mini-skills { justify-content: flex-end; }
 .mini-skill {
+  display: inline-flex; align-items: center;
   font-size: 10.5px; padding: 3px 8px; border-radius: 5px;
   background: #1e2836; border: 1px solid #33425a; color: #c7d2e3;
   white-space: nowrap;
 }
+/* 只有带充能条的技能条目才用两行布局；其它位置（战报/结算）沿用单行胶囊 */
+.mini-skill.has-cd { display: flex; flex-direction: column; align-items: stretch; gap: 3px; min-width: 62px; padding: 3px 8px 4px; }
+.mini-skill .ms-name { line-height: 1.25; }
+.mini-skill .ms-cd { display: block; height: 3px; border-radius: 2px; background: #0c1320; overflow: hidden; }
+.mini-skill .ms-cd i { display: block; height: 100%; width: 100%; border-radius: 2px; background: #4d7ba8; }
+.mini-skill.charging { color: #93a3ba; }
+.mini-skill.charging .ms-cd i { background: #4d7ba8; }
+.mini-skill.ready { border-color: #5a6a86; color: #eaf1fb; }
+.mini-skills .mini-skill.ready { border-color: #5a6a86; }
+.mini-skill.ready .ms-cd i { background: linear-gradient(90deg, #b98a2e, #f0c874); box-shadow: 0 0 6px #f0c87455; }
+.mini-skill.passive .ms-cd { opacity: .3; }
 .mini-skill.empty { background: transparent; border-style: dashed; border-color: #2b3648; color: #4c5a70; }
 .mini-skill[data-tier="rare"] { border-color: #4e6fa8; color: #b9d3f5; }
 .mini-skill[data-tier="epic"] { border-color: #8a63b8; color: #dcc2f5; }
@@ -304,19 +344,69 @@ canvas.cc-orb { background: none; display: block; }
 .sc-name { font-size: 14px; font-weight: 700; letter-spacing: .6px; }
 .sc-tier { font-size: 10px; padding: 2px 7px; border-radius: 4px; border: 1px solid var(--tier-color); color: var(--tier-color); }
 .sc-origin { font-size: 10.5px; color: var(--text-faint); letter-spacing: .5px; }
-.sc-effect { font-size: 11.5px; line-height: 1.55; color: #c4d0e1; }
+.sc-effect { font-size: 11.5px; line-height: 1.55; color: #c4d0e1; white-space: pre-line; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
 .sc-hotkey { margin-top: auto; font-size: 10px; color: var(--text-faint); }
 .skill-card[data-tier="common"] { --tier-color: #6c829e; }
 .skill-card[data-tier="rare"] { --tier-color: #6f9ede; }
 .skill-card[data-tier="epic"] { --tier-color: #b888e8; }
 
-.battle-log { display: flex; flex-direction: column; gap: 5px; }
-.log-line { font-size: 11.5px; color: var(--text-dim); line-height: 1.5; padding-left: 10px; position: relative; }
-.log-line::before { content: ""; position: absolute; left: 0; top: 7px; width: 4px; height: 4px; border-radius: 50%; background: #46566f; }
+/* ---------- 战斗记录 ---------- */
+.battle-log { display: flex; flex-direction: column; gap: 2px; }
+.log-line { font-size: 11.5px; color: var(--text-dim); line-height: 1.55; padding: 3px 0 3px 10px; position: relative; }
+.log-line::before { content: ""; position: absolute; left: 0; top: 9px; width: 4px; height: 4px; border-radius: 50%; background: #46566f; }
 .log-line.hl { color: var(--text); }
 .log-line.hl::before { background: var(--accent); }
 .log-line.good::before { background: var(--good); }
 .log-line.bad::before { background: var(--bad); }
+/* 回合分隔：无项目符号，右侧接一条细线，把「一回合的伤害流水」框成一段 */
+.log-line.sep { display: flex; align-items: center; gap: 8px; margin: 10px 0 2px; padding-left: 0; color: var(--text-dim); font-size: 10.5px; letter-spacing: 1px; }
+.log-line.sep::before { display: none; }
+.log-line.sep::after { content: ""; flex: 1; height: 1px; background: var(--line-soft); }
+.log-line.sep .sep-sub { color: var(--text-faint); letter-spacing: 0; }
+
+/* 战斗记录 · 伤害统计摘要：固定在记录列表上方，不随列表滚动 */
+.dmg-summary { margin: 0 0 12px; padding: 12px 13px; border: 1px solid var(--line-soft); border-radius: 10px; background: #0f1723; font-size: 11.5px; color: var(--text-dim); }
+.dmg-summary .ds-head { display: flex; align-items: baseline; gap: 8px; color: var(--text); font-weight: 600; letter-spacing: .5px; margin-bottom: 8px; }
+.dmg-summary .ds-sub { color: var(--text-faint); font-weight: 400; font-size: 10.5px; letter-spacing: 0; }
+.dmg-summary .ds-table { display: grid; gap: 4px; }
+.dmg-summary .ds-row { display: grid; grid-template-columns: 42px repeat(3, 1fr); align-items: baseline; gap: 6px; padding: 5px 8px; border-radius: 6px; background: #131c2a; }
+.dmg-summary .ds-row.ds-own { background: linear-gradient(90deg, #6fd39b14, #131c2a 62%); }
+.dmg-summary .ds-row.ds-enemy { background: linear-gradient(90deg, #ef7b7b14, #131c2a 62%); }
+.dmg-summary .ds-who { font-weight: 700; }
+.dmg-summary .ds-row.ds-own .ds-who { color: var(--good); }
+.dmg-summary .ds-row.ds-enemy .ds-who { color: var(--bad); }
+.dmg-summary .ds-cell { display: flex; align-items: baseline; gap: 5px; }
+.dmg-summary .ds-cell i { font-style: normal; color: var(--text-faint); font-size: 10px; }
+.dmg-summary .ds-cell b { color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; }
+.dmg-summary .ds-src { display: grid; gap: 5px; margin-top: 9px; padding-top: 8px; border-top: 1px dashed var(--line-soft); }
+.dmg-summary .ds-src-row { display: flex; align-items: flex-start; gap: 7px; }
+.dmg-summary .ds-src-tag { flex: none; font-size: 10px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); margin-top: 1px; }
+.dmg-summary .ds-src-tag.ds-own { color: var(--good); border-color: #2f5a45; }
+.dmg-summary .ds-src-tag.ds-enemy { color: var(--bad); border-color: #5f3a3a; }
+.dmg-summary .ds-chips { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.dmg-summary .ds-chip { display: inline-flex; align-items: baseline; gap: 5px; background: #1a2434; border: 1px solid var(--line-soft); border-radius: 5px; padding: 1px 6px; font-size: 10.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.dmg-summary .ds-chip b { color: #cdd8e8; font-weight: 600; }
+.dmg-summary .ds-empty { color: var(--text-faint); }
+
+/* 逐笔伤害：四列栅格（方向 / 伤害 / 来源 / 剩余），数值右对齐，扫读不串行。
+   我方造成=琥珀底，对手造成=红底；只加同辈修饰类，不动 .log-line 基类。 */
+.log-line.dmg-own, .log-line.dmg-enemy {
+  display: grid; grid-template-columns: 72px 52px minmax(0, 1fr) 58px;
+  align-items: baseline; gap: 8px; padding: 5px 8px 5px 12px;
+  border-radius: 6px; font-variant-numeric: tabular-nums;
+}
+.log-line.dmg-own { color: var(--text); background: #e0a34c0d; }
+.log-line.dmg-enemy { color: var(--text); background: #e271710d; }
+.log-line.dmg-own::before, .log-line.dmg-enemy::before { top: 50%; margin-top: -2px; left: 4px; }
+.log-line .lg-dir { color: var(--text-dim); font-size: 10.5px; letter-spacing: .2px; white-space: nowrap; }
+.log-line .lg-val { font-weight: 700; font-size: 13px; text-align: right; white-space: nowrap; }
+.log-line.dmg-own .lg-val { color: #f0b45e; }
+.log-line.dmg-enemy .lg-val { color: #ef8b8b; }
+.log-line .lg-src { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+.log-line .lg-src b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-line .lg-src i { font-style: normal; font-size: 10px; line-height: 1.5; color: var(--text-faint); border: 1px solid var(--line-soft); border-radius: 4px; padding: 0 4px; white-space: nowrap; flex: none; }
+.log-line .lg-src i.lg-crit { color: #ffd76a; border-color: #6b542a; }
+.log-line .lg-hp { text-align: right; color: var(--text-faint); font-size: 10.5px; white-space: nowrap; }
 
 /* ---------- 结算 ---------- */
 .result-card {
@@ -363,8 +453,18 @@ canvas.cc-orb { background: none; display: block; }
 .rules-list strong { color: var(--accent-2); }
 .modal-foot { margin: 16px 0 0; font-size: 11px; color: var(--text-faint); line-height: 1.6; }
 .modal-sub { font-size: 11.5px; color: var(--text-dim); }
-.log-modal-card { width: min(430px, 100%); }
-.log-modal-body { max-height: 420px; overflow-y: auto; padding-right: 4px; }
+.log-modal-card {
+  width: min(520px, 100%); max-height: calc(100vh - 40px);
+  display: flex; flex-direction: column; overflow: hidden; padding-bottom: 16px;
+}
+.log-modal-card .modal-head { flex: none; margin-bottom: 12px; }
+.log-modal-body { flex: 1 1 auto; min-height: 120px; max-height: min(56vh, 460px); overflow-y: auto; padding-right: 6px; }
+/* 深色细滚动条：浏览器默认的白色滚动条在暗色弹层里非常跳 */
+.log-modal-body { scrollbar-width: thin; scrollbar-color: #2f3d52 transparent; }
+.log-modal-body::-webkit-scrollbar { width: 7px; }
+.log-modal-body::-webkit-scrollbar-track { background: transparent; }
+.log-modal-body::-webkit-scrollbar-thumb { background: #2f3d52; border-radius: 4px; }
+.log-modal-body::-webkit-scrollbar-thumb:hover { background: #3d4f69; }
 .draft-modal-card { width: min(780px, 100%); }
 .draft-modal-card .modal-head { align-items: baseline; }
 
@@ -526,6 +626,11 @@ canvas.cc-orb { background: none; display: block; }
   .skill-card { min-height: 0; }
   .round-review, .build-review { grid-template-columns: 1fr; }
   .section-head { flex-direction: column; align-items: flex-start; }
+  /* 战斗记录：窄屏压缩列宽，四列仍严格对齐 */
+  .log-line.dmg-own, .log-line.dmg-enemy { grid-template-columns: 58px 40px minmax(0, 1fr) 48px; gap: 6px; padding: 5px 6px 5px 10px; }
+  .log-line .lg-dir { font-size: 9.5px; letter-spacing: 0; }
+  .dmg-summary .ds-row { grid-template-columns: 38px repeat(3, 1fr); gap: 4px; padding: 5px 6px; }
+  .dmg-summary .ds-cell i { font-size: 9.5px; }
 }
 
 /* ============================================================

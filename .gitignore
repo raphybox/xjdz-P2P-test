@@ -6,6 +6,7 @@ data/history/
 
 # 本地依赖 / 备份 / 日志 / 系统文件
 node_modules/
+dev_backup/
 *.bak
 *.bak-*
 *.log
@@ -20,3 +21,7 @@ Thumbs.db
 admin.html
 admin.js
 admin.css
+
+# 根目录的 nul 是 Windows 保留名（NUL 设备）误生成的 0 字节孤儿文件，
+# 脚本化删除会被系统拒绝，请用资源管理器手动删除；此处排除以免误提交。
+/nul

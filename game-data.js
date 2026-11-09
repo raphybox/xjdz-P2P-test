@@ -37,6 +37,7 @@ window.WOWPINBALL_DEFAULT = {
     critBase: 0.04,
     critMultBase: 1.55,
     draftOptions: 3,
+    maxSkills: 9,          // 拥有的技能最大数量：玩家至多拥有的技能数；总回合数大于该值时，超出回合不再弹出技能随机选项
     classSkillWeight: 1.35,
     speeds: [1, 2, 4]
   },
@@ -45,7 +46,8 @@ window.WOWPINBALL_DEFAULT = {
 
   /* 对局天气：每回合进入对撞阶段（倒计时开始）时按权重随机抽取一次，含「无天气」。
      wind 大风：整回合给场内弹珠施加持续水平力（随机方向 + 正弦阵风波动），同受速度上限约束；
-     rain 下雨：场地湿滑，弹珠互撞、墙壁与障碍反弹更有弹性（反弹系数乘 1+slip）。
+     rain 下雨：场地湿滑，弹珠互撞、墙壁与障碍反弹更有弹性（反弹系数乘 1+slip）；
+              同时整回合给弹珠施加持续向下力（加速度，rainForce，每秒叠加到 vy），弹珠被雨往下压。
      后台「对局天气」页可调整开关、权重与全部参数。 */
   weather: {
     enabled: true,
@@ -55,8 +57,8 @@ window.WOWPINBALL_DEFAULT = {
         forceMin: 30, forceMax: 70, sway: 0.45,
         desc: '持续水平风力推动弹珠，阵风时强时弱，方向每回合随机' },
       { id: 'rain', name: '下雨', enabled: true, weight: 3,
-        slip: 0.12,
-        desc: '场地湿滑：互撞与墙壁、障碍反弹更有弹性，来回更快更难预判' }
+        slip: 0.12, rainForce: 70,
+        desc: '场地湿滑：互撞与墙壁、障碍反弹更有弹性，来回更快更难预判；雨幕持续向下压弹珠' }
     ]
   },
 
@@ -96,43 +98,43 @@ window.WOWPINBALL_DEFAULT = {
   ],
 
   skills: [
-    { id: 'sk1', name: '钢铁意志', cls: null, tier: 'common', mods: { maxHp: 16 }, enabled: true },
-    { id: 'sk2', name: '磨砺锋刃', cls: null, tier: 'common', mods: { power: 0.10 }, enabled: true },
-    { id: 'sk3', name: '疾风步', cls: null, tier: 'common', mods: { speed: 0.16 }, enabled: true },
-    { id: 'sk4', name: '磐石之躯', cls: null, tier: 'common', mods: { mass: 0.22, maxHp: 8 }, enabled: true },
-    { id: 'sk5', name: '坚壁', cls: null, tier: 'common', mods: { armor: 0.12 }, enabled: true },
-    { id: 'sk6', name: '精准打击', cls: null, tier: 'common', mods: { crit: 0.14 }, enabled: true },
-    { id: 'sk7', name: '先发制人', cls: null, tier: 'common', mods: { firstStrike: 0.40 }, enabled: true },
-    { id: 'sk8', name: '轻盈身法', cls: null, tier: 'common', mods: { dodge: 0.13 }, enabled: true },
-    { id: 'sk9', name: '回春', cls: null, tier: 'common', mods: { regen: 0.012 }, enabled: true },
-    { id: 'sk10', name: '势不可挡', cls: null, tier: 'rare', mods: { momentum: 0.40, speed: 0.08 }, enabled: true },
-    { id: 'sk11', name: '嗜血', cls: null, tier: 'rare', mods: { lifesteal: 0.22 }, enabled: true },
-    { id: 'sk12', name: '荆棘之甲', cls: null, tier: 'rare', mods: { thorns: 0.20, armor: 0.06 }, enabled: true },
-    { id: 'sk13', name: '连击', cls: null, tier: 'rare', mods: { combo: 0.06 }, enabled: true },
-    { id: 'sk14', name: '寒霜印记', cls: null, tier: 'rare', mods: { slow: 0.30, power: 0.06 }, enabled: true },
-    { id: 'sk15', name: '能量护盾', cls: null, tier: 'rare', mods: { shield: 0.20 }, enabled: true },
-    { id: 'sk16', name: '斩杀', cls: null, tier: 'epic', mods: { execute: 0.45, power: 0.08 }, enabled: true },
-    { id: 'sk17', name: '灼烧之痛', cls: null, tier: 'epic', mods: { dot: 0.035, power: 0.06 }, enabled: true },
-    { id: 'sk18', name: '致命节奏', cls: null, tier: 'epic', mods: { crit: 0.20, critMult: 0.5 }, enabled: true },
-    { id: 'sk19', name: '巨力冲撞', cls: null, tier: 'epic', mods: { knock: 0.55, mass: 0.18, power: 0.10 }, enabled: true },
-    { id: 'sk20', name: '冲锋', cls: 'warrior', tier: 'rare', mods: { speed: 0.22, firstStrike: 0.35 }, enabled: true },
-    { id: 'sk21', name: '破釜沉舟', cls: 'warrior', tier: 'epic', mods: { execute: 0.35, armor: 0.12, maxHp: 10 }, enabled: true },
-    { id: 'sk22', name: '圣光护佑', cls: 'paladin', tier: 'rare', mods: { shield: 0.22, regen: 0.008 }, enabled: true },
-    { id: 'sk23', name: '正义之锤', cls: 'paladin', tier: 'epic', mods: { power: 0.16, knock: 0.30 }, enabled: true },
-    { id: 'sk24', name: '猎豹守护', cls: 'hunter', tier: 'rare', mods: { speed: 0.24, dodge: 0.10 }, enabled: true },
-    { id: 'sk25', name: '瞄准射击', cls: 'hunter', tier: 'epic', mods: { crit: 0.24, critMult: 0.4 }, enabled: true },
-    { id: 'sk26', name: '伺机待发', cls: 'rogue', tier: 'rare', mods: { crit: 0.18, firstStrike: 0.30 }, enabled: true },
-    { id: 'sk27', name: '冷血', cls: 'rogue', tier: 'epic', mods: { crit: 0.20, power: 0.14 }, enabled: true },
-    { id: 'sk28', name: '真言术：韧', cls: 'priest', tier: 'rare', mods: { maxHp: 26, armor: 0.08 }, enabled: true },
-    { id: 'sk29', name: '心灵之火', cls: 'priest', tier: 'epic', mods: { regen: 0.018, thorns: 0.18 }, enabled: true },
-    { id: 'sk30', name: '闪电之盾', cls: 'shaman', tier: 'rare', mods: { thorns: 0.26, power: 0.06 }, enabled: true },
-    { id: 'sk31', name: '嗜血术', cls: 'shaman', tier: 'epic', mods: { speed: 0.22, combo: 0.08 }, enabled: true },
-    { id: 'sk32', name: '寒冰护体', cls: 'mage', tier: 'rare', mods: { armor: 0.16, shield: 0.12 }, enabled: true },
-    { id: 'sk33', name: '冰霜新星', cls: 'mage', tier: 'epic', mods: { slow: 0.42, power: 0.10 }, enabled: true },
-    { id: 'sk34', name: '生命分流', cls: 'warlock', tier: 'rare', mods: { lifesteal: 0.24, maxHp: 12 }, enabled: true },
-    { id: 'sk35', name: '痛苦无常', cls: 'warlock', tier: 'epic', mods: { dot: 0.045, thorns: 0.12 }, enabled: true },
-    { id: 'sk36', name: '熊形态', cls: 'druid', tier: 'rare', mods: { mass: 0.32, maxHp: 18 }, enabled: true },
-    { id: 'sk37', name: '回春术', cls: 'druid', tier: 'epic', mods: { regen: 0.016, shield: 0.16 }, enabled: true }
+    { id: 'sk1', name: '钢铁意志', cls: null, tier: 'common', mods: { maxHp: 16 }, charge: 3, enabled: true },
+    { id: 'sk2', name: '磨砺锋刃', cls: null, tier: 'common', mods: { power: 0.10 }, charge: 3, enabled: true },
+    { id: 'sk3', name: '疾风步', cls: null, tier: 'common', mods: { speed: 0.16 }, charge: 3, enabled: true },
+    { id: 'sk4', name: '磐石之躯', cls: null, tier: 'common', mods: { mass: 0.22, maxHp: 8 }, charge: 3, enabled: true },
+    { id: 'sk5', name: '坚壁', cls: null, tier: 'common', mods: { armor: 0.12 }, charge: 3, enabled: true },
+    { id: 'sk6', name: '精准打击', cls: null, tier: 'common', mods: { crit: 0.14 }, charge: 3, enabled: true },
+    { id: 'sk7', name: '先发制人', cls: null, tier: 'common', mods: { firstStrike: 0.40 }, charge: 3, enabled: true },
+    { id: 'sk8', name: '轻盈身法', cls: null, tier: 'common', mods: { dodge: 0.13 }, charge: 3, enabled: true },
+    { id: 'sk9', name: '回春', cls: null, tier: 'common', mods: { regen: 0.012 }, charge: 3, enabled: true },
+    { id: 'sk10', name: '势不可挡', cls: null, tier: 'rare', mods: { momentum: 0.40, speed: 0.08 }, charge: 3, enabled: true },
+    { id: 'sk11', name: '嗜血', cls: null, tier: 'rare', mods: { lifesteal: 0.22 }, charge: 3, enabled: true },
+    { id: 'sk12', name: '荆棘之甲', cls: null, tier: 'rare', mods: { thorns: 0.20, armor: 0.06 }, charge: 3, enabled: true },
+    { id: 'sk13', name: '连击', cls: null, tier: 'rare', mods: { combo: 0.06 }, charge: 3, enabled: true },
+    { id: 'sk14', name: '寒霜印记', cls: null, tier: 'rare', mods: { slow: 0.30, power: 0.06 }, charge: 3, enabled: true },
+    { id: 'sk15', name: '能量护盾', cls: null, tier: 'rare', mods: { shield: 0.20 }, charge: 3, enabled: true },
+    { id: 'sk16', name: '斩杀', cls: null, tier: 'epic', mods: { execute: 0.45, power: 0.08 }, charge: 3, enabled: true },
+    { id: 'sk17', name: '灼烧之痛', cls: null, tier: 'epic', mods: { dot: 0.035, power: 0.06 }, charge: 3, enabled: true },
+    { id: 'sk18', name: '致命节奏', cls: null, tier: 'epic', mods: { crit: 0.20, critMult: 0.5 }, charge: 3, enabled: true },
+    { id: 'sk19', name: '巨力冲撞', cls: null, tier: 'epic', mods: { knock: 0.55, mass: 0.18, power: 0.10 }, charge: 3, enabled: true },
+    { id: 'sk20', name: '冲锋', cls: 'warrior', tier: 'rare', mods: { speed: 0.22, firstStrike: 0.35 }, charge: 3, enabled: true },
+    { id: 'sk21', name: '破釜沉舟', cls: 'warrior', tier: 'epic', mods: { execute: 0.35, armor: 0.12, maxHp: 10 }, charge: 3, enabled: true },
+    { id: 'sk22', name: '圣光护佑', cls: 'paladin', tier: 'rare', mods: { shield: 0.22, regen: 0.008 }, charge: 3, enabled: true },
+    { id: 'sk23', name: '正义之锤', cls: 'paladin', tier: 'epic', mods: { power: 0.16, knock: 0.30 }, charge: 3, enabled: true },
+    { id: 'sk24', name: '猎豹守护', cls: 'hunter', tier: 'rare', mods: { speed: 0.24, dodge: 0.10 }, charge: 3, enabled: true },
+    { id: 'sk25', name: '瞄准射击', cls: 'hunter', tier: 'epic', mods: { crit: 0.24, critMult: 0.4 }, charge: 3, enabled: true },
+    { id: 'sk26', name: '伺机待发', cls: 'rogue', tier: 'rare', mods: { crit: 0.18, firstStrike: 0.30 }, charge: 3, enabled: true },
+    { id: 'sk27', name: '冷血', cls: 'rogue', tier: 'epic', mods: { crit: 0.20, power: 0.14 }, charge: 3, enabled: true },
+    { id: 'sk28', name: '真言术：韧', cls: 'priest', tier: 'rare', mods: { maxHp: 26, armor: 0.08 }, charge: 3, enabled: true },
+    { id: 'sk29', name: '心灵之火', cls: 'priest', tier: 'epic', mods: { regen: 0.018, thorns: 0.18 }, charge: 3, enabled: true },
+    { id: 'sk30', name: '闪电之盾', cls: 'shaman', tier: 'rare', mods: { thorns: 0.26, power: 0.06 }, charge: 3, enabled: true },
+    { id: 'sk31', name: '嗜血术', cls: 'shaman', tier: 'epic', mods: { speed: 0.22, combo: 0.08 }, charge: 3, enabled: true },
+    { id: 'sk32', name: '寒冰护体', cls: 'mage', tier: 'rare', mods: { armor: 0.16, shield: 0.12 }, charge: 3, enabled: true },
+    { id: 'sk33', name: '冰霜新星', cls: 'mage', tier: 'epic', mods: { slow: 0.42, power: 0.10 }, charge: 3, enabled: true },
+    { id: 'sk34', name: '生命分流', cls: 'warlock', tier: 'rare', mods: { lifesteal: 0.24, maxHp: 12 }, charge: 3, enabled: true },
+    { id: 'sk35', name: '痛苦无常', cls: 'warlock', tier: 'epic', mods: { dot: 0.045, thorns: 0.12 }, charge: 3, enabled: true },
+    { id: 'sk36', name: '熊形态', cls: 'druid', tier: 'rare', mods: { mass: 0.32, maxHp: 18 }, charge: 3, enabled: true },
+    { id: 'sk37', name: '回春术', cls: 'druid', tier: 'epic', mods: { regen: 0.016, shield: 0.16 }, charge: 3, enabled: true }
   ],
 
   maps: [
@@ -215,5 +217,20 @@ window.WOWPINBALL_DEFAULT = {
     { id: 'ghostTip', label: '异步对战说明', group: '弹层文案', selector: '.ghost-tip', mode: 'html', value: '幽灵带着它当时的回合技能与发射方向出手。你每打完一局，系统也会把你的这一局收录成幽灵，可用分享码发给朋友。' },
     { id: 'shareTitle', label: '分享弹层标题', group: '弹层文案', selector: '#shareModal .modal-head h3', mode: 'text', value: '分享这局挑战' },
     { id: 'shareTip', label: '分享说明', group: '弹层文案', selector: '.share-tip', mode: 'html', value: '这串码记下了你的昵称、职业、每回合选的技能和拖出的发射方向。好友粘贴导入后，会用你这套决策当对手，随时开一局，不需要同时在线。' }
+  ],
+
+  /* 对局双方卡片上的 BUFF / DEBUFF 图标栏配置（后台「状态图标」页可逐条编辑、上传自定义 PNG 图标）。
+     source = 运行时自动采集的状态来源；source='custom' 时按 tag 匹配技能「事件状态」模块填写的自定义标签。
+     icon 为空时用内置矢量图标；上传 PNG 后存内嵌 dataURL，不依赖外部文件。
+     改 name / color / kind / desc / enabled / order 都会直接影响对局 HUD；新增条目可用自定义标签驱动。 */
+  statuses: [
+    { id: 'st_shield', name: '护盾', kind: 'buff', source: 'shield', tag: '', color: '#7fd1ff', icon: '', desc: '吸收即将到来的伤害', enabled: true, order: 1 },
+    { id: 'st_aura', name: '光环', kind: 'buff', source: 'aura', tag: '', color: '#8de0b0', icon: '', desc: '领域增益生效中', enabled: true, order: 2 },
+    { id: 'st_combo', name: '连击', kind: 'buff', source: 'combo', tag: '', color: '#ffd479', icon: '', desc: '连续撞击的伤害加成', enabled: true, order: 3 },
+    { id: 'st_mark', name: '印记', kind: 'debuff', source: 'mark', tag: '', color: '#e8c85a', icon: '', desc: '每层提高受到的伤害', enabled: true, order: 4 },
+    { id: 'st_slow', name: '迟滞', kind: 'debuff', source: 'slow', tag: '', color: '#8fb8ff', icon: '', desc: '移动速度下降', enabled: true, order: 5 },
+    { id: 'st_dot', name: '撕裂', kind: 'debuff', source: 'dot', tag: '', color: '#ff8a5c', icon: '', desc: '持续损失生命', enabled: true, order: 6 },
+    { id: 'st_stun', name: '眩晕', kind: 'debuff', source: 'stun', tag: '', color: '#c79bff', icon: '', desc: '几乎无法移动', enabled: true, order: 7 },
+    { id: 'st_weaken', name: '易伤', kind: 'debuff', source: 'weaken', tag: '', color: '#ff7a9c', icon: '', desc: '受到的伤害提高', enabled: true, order: 8 }
   ]
 };

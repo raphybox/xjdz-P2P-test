@@ -26,6 +26,23 @@ const MIME = {
   '.ico': 'image/x-icon', '.map': 'application/json; charset=utf-8'
 };
 
+/* 历史遗留清理：特效模块曾自带「持续伤害」字段（tickDamage/tickDps/tickRadius/tickInterval），
+   现已统一归到「伤害·结算」模块。若后台仍持有迁移前的旧内存数据，保存时会把死字段写回，
+   这里在落盘前统一剥掉，保证「持续伤害只存在于伤害模块」的口径不被旧草稿污染。 */
+const FX_LEGACY_TICK_KEYS = ['tickDamage', 'tickDps', 'tickRadius', 'tickInterval'];
+function stripLegacyFxTick(data) {
+  if (!data || !Array.isArray(data.skills)) return data;
+  data.skills.forEach(sk => {
+    const nodes = (sk && sk.graph && Array.isArray(sk.graph.nodes)) ? sk.graph.nodes : [];
+    nodes.forEach(n => {
+      if (n && n.type === 'fx' && n.params) {
+        FX_LEGACY_TICK_KEYS.forEach(k => { if (n.params[k] != null) delete n.params[k]; });
+      }
+    });
+  });
+  return data;
+}
+
 function send(res, code, body, type) {
   res.writeHead(code, {
     'Content-Type': type || 'application/json; charset=utf-8',
@@ -129,9 +146,13 @@ const server = http.createServer(async (req, res) => {
       ensureDirs();
       if (req.method === 'GET' && url.startsWith('/api/config')) {
         if (!fs.existsSync(CONFIG_FILE)) return json(res, 200, { ok: true, data: null });
-        return json(res, 200, { ok: true, data: JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) });
+        const data = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+        stripLegacyFxTick(data);   // 读取时也剥一次：旧页面即使缓存了死字段，回写也不会再带回来
+        return json(res, 200, { ok: true, data: data });
       }
       if (req.method === 'POST' && url.startsWith('/api/config')) {
+        // push=1 同步 GitHub（正式发布，版本号 +1）；否则仅本地预览（不推远程、不涨版本）
+        const wantPush = /[?&]push=1/.test(url);
         const raw = await readBody(req);
         let data;
         try { data = JSON.parse(raw); } catch (e) { return json(res, 400, { ok: false, error: 'JSON 解析失败' }); }
@@ -141,27 +162,39 @@ const server = http.createServer(async (req, res) => {
         if (fs.existsSync(CONFIG_FILE)) {
           fs.writeFileSync(path.join(HISTORY_DIR, stamp() + '.json'), fs.readFileSync(CONFIG_FILE));
         }
-        // 私有版本号自增：以「已落盘文件」里的计数作为权威，每次发布严格 +1。
-        // 不依赖后台传来的版本，避免浏览器端草稿回传导致重复计数；
+        // 私有版本号：以「已落盘文件」里的计数作为权威，不信任浏览器草稿回传，避免重复计数。
+        // 正式同步 GitHub：严格 +1 重编码；本地预览：沿用已落盘的版本号（测试不消耗版本）。
         // 编码格式只有我们自己理解（见 tools/version-codec.js）。
         let verInfo;
         try {
           const prevObj = fs.existsSync(CONFIG_FILE) ? JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) : null;
-          verInfo = require('./tools/version-codec').nextVersion(prevObj || data);
-        } catch (e) { verInfo = { versionSeq: 1, version: 'WJ-DEV' }; }
+          if (wantPush) {
+            verInfo = require('./tools/version-codec').nextVersion(prevObj || data);
+          } else {
+            verInfo = {
+              version: (prevObj && prevObj.version) || data.version || '',
+              versionSeq: (prevObj && prevObj.versionSeq) || data.versionSeq || 0
+            };
+          }
+        } catch (e) { verInfo = wantPush ? { versionSeq: 1, version: 'WJ-DEV' } : { versionSeq: 0, version: '' }; }
         data.versionSeq = verInfo.versionSeq;
         data.version = verInfo.version;
+        stripLegacyFxTick(data);   // 剥掉特效模块的历史 tick 死字段，防止旧草稿回潮
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2));
         // 同步刷新静态站副本；失败只告警，不影响本次发布结果
         try { require('./tools/export-static-config')(); }
         catch (e) { console.warn('静态配置副本生成失败：' + (e && e.message || e)); }
-        // 发布即同步到 GitHub（后台文件已 gitignore，不会进仓库）；失败仅告警
+        // 同步到 GitHub（后台文件已 gitignore，不会进仓库）；本地预览跳过，失败仅告警
         let github = null;
-        try { github = await gitSync(); }
-        catch (e) { github = { ok: false, message: '同步未执行：' + (e && e.message || e) }; }
-        if (github) {
-          if (github.ok && github.pushed) console.log('[github] 已同步到远程');
-          else console.warn('[github] ' + (github.message || '未同步'));
+        if (wantPush) {
+          try { github = await gitSync(); }
+          catch (e) { github = { ok: false, message: '同步未执行：' + (e && e.message || e) }; }
+          if (github) {
+            if (github.ok && github.pushed) console.log('[github] 已同步到远程');
+            else console.warn('[github] ' + (github.message || '未同步'));
+          }
+        } else {
+          github = { ok: true, pushed: false, message: '本地预览已更新，未同步 GitHub' };
         }
         return json(res, 200, { ok: true, savedAt: new Date().toISOString(), github: github,
           version: data.version, versionSeq: data.versionSeq });

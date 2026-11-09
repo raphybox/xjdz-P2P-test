@@ -66,6 +66,7 @@
         <div class="fp-top"><div class="fp-ident"><span id="pClassName" class="fp-name">—</span><span id="pNick" class="fp-nick">—</span></div><span class="fp-side">我方</span></div>
         <div class="hp-track"><div id="pShieldBar" class="shield-bar"></div><div id="pHpBar" class="hp-bar"></div></div>
         <div class="fp-bottom"><span id="pHpText" class="hp-text">0 / 0</span><span id="pScore" class="score-text">回合胜 0</span></div>
+        <div id="pBuffs" class="buff-bar" aria-label="我方状态"></div>
         <div id="pSkills" class="mini-skills"></div>
       </div>
 
@@ -80,6 +81,7 @@
         <div class="fp-top"><span class="fp-side">对手</span><div class="fp-ident"><span id="eClassName" class="fp-name">—</span><span id="eNick" class="fp-nick">—</span></div></div>
         <div class="hp-track"><div id="eShieldBar" class="shield-bar"></div><div id="eHpBar" class="hp-bar"></div></div>
         <div class="fp-bottom"><span id="eScore" class="score-text">回合胜 0</span><span id="eHpText" class="hp-text">0 / 0</span></div>
+        <div id="eBuffs" class="buff-bar" aria-label="对手状态"></div>
         <div id="eSkills" class="mini-skills"></div>
       </div>
     </div>
@@ -107,6 +109,7 @@
       <div class="result-actions">
         <button id="rematchBtn" class="primary-btn" type="button">再战一局（同职业）</button>
         <button id="shareResultBtn" class="ghost-btn" type="button">分享码 · 发给好友</button>
+        <button id="logResultBtn" class="ghost-btn" type="button">战斗记录</button>
         <button id="changeBtn" class="ghost-btn" type="button">更换职业</button>
       </div>
     </div>
@@ -145,6 +148,7 @@
 <div id="logModal" class="modal" hidden>
   <div class="modal-card log-modal-card">
     <div class="modal-head"><h3>战斗记录</h3><button id="closeLogBtn" class="icon-btn" type="button">关闭</button></div>
+    <div id="dmgSummary" class="dmg-summary"></div>
     <div id="battleLog" class="battle-log log-modal-body"></div>
   </div>
 </div>
@@ -241,6 +245,12 @@
 <script src="skin-render.js"></script>
 <script src="config-loader.js"></script>
 <script src="ui-layout.js"></script>
+<!-- 模块化技能系统：pixelfx 特效目录与运行时、技能模块编译器、共用执行内核 -->
+<script src="data/pixelfx-catalog.js"></script>
+<script src="pixelfx-runtime.js"></script>
+<script src="motion-engine.js"></script>
+<script src="skill-modules.js"></script>
+<script src="skill-effects.js"></script>
 <script src="game.js"></script>
 </body>
 </html>
