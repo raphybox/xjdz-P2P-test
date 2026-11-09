@@ -607,7 +607,11 @@
 
   function p2pStatus(text) {
     const el = $('p2pStatus');
-    if (el) el.textContent = text;
+    if (el) { el.textContent = text; el.style.color = ''; }
+  }
+  function p2pStatusBad(text) {
+    const el = $('p2pStatus');
+    if (el) { el.textContent = text; el.style.color = 'var(--bad, #e5484d)'; }
   }
   function p2pMsg(id, text, kind) {
     const el = $(id);
@@ -674,6 +678,7 @@
       P2P.net.opts.onCtrl = p2pOnCtrl;
       P2P.net.opts.onClose = function (why) { p2pOnClose(why || '连接关闭'); };
       P2P.net.opts.onState = function (text) { p2pStatus(text); };
+      P2P.net.opts.onFail = function (msg) { p2pStatusBad(msg); };
     } catch (e) {
       p2pMsg('p2pHostMsg', '生成失败：' + e.message, 'bad');
       P2P.active = false;
@@ -716,6 +721,7 @@
       P2P.net.opts.onCtrl = p2pOnCtrl;
       P2P.net.opts.onClose = function (why) { p2pOnClose(why || '连接关闭'); };
       P2P.net.opts.onState = function (text) { p2pStatus(text); };
+      P2P.net.opts.onFail = function (msg) { p2pStatusBad(msg); };
     } catch (e) {
       p2pMsg('p2pJoinMsg', '生成失败：' + e.message, 'bad');
       P2P.active = false;

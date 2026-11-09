@@ -147,9 +147,19 @@
     });
   }
 
+  /* 从对端 SDP 里数候选类型（诊断用） */
+  function countCand(sdp) {
+    var stats = { host: 0, srflx: 0, prflx: 0, relay: 0 };
+    String(sdp || '').split(/[\r\n]+/).forEach(function (line) {
+      var m = line.match(/^a=candidate:.* typ (\w+)/);
+      if (m && stats[m[1]] != null) stats[m[1]]++;
+    });
+    return stats;
+  }
+
   /* ---------- 会话 ---------- */
 
-  /* opts: { onReady(), onCtrl(obj), onGame(obj|string), onClose(), onState(text) } */
+  /* opts: { onReady(), onCtrl(obj), onGame(obj|string), onClose(), onState(text), onFail(text) } */
   function Session(opts) {
     this.opts = opts || {};
     this.pc = null;
@@ -158,10 +168,51 @@
     this.ready = false;
     this.closed = false;
     this.stats = { host: 0, srflx: 0, relay: 0 };
+    this._remoteSdp = null;
+    this._watchdog = null;
   }
 
   Session.prototype._state = function (text) {
     if (typeof this.opts.onState === 'function') this.opts.onState(text);
+  };
+
+  Session.prototype._fail = function (text) {
+    if (typeof this.opts.onFail === 'function') this.opts.onFail(text);
+  };
+
+  /* 没有候选可配时 Chrome 会一直停在 connecting、不触发 failed，
+     所以必须在应用应答码后加超时兜底，否则用户只会看到「等待连接建立」没下文。 */
+  Session.prototype._armWatchdog = function () {
+    var self = this;
+    this._cancelWatchdog();
+    this._watchdog = setTimeout(function () {
+      self._watchdog = null;
+      if (self.closed || self.ready || !self.pc) return;
+      var cs = self.pc.connectionState, is = self.pc.iceConnectionState;
+      if (cs === 'connected' || is === 'connected' || is === 'completed') return;
+      var L = self.stats, R = countCand(self._remoteSdp);
+      var localTotal = L.host + L.srflx + L.relay;
+      var remoteTotal = R.host + R.srflx + R.relay;
+      var msg;
+      if (localTotal === 0 || remoteTotal === 0) {
+        msg = '连接超时 · 有一端连候选地址都没收集到（网络被严格限制）。请两端刷新页面后重新创建房间。';
+      } else if (L.relay === 0 && R.relay === 0) {
+        msg = '连接超时 · 双方都没有中继候选，直连被 NAT 挡住。请确认两端都能访问 /api/turn 拿到 TURN 凭证（可在地址栏直接打开 ' +
+          '/api/turn 看是否返回 JSON），然后刷新重试。';
+      } else if (L.relay === 0 || R.relay === 0) {
+        msg = '连接超时 · 只有一端拿到中继候选（本端 relay ' + L.relay + ' / 对端 relay ' + R.relay +
+          '）。让没拿到的一端刷新页面重试。';
+      } else {
+        msg = '连接超时 · 两端都有中继候选但仍未连通（本端 host ' + L.host + ' / srflx ' + L.srflx + ' / relay ' + L.relay +
+          '）。凭证可能已过期或 TURN 端口被封，请重新生成邀请码再试一次。';
+      }
+      self._state('连接超时');
+      self._fail(msg);
+    }, 20000);
+  };
+
+  Session.prototype._cancelWatchdog = function () {
+    if (this._watchdog) { clearTimeout(this._watchdog); this._watchdog = null; }
   };
 
   Session.prototype._bind = function (ch, kind) {
@@ -185,6 +236,7 @@
   Session.prototype._checkReady = function () {
     if (this.ctrl && this.game && this.ctrl.readyState === 'open' && this.game.readyState === 'open') {
       this.ready = true;
+      this._cancelWatchdog();
       this._state('已连接 · 双向通道就绪');
       if (typeof this.opts.onReady === 'function') this.opts.onReady();
     }
@@ -194,6 +246,7 @@
     if (this.closed) return;
     this.closed = true;
     this.ready = false;
+    this._cancelWatchdog();
     if (typeof this.opts.onClose === 'function') this.opts.onClose(why);
   };
 
@@ -275,8 +328,11 @@
   Session.hostFinish = async function (session, answerCode) {
     var ans = await unpack(answerCode);
     if (ans.t !== 'answer') throw new Error('这不是应答码，请确认复制的是好友回传的那段');
+    session._remoteSdp = ans.sdp;
     await session.pc.setRemoteDescription({ type: 'answer', sdp: ans.sdp });
-    session._state('应答码已应用，等待连接建立…');
+    var L = session.stats;
+    session._state('应答码已应用，等待连接建立…（本端候选 host ' + L.host + ' · srflx ' + L.srflx + ' · relay ' + L.relay + '）');
+    session._armWatchdog();
     return session;
   };
 
@@ -299,6 +355,8 @@
     await pc.setLocalDescription(answer);
     await waitIce(pc, effectiveTurn() ? 10000 : 3500);
     var code = await pack({ t: 'answer', sdp: pc.localDescription.sdp, ty: pc.localDescription.type });
+    s._remoteSdp = off.sdp;
+    s._armWatchdog();
     s._state('应答码已生成，请复制发给房主');
     // 兜底：连接迟迟建不起来时给出提示
     setTimeout(function () {
