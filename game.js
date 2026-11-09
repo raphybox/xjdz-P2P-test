@@ -4146,6 +4146,12 @@
   bindP2P('p2pRegenBtn', p2pHostCreate);
   bindP2P('p2pFinishBtn', p2pHostFinish);
   bindP2P('p2pAcceptBtn', p2pJoinAccept);
+  bindP2P('p2pJoinBtn', () => {
+    p2pMsg('p2pJoinMsg', null);
+    p2pStage('p2pStageJoin');
+    const inp = $('p2pOfferIn');
+    if (inp) inp.focus();
+  });
   bindP2P('p2pCopyOffer', () => p2pCopy('p2pOfferOut', 'p2pHostMsg'));
   bindP2P('p2pCopyAnswer', () => p2pCopy('p2pAnswerOut', 'p2pJoinMsg'));
 
