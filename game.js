@@ -631,26 +631,26 @@
     if (!P2P.active) p2pStage('p2pStageSel');
   }
 
-  function p2pMakeSession(role) {
-    P2P.role = role;
-    P2P.active = true;
-    return new NET.Session({
-      onReady: function () {
-        p2pStatus('已连接 · 通道就绪，开始选择职业');
-        p2pSend({ k: 'hello', nick: nickName() });
-        // 连上就回到选职业界面，双方各自选职业后按「开始对战」
-        p2pStage('p2pStageSel');
-        $('p2pModal').hidden = true;
-        switchScreen('start');
-        showBanner('好友已连接', '各自选择职业，点击「开始对战」', 2200);
-      },
-      onCtrl: p2pOnCtrl,
-      onGame: function (data) {
-        if (P2P.role === 'guest' && P2P.buf && data && data.k === 's') P2P.buf.push(data);
-      },
-      onClose: function (why) { p2pOnClose(why || '连接关闭'); },
-      onState: function (text) { p2pStatus(text); }
-    });
+  /* 统一给会话挂满全部回调——六个通道缺一不可：
+     onReady(开局横幅) / onCtrl(对局事件) / onGame(快照入缓冲，仅客机)
+     / onClose(断线) / onState(状态行) / onFail(超时诊断) */
+  function p2pAttachHandlers(bannerTitle) {
+    P2P.net.opts.onReady = function () {
+      p2pStatus('已连接 · 通道就绪，开始选择职业');
+      p2pSend({ k: 'hello', nick: nickName() });
+      $('p2pModal').hidden = true;
+      switchScreen('start');
+      showBanner(bannerTitle, '各自选择职业，点击「开始对战」', 2200);
+    };
+    P2P.net.opts.onCtrl = p2pOnCtrl;
+    P2P.net.opts.onGame = function (data) {
+      if (P2P.role !== 'guest' || !data || data.k !== 's') return;
+      if (!P2P.buf) P2P.buf = new SYNC.SnapBuf();   // 自愈：缓冲意外缺失时补建
+      P2P.buf.push(data);
+    };
+    P2P.net.opts.onClose = function (why) { p2pOnClose(why || '连接关闭'); };
+    P2P.net.opts.onState = function (text) { p2pStatus(text); };
+    P2P.net.opts.onFail = function (msg) { p2pStatusBad(msg); };
   }
 
   async function p2pHostCreate() {
@@ -665,20 +665,10 @@
       P2P.net = made.session;
       P2P.role = 'host';
       P2P.active = true;
+      p2pAttachHandlers('好友已连接');
       $('p2pOfferOut').value = made.code;
       p2pMsg('p2pHostMsg', '邀请码已生成，发给好友；收到应答码后点「完成连接」', 'good');
       p2pStatus('等待好友应答…');
-      P2P.net.opts.onReady = function () {
-        p2pStatus('已连接 · 通道就绪，开始选择职业');
-        p2pSend({ k: 'hello', nick: nickName() });
-        $('p2pModal').hidden = true;
-        switchScreen('start');
-        showBanner('好友已连接', '各自选择职业，点击「开始对战」', 2200);
-      };
-      P2P.net.opts.onCtrl = p2pOnCtrl;
-      P2P.net.opts.onClose = function (why) { p2pOnClose(why || '连接关闭'); };
-      P2P.net.opts.onState = function (text) { p2pStatus(text); };
-      P2P.net.opts.onFail = function (msg) { p2pStatusBad(msg); };
     } catch (e) {
       p2pMsg('p2pHostMsg', '生成失败：' + e.message, 'bad');
       P2P.active = false;
@@ -709,19 +699,9 @@
       P2P.role = 'guest';
       P2P.active = true;
       P2P.buf = new SYNC.SnapBuf();
+      p2pAttachHandlers('已连接房主');
       $('p2pAnswerOut').value = made.code;
       p2pMsg('p2pJoinMsg', '应答码已生成！复制发给房主，等房主完成连接', 'good');
-      P2P.net.opts.onReady = function () {
-        p2pStatus('已连接 · 通道就绪，开始选择职业');
-        p2pSend({ k: 'hello', nick: nickName() });
-        $('p2pModal').hidden = true;
-        switchScreen('start');
-        showBanner('已连接房主', '选择职业，点击「开始对战」', 2200);
-      };
-      P2P.net.opts.onCtrl = p2pOnCtrl;
-      P2P.net.opts.onClose = function (why) { p2pOnClose(why || '连接关闭'); };
-      P2P.net.opts.onState = function (text) { p2pStatus(text); };
-      P2P.net.opts.onFail = function (msg) { p2pStatusBad(msg); };
     } catch (e) {
       p2pMsg('p2pJoinMsg', '生成失败：' + e.message, 'bad');
       P2P.active = false;
