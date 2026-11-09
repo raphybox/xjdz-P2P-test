@@ -331,7 +331,10 @@
     guestPick: false, myPickDone: false,
     guestAim: null, guestLaunched: false, myLaunched: false,
     buf: null,            // 客机快照缓冲（WowPinballSync.SnapBuf）
-    snapAcc: 0            // 房主快照节拍
+    snapAcc: 0,           // 房主快照节拍
+    noSnapT: 0,           // 客机本回合「一帧快照都没收到」的累计时长
+    noSnapWarned: false,
+    snapLogged: false
   };
 
   const NET = window.WowPinballNet || null;
@@ -510,6 +513,7 @@
     G.roundTime = CONFIG.ROUND_SECONDS;
     G.phase = 'fighting';
     if (P2P.buf) { P2P.buf.snaps = []; P2P.buf.renderT = null; }
+    P2P.noSnapT = 0; P2P.noSnapWarned = false; P2P.snapLogged = false;
     [G.player, G.enemy].forEach(f => { f._p2pHp = null; });
     dom.phaseLabel.textContent = '对撞中';
     showBanner('第 ' + G.round + ' 回合', G.playerClass.name + '  对阵  ' + G.enemyClass.name, 900);
@@ -572,6 +576,20 @@
   function p2pGuestFrame(dt) {
     const buf = P2P.buf;
     if (!buf) return;
+    // 快照链路自检：没有任何快照时给出可见告警，首包到达时给一次确认日志
+    if (buf.latest()) {
+      P2P.noSnapT = 0;
+      if (!P2P.snapLogged) {
+        P2P.snapLogged = true;
+        addLog('联机快照已接通', 'good');
+      }
+    } else {
+      P2P.noSnapT += dt;
+      if (P2P.noSnapT > 2.5 && !P2P.noSnapWarned) {
+        P2P.noSnapWarned = true;
+        addLog('联机：未收到房主的对战快照，弹珠与血条无法同步（请确认两端都是最新版本）', 'bad');
+      }
+    }
     buf.advance(dt);
     buf.resyncIfNeeded();
     const sm = buf.sample();

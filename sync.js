@@ -39,6 +39,9 @@
     // 乱序丢弃：clock 回退的包直接扔掉
     if (this.snaps.length && s[1] < this.snaps[this.snaps.length - 1].s[1]) return;
     this.snaps.push(snap);
+    // 首包自动启动渲染时钟：客机每回合会清空缓冲并把 renderT 置 null，
+    // 若没有这一步，sample() 永远返回 null，快照堆满缓冲却一帧都显示不出来。
+    if (this.renderT == null) this.renderT = s[1] - this.delay;
     if (this.snaps.length > 40) this.snaps.shift();
   };
 

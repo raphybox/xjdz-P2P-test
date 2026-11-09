@@ -38,7 +38,8 @@ function mk(t, x) {
 const buf2 = new S.SnapBuf();
 buf2.push(mk(3.50, 100));
 buf2.push(mk(3.60, 120));
-assert.strictEqual(buf2.sample(), null, '渲染时钟未启动时 sample 应为 null');
+assert.ok(Math.abs(buf2.renderT - (3.50 - 0.12)) < 0.001, '首包应自动启动渲染时钟（否则客机永远显示不了快照）');
+assert.ok(buf2.sample(), '首包后 sample 不应为 null');
 buf2.startAt(3.55);                    // renderT = 3.55 - 0.12 = 3.43
 let sm = buf2.sample();
 assert.strictEqual(sm.p.x, 100, '渲染时钟早于首帧 → 取首帧');
@@ -57,4 +58,15 @@ buf2.startAt(2.9);                     // 落后最新 3.60 超过 0.6s
 buf2.resyncIfNeeded();
 assert.ok(Math.abs(buf2.renderT - (3.60 - 0.12)) < 0.001, 'resync 后 renderT 应为 latest - delay');
 
-console.log('test_p2p_sync: 12 assertions passed');
+// 5) 回合切换：客机清空缓冲 + renderT=null 后，下一回合首包应重新启动时钟
+const buf3 = new S.SnapBuf();
+buf3.push(mk(10.0, 50));
+buf3.snaps = [];
+buf3.renderT = null;
+assert.strictEqual(buf3.sample(), null, '回合切换重置后应暂无可渲染帧');
+buf3.push(mk(20.0, 60));
+assert.ok(Math.abs(buf3.renderT - (20.0 - 0.12)) < 0.001, '新回合首包应重新启动渲染时钟');
+const sm3 = buf3.sample();
+assert.ok(sm3 && sm3.p.x === 60, '新回合首包立即可渲染');
+
+console.log('test_p2p_sync: 16 assertions passed');
