@@ -90,7 +90,15 @@
     (arr || []).forEach(function (item) {
       if (!item || !item.urls) return;
       var list = Object.prototype.toString.call(item.urls) === '[object Array]' ? item.urls : [item.urls];
-      list.forEach(function (u) { if (/^turns?:/i.test(String(u))) urls.push(String(u)); });
+      list.forEach(function (u) {
+        if (!/^turns?:/i.test(String(u))) return;
+        u = String(u);
+        urls.push(u);
+        // 补 TCP 传输变体：部分网络 UDP 高位端口被封，中继分配成功但检查全挂
+        if (/^turn:/i.test(u) && !/transport=/i.test(u) && urls.indexOf(u + '?transport=tcp') < 0) {
+          urls.push(u + '?transport=tcp');
+        }
+      });
       if (item.username && !user) user = item.username;
       if (item.credential && !cred) cred = item.credential;
     });
@@ -181,34 +189,67 @@
   };
 
   /* 没有候选可配时 Chrome 会一直停在 connecting、不触发 failed，
-     所以必须在应用应答码后加超时兜底，否则用户只会看到「等待连接建立」没下文。 */
-  Session.prototype._armWatchdog = function () {
+     所以必须有超时兜底。
+     房主在「应用应答码后」上 20s 看门狗，时机正确；
+     客机在「生成应答码时」就只能上表——但此刻连接能否建立取决于房主何时点
+     「完成连接」，20s 判死会大量误报，所以客机用两段式：20s 只提醒，45s 才判死。 */
+  Session.prototype._armWatchdog = function (isGuest) {
     var self = this;
     this._cancelWatchdog();
-    this._watchdog = setTimeout(function () {
-      self._watchdog = null;
-      if (self.closed || self.ready || !self.pc) return;
+    var alive = function () {
+      if (self.closed || self.ready || !self.pc) return true;
       var cs = self.pc.connectionState, is = self.pc.iceConnectionState;
-      if (cs === 'connected' || is === 'connected' || is === 'completed') return;
-      var L = self.stats, R = countCand(self._remoteSdp);
-      var localTotal = L.host + L.srflx + L.relay;
-      var remoteTotal = R.host + R.srflx + R.relay;
-      var msg;
-      if (localTotal === 0 || remoteTotal === 0) {
-        msg = '连接超时 · 有一端连候选地址都没收集到（网络被严格限制）。请两端刷新页面后重新创建房间。';
-      } else if (L.relay === 0 && R.relay === 0) {
-        msg = '连接超时 · 双方都没有中继候选，直连被 NAT 挡住。请确认两端都能访问 /api/turn 拿到 TURN 凭证（可在地址栏直接打开 ' +
-          '/api/turn 看是否返回 JSON），然后刷新重试。';
-      } else if (L.relay === 0 || R.relay === 0) {
-        msg = '连接超时 · 只有一端拿到中继候选（本端 relay ' + L.relay + ' / 对端 relay ' + R.relay +
-          '）。让没拿到的一端刷新页面重试。';
+      return cs === 'connected' || is === 'connected' || is === 'completed';
+    };
+    var hard = function () {
+      self._watchdog = null;
+      if (alive()) return;
+      self._hardFail();
+    };
+    if (isGuest) {
+      this._watchdog = setTimeout(function () {
+        if (alive()) return;
+        self._state('还没连上 · 请确认房主已粘贴你的应答码并点了「完成连接」…（继续等待中）');
+        self._watchdog = setTimeout(hard, 25000);
+      }, 20000);
+    } else {
+      this._watchdog = setTimeout(hard, 20000);
+    }
+  };
+
+  /* 判死前先取真实链路数据：连接检查（connectivity check）的收发计数
+     能区分「对方根本没应答」和「双方在互发但都通不过」两种完全不同的故障 */
+  Session.prototype._hardFail = async function () {
+    var self = this;
+    var L = this.stats, R = countCand(this._remoteSdp);
+    var candText = '本端 host ' + L.host + ' / srflx ' + L.srflx + ' / relay ' + L.relay +
+      '；对端 host ' + R.host + ' / srflx ' + R.srflx + ' / relay ' + R.relay;
+    var msg;
+    if (L.host + L.srflx + L.relay === 0 || R.host + R.srflx + R.relay === 0) {
+      msg = '连接超时 · 有一端连候选地址都没收集到（网络被严格限制）。请两端刷新页面后重新创建房间。';
+    } else {
+      var d = null;
+      try {
+        var rep = await this.pc.getStats();
+        var sent = 0, recv = 0;
+        rep.forEach(function (r) {
+          if (r.type === 'candidate-pair' && r.state && r.state !== 'succeeded') {
+            sent += r.requestsSent || 0;
+            recv += r.requestsReceived || 0;
+          }
+        });
+        d = { sent: sent, recv: recv };
+      } catch (e) {}
+      if (d && d.recv > 0) {
+        msg = '连接超时 · 双方都在互发连接检查但始终通不过（' + candText +
+          '）。多半是当前网络封锁了 TURN 端口，建议换一个网络（如手机热点）再试。';
       } else {
-        msg = '连接超时 · 两端都有中继候选但仍未连通（本端 host ' + L.host + ' / srflx ' + L.srflx + ' / relay ' + L.relay +
-          '）。凭证可能已过期或 TURN 端口被封，请重新生成邀请码再试一次。';
+        msg = '连接超时 · 一直没收到对方的连接检查（' + candText +
+          '）。最常见的原因：房主还没点「完成连接」，或应用的是旧应答码——请房主确认连接状态区显示「应答码已应用」，然后重新生成邀请码走一遍。';
       }
-      self._state('连接超时');
-      self._fail(msg);
-    }, 20000);
+    }
+    this._state('连接超时');
+    this._fail(msg);
   };
 
   Session.prototype._cancelWatchdog = function () {
@@ -342,7 +383,7 @@
     await pc.setRemoteDescription({ type: 'answer', sdp: ans.sdp });
     var L = session.stats;
     session._state('应答码已应用，等待连接建立…（本端候选 host ' + L.host + ' · srflx ' + L.srflx + ' · relay ' + L.relay + '）');
-    session._armWatchdog();
+    session._armWatchdog(false);
     return session;
   };
 
@@ -366,14 +407,8 @@
     await waitIce(pc, effectiveTurn() ? 10000 : 3500);
     var code = await pack({ t: 'answer', sdp: pc.localDescription.sdp, ty: pc.localDescription.type });
     s._remoteSdp = off.sdp;
-    s._armWatchdog();
+    s._armWatchdog(true);
     s._state('应答码已生成，请复制发给房主');
-    // 兜底：连接迟迟建不起来时给出提示
-    setTimeout(function () {
-      if (!s.closed && pc.connectionState !== 'connected') {
-        s._state('连接还没建起来 · 把应答码发给房主后请耐心等待');
-      }
-    }, 25000);
     return { session: s, code: code };
   };
 
