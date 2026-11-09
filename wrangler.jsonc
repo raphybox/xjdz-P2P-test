@@ -3,6 +3,10 @@
   "main": "cf-worker.js",
   "compatibility_date": "2026-11-01",
   "routes": [{ "pattern": "xjdz.de5.net", "custom_domain": true }],
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "RoomHub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomHub"] }],
   "assets": {
     "directory": "./dist-site",
     "binding": "ASSETS"

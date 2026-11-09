@@ -60,6 +60,55 @@
     </div>
   </section>
 
+  <!-- ============ 联机房间 ============ -->
+  <section id="roomScreen" class="screen" hidden>
+    <div class="room-shell">
+      <div class="room-head">
+        <div>
+          <h2>联机房间</h2>
+          <p>双方选好职业并都点「准备」后自动开战，状态实时共享。</p>
+        </div>
+        <button id="roomLeaveBtn" class="ghost-btn" type="button">退出房间</button>
+      </div>
+
+      <div class="room-code-panel">
+        <div class="room-code-label">房间邀请码</div>
+        <div id="roomCode" class="room-code">········</div>
+        <div class="room-code-actions">
+          <button id="roomCopyBtn" class="ghost-btn" type="button">复制邀请码</button>
+          <span id="roomCodeHint" class="faint">把 8 位码发给好友，对方输入即可加入，不需要回传任何码</span>
+        </div>
+        <div id="roomMsg" class="ghost-msg" hidden></div>
+      </div>
+
+      <div id="roomStatus" class="room-status">等待好友加入…</div>
+
+      <div class="room-players">
+        <div class="room-player-card" id="roomMyCard">
+          <div class="rp-title">我方 <span id="roomMyRole" class="rp-role">房主</span></div>
+          <div class="rp-nick" id="roomMyNick">—</div>
+          <div class="rp-class" id="roomMyClass">未选择职业</div>
+          <div class="rp-ready" id="roomMyReady">未准备</div>
+        </div>
+        <div class="room-vs">VS</div>
+        <div class="room-player-card" id="roomPeerCard">
+          <div class="rp-title">对手 <span id="roomPeerRole" class="rp-role">好友</span></div>
+          <div class="rp-nick" id="roomPeerNick">等待加入…</div>
+          <div class="rp-class" id="roomPeerClass">未选择职业</div>
+          <div class="rp-ready" id="roomPeerReady">未准备</div>
+        </div>
+      </div>
+
+      <div class="room-class-head">选择本局职业</div>
+      <div id="roomClassGrid" class="room-class-grid"></div>
+
+      <div class="room-footer">
+        <div id="roomSharedHint" class="room-shared">双方状态实时共享 · 两边都准备后才开始</div>
+        <button id="roomReadyBtn" class="primary-btn" type="button" disabled>准备</button>
+      </div>
+    </div>
+  </section>
+
   <!-- ============ 对战 ============ -->
   <section id="battleScreen" class="screen" hidden>
     <div class="scoreboard">
@@ -213,46 +262,30 @@
   </div>
 </div>
 
-<!-- 联机对战弹层：P2P 手动信令（邀请码 / 应答码互换） -->
+<!-- 联机对战弹层：8 位房间码，服务端只中转一次建连信令 -->
 <div id="p2pModal" class="modal" hidden>
   <div class="modal-card ghost-modal-card">
     <div class="modal-head">
-      <h3>联机对战 · 好友直连</h3>
+      <h3>联机对战 · 好友房间</h3>
       <div class="shop-head-right">
-        <span class="faint">数据走两端直连 · 不经服务器</span>
+        <span class="faint">对战数据两端直连 · 服务端只中转一次建连信令</span>
         <button id="closeP2pBtn" class="icon-btn" type="button">关闭</button>
       </div>
     </div>
 
     <div id="p2pStageSel" class="p2p-stage">
-      <div class="p2p-tip">和好友各开一个网页，互换两串码即可建连。第一步你发邀请码，第二步好友回你一段应答码。</div>
+      <div class="p2p-tip">房主创建房间后得到 8 位邀请码；好友输入这串码即可加入，不需要回传任何东西。</div>
       <div class="p2p-choice">
-        <button id="p2pCreateBtn" class="primary-btn" type="button">创建房间（我是房主）</button>
-        <button id="p2pJoinBtn" class="ghost-btn" type="button">加入房间（ paste 邀请码）</button>
+        <button id="p2pCreateBtn" class="primary-btn" type="button">创建房间</button>
+        <button id="p2pJoinBtn" class="ghost-btn" type="button">加入房间</button>
       </div>
       <div id="p2pSelMsg" class="ghost-msg" hidden></div>
     </div>
 
-    <div id="p2pStageHost" class="p2p-stage" hidden>
-      <div class="share-code-head"><span>第 1 步 · 邀请码</span><span class="faint">复制发给好友</span></div>
-      <textarea id="p2pOfferOut" class="textarea ghost-code" rows="5" readonly placeholder="点击「创建房间」后自动生成"></textarea>
-      <div class="share-actions">
-        <button id="p2pCopyOffer" class="primary-btn" type="button">复制邀请码</button>
-        <button id="p2pRegenBtn" class="ghost-btn" type="button">重新生成</button>
-      </div>
-      <div class="share-code-head"><span>第 2 步 · 好友的应答码</span><span class="faint">好友回传后粘贴到下面</span></div>
-      <textarea id="p2pAnswerIn" class="textarea ghost-code" rows="4" placeholder="粘贴好友回传的应答码"></textarea>
-      <div class="share-actions"><button id="p2pFinishBtn" class="primary-btn" type="button">完成连接</button></div>
-      <div id="p2pHostMsg" class="ghost-msg" hidden></div>
-    </div>
-
     <div id="p2pStageJoin" class="p2p-stage" hidden>
-      <div class="share-code-head"><span>第 1 步 · 房主的邀请码</span><span class="faint">粘贴房主发来的那段</span></div>
-      <textarea id="p2pOfferIn" class="textarea ghost-code" rows="5" placeholder="粘贴房主的邀请码"></textarea>
-      <div class="share-actions"><button id="p2pAcceptBtn" class="primary-btn" type="button">生成应答码</button></div>
-      <div class="share-code-head"><span>第 2 步 · 你的应答码</span><span class="faint">复制后发给房主，等房主完成连接</span></div>
-      <textarea id="p2pAnswerOut" class="textarea ghost-code" rows="5" readonly placeholder="生成后显示在这里"></textarea>
-      <div class="share-actions"><button id="p2pCopyAnswer" class="ghost-btn" type="button">复制应答码</button></div>
+      <div class="share-code-head"><span>房间邀请码</span><span class="faint">8 位字母 + 数字，不区分大小写</span></div>
+      <input id="p2pRoomCodeIn" class="room-code-input" type="text" maxlength="8" autocomplete="off" spellcheck="false" placeholder="例如 A7KQ2RMX" />
+      <div class="share-actions"><button id="p2pAcceptBtn" class="primary-btn" type="button">加入房间</button></div>
       <div id="p2pJoinMsg" class="ghost-msg" hidden></div>
     </div>
 

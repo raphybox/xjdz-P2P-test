@@ -588,6 +588,70 @@ canvas.cc-orb { background: none; display: block; }
 .p2p-stage .textarea { width: 100%; }
 .p2p-stage .ghost-msg { margin-top: 10px; font-size: 12px; }
 #p2pStatus { font-size: 12px; line-height: 1.6; min-height: 18px; word-break: break-all; }
+.room-code-input {
+  width: 100%; padding: 14px 16px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--text);
+  font-size: 24px; letter-spacing: 8px; text-align: center;
+  text-transform: uppercase; font-weight: 700; font-family: var(--font);
+}
+.room-code-input::placeholder { letter-spacing: 2px; font-size: 15px; color: var(--text-faint); font-weight: 400; }
+
+/* ---------- 联机房间页面 ---------- */
+.room-shell {
+  max-width: 860px; margin: 0 auto; padding: 22px 24px 28px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.room-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.room-head h2 { margin: 0 0 6px; font-size: 22px; }
+.room-head p { margin: 0; font-size: 12.5px; color: var(--text-dim); }
+.room-code-panel {
+  padding: 18px 20px; border-radius: 10px; border: 1px solid var(--line-soft);
+  background: var(--bg-2); text-align: center;
+}
+.room-code-label { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+.room-code {
+  font-size: 40px; font-weight: 800; letter-spacing: 12px; line-height: 1.25;
+  color: var(--accent-2); font-variant-numeric: tabular-nums;
+}
+.room-code-actions { display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+.room-code-actions .faint { font-size: 12px; }
+.room-status {
+  margin: 16px 0; padding: 11px 14px; border-radius: 8px;
+  background: var(--panel-2); border-left: 3px solid var(--accent);
+  font-size: 13px; color: var(--text);
+}
+.room-players { display: flex; align-items: stretch; gap: 12px; }
+.room-player-card {
+  flex: 1; min-width: 0; padding: 14px 16px; border-radius: 10px;
+  background: var(--bg-2); border: 1px solid var(--line-soft);
+}
+.room-player-card.is-ready { border-color: var(--good); }
+.room-vs { display: flex; align-items: center; font-size: 13px; font-weight: 800; color: var(--text-faint); letter-spacing: 2px; }
+.rp-title { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+.rp-role { margin-left: 6px; padding: 2px 7px; border-radius: 20px; background: var(--panel-2); font-size: 10.5px; }
+.rp-nick { font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-class { margin-top: 4px; font-size: 12.5px; color: var(--text-dim); }
+.rp-ready { margin-top: 12px; font-size: 12px; font-weight: 700; color: var(--text-faint); }
+.rp-ready.on { color: var(--good); }
+.room-class-head { margin: 22px 0 10px; font-size: 13px; color: var(--text-dim); }
+.room-class-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.room-class-btn {
+  padding: 10px 11px; border-radius: 9px; text-align: left;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--text);
+}
+.room-class-btn.selected { border-color: var(--cls-color, var(--accent)); background: var(--panel-2); }
+.room-class-btn.locked { opacity: .42; }
+.rcb-name { font-weight: 700; font-size: 13px; color: var(--cls-color, var(--text)); }
+.rcb-trait { margin-top: 3px; font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 22px; }
+.room-shared { font-size: 12.5px; color: var(--text-dim); line-height: 1.6; }
+.room-footer .primary-btn { flex: none; min-width: 120px; }
+@media (max-width: 680px) {
+  .room-class-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .room-players { flex-direction: column; }
+  .room-vs { justify-content: center; }
+  .room-code { font-size: 30px; letter-spacing: 8px; }
+}
 
 /* ---------- 配置更新提示 ---------- */
 .reload-notice {

@@ -71,6 +71,8 @@
   var LS_POLICY = 'wbnet.policy';
   // 同域优先（部署在 xjdz.de5.net 时 /api/turn 直接可达），本地开发回落到线上签发服务
   var TURN_SVC_LIST = ['/api/turn', 'https://xjdz.de5.net/api/turn'];
+  /* 房间信令服务：同域优先，本地开发回落到线上服务 */
+  var ROOM_API_LIST = ['/api/room', 'https://xjdz.de5.net/api/room'];
 
   var remoteTurn = null;
 
@@ -178,6 +180,10 @@
     this.stats = { host: 0, srflx: 0, relay: 0 };
     this._remoteSdp = null;
     this._watchdog = null;
+    this.roomCode = null;         // 8 位房间码（短码模式）
+    this.roomRole = null;         // 'host' | 'guest'
+    this.roomMode = !!(opts && opts.roomMode);
+    this._roomClosed = false;
   }
 
   Session.prototype._state = function (text) {
@@ -209,7 +215,9 @@
     if (isGuest) {
       this._watchdog = setTimeout(function () {
         if (alive()) return;
-        self._state('还没连上 · 请确认房主已粘贴你的应答码并点了「完成连接」…（继续等待中）');
+        self._state(self.roomMode
+          ? '还没连上 · 正在等链路建立（继续等待中）…'
+          : '还没连上 · 请确认房主已粘贴你的应答码并点了「完成连接」…（继续等待中）');
         self._watchdog = setTimeout(hard, 25000);
       }, 20000);
     } else {
@@ -244,8 +252,10 @@
         msg = '连接超时 · 双方都在互发连接检查但始终通不过（' + candText +
           '）。多半是当前网络封锁了 TURN 端口，建议换一个网络（如手机热点）再试。';
       } else {
-        msg = '连接超时 · 一直没收到对方的连接检查（' + candText +
-          '）。最常见的原因：房主还没点「完成连接」，或应用的是旧应答码——请房主确认连接状态区显示「应答码已应用」，然后重新生成邀请码走一遍。';
+        msg = '连接超时 · 一直没收到对方的连接检查（' + candText + '）。' +
+          (this.roomMode
+            ? '请双方刷新页面，用新的房间码重新建连。'
+            : '最常见的原因：房主还没点「完成连接」，或应用的是旧应答码——请房主确认连接状态区显示「应答码已应用」，然后重新生成邀请码走一遍。');
       }
     }
     this._state('连接超时');
@@ -276,8 +286,10 @@
 
   Session.prototype._checkReady = function () {
     if (this.ctrl && this.game && this.ctrl.readyState === 'open' && this.game.readyState === 'open') {
+      if (this.ready) return;
       this.ready = true;
       this._cancelWatchdog();
+      this._roomClose();               // 建连完成即销毁服务端房间信令
       this._state('已连接 · 双向通道就绪');
       if (typeof this.opts.onReady === 'function') this.opts.onReady();
     }
@@ -288,7 +300,17 @@
     this.closed = true;
     this.ready = false;
     this._cancelWatchdog();
+    this._roomClose();
     if (typeof this.opts.onClose === 'function') this.opts.onClose(why);
+  };
+
+  /* 关闭服务端房间（只删信令，不影响已建立的 P2P 连接） */
+  Session.prototype._roomClose = function () {
+    if (!this.roomCode || this._roomClosed) return;
+    this._roomClosed = true;
+    try {
+      roomCall('close', { method: 'POST', body: { code: this.roomCode } }).catch(function () {});
+    } catch (e) {}
   };
 
   Session.prototype.sendCtrl = function (obj) {
@@ -305,6 +327,7 @@
 
   Session.prototype.close = function () {
     this.sendCtrl({ k: 'bye' });
+    this._roomClose();
     var self = this;
     setTimeout(function () {
       self.closed = true;
@@ -356,7 +379,7 @@
       // 配了 TURN 就放宽收集窗口：中继分配在慢网络下可能超过 3.5s
       await waitIce(pc, effectiveTurn() ? 10000 : 3500);
       var code = await pack({ t: 'offer', sdp: pc.localDescription.sdp, ty: pc.localDescription.type });
-      s._state('邀请码已生成 · 中继候选 ' + s.stats.relay + ' 个');
+      s._state(s.roomMode ? '正在创建房间…' : '邀请码已生成 · 中继候选 ' + s.stats.relay + ' 个');
       return { session: s, code: code };
     } catch (e) {
       s._teardown('创建失败：' + e.message);
@@ -408,13 +431,102 @@
     var code = await pack({ t: 'answer', sdp: pc.localDescription.sdp, ty: pc.localDescription.type });
     s._remoteSdp = off.sdp;
     s._armWatchdog(true);
-    s._state('应答码已生成，请复制发给房主');
+    s._state(s.roomMode ? '已加入房间，正在建立直连…' : '应答码已生成，请复制发给房主');
     return { session: s, code: code };
+  };
+
+  /* ---------- 8 位房间码：服务端只中转一次建连信令 ---------- */
+
+  function normalizeRoomCode(v) {
+    return String(v == null ? '' : v).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+  }
+
+  function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  /* 同域优先，失败回落线上服务；房间查询一律 no-store */
+  async function roomCall(act, o) {
+    o = o || {};
+    var lastErr = null;
+    for (var i = 0; i < ROOM_API_LIST.length; i++) {
+      try {
+        var init = { method: o.method || 'GET', cache: 'no-store' };
+        if (o.body) {
+          init.headers = { 'Content-Type': 'application/json' };
+          init.body = JSON.stringify(o.body);
+        }
+        var r = await fetch(ROOM_API_LIST[i] + '/' + act + (o.query || ''), init);
+        var j = await r.json();
+        j._status = r.status;
+        return j;
+      } catch (e) { lastErr = e; }
+    }
+    throw new Error('房间服务连接失败：' + ((lastErr && lastErr.message) || '网络异常'));
+  }
+
+  /* 房主：创建房间 → 拿到 8 位码 → 后台自动轮询好友的应答并应用，无需手动复制 */
+  Session.createHostRoom = async function (opts) {
+    opts = opts || {};
+    var made = await Session.createHost(Object.assign({}, opts, { roomMode: true }));
+    var res = await roomCall('create', {
+      method: 'POST',
+      body: { offer: made.code, nick: opts.nick || '' },
+    });
+    if (!res || res.error || !res.code) throw new Error((res && res.error) || '创建房间失败');
+    var code = res.code;
+    made.session.roomCode = code;
+    made.session.roomRole = 'host';
+    (async function () {
+      var notified = false;
+      try {
+        for (var i = 0; i < 500; i++) {
+          if (made.session.closed || made.session.ready) return;
+          var st = await roomCall('poll', { query: '?code=' + encodeURIComponent(code) });
+          // 轮询返回时可能刚好已建连、房间已被销毁，此时不能把 404 当故障报出去
+          if (made.session.closed || made.session.ready) return;
+          if (st.error) { made.session._fail('房间已失效：' + st.error); return; }
+          if (st.joined && !notified) {
+            notified = true;
+            if (typeof opts.onRoom === 'function') opts.onRoom({ k: 'joined', nick: st.guest });
+          }
+          if (st.answer) {
+            await Session.hostFinish(made.session, st.answer);
+            return;
+          }
+          await delay(1200);
+        }
+        made.session._fail('等待好友加入超时（10 分钟），请重新创建房间');
+      } catch (e) {
+        if (!made.session.closed && !made.session.ready) made.session._fail('房间服务异常：' + e.message);
+      }
+    })();
+    return { session: made.session, code: code };
+  };
+
+  /* 客机：输入 8 位码 → 查房间 → 生成应答并自动回传服务端，全程无需复制任何码 */
+  Session.joinRoom = async function (rawCode, opts) {
+    opts = opts || {};
+    var code = normalizeRoomCode(rawCode);
+    if (!/^[A-HJ-NP-Z2-9]{8}$/.test(code)) throw new Error('请输入 8 位房间邀请码（字母和数字）');
+    var look = await roomCall('lookup', { query: '?code=' + encodeURIComponent(code) });
+    if (look.error) throw new Error(look.error);
+    var made = await Session.createGuest(look.offer, Object.assign({}, opts, { roomMode: true }));
+    made.session.roomCode = code;
+    made.session.roomRole = 'guest';
+    var ans = await roomCall('answer', {
+      method: 'POST',
+      body: { code: code, answer: made.code, nick: opts.nick || '' },
+    });
+    if (ans.error) {
+      made.session.close();
+      throw new Error(ans.error);
+    }
+    return made;
   };
 
   window.WowPinballNet = {
     Session: Session,
     pack: pack,
-    unpack: unpack
+    unpack: unpack,
+    normalizeRoomCode: normalizeRoomCode
   };
 })();

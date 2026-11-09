@@ -326,7 +326,9 @@
     role: null,           // 'host' | 'guest'
     peerNick: '',
     net: null,
+    roomCode: '',         // 8 位房间码
     myCls: null, peerCls: null, myClsSent: false,
+    myReady: false, peerReady: false,   // 双方准备状态（ctrl 通道实时共享）
     guestOpts: null,      // 房主为客机抽出的技能选项
     guestPick: false, myPickDone: false,
     guestAim: null, guestLaunched: false, myLaunched: false,
@@ -357,8 +359,9 @@
     if (P2P.net) { try { P2P.net.close(); } catch (e) {} }
     P2P.net = null;
     P2P.active = false; P2P.inMatch = false;
-    P2P.role = null; P2P.peerNick = '';
-    P2P.myCls = null; P2P.peerCls = null;
+    P2P.role = null; P2P.peerNick = ''; P2P.roomCode = '';
+    P2P.myCls = null; P2P.peerCls = null; P2P.myClsSent = false;
+    P2P.myReady = false; P2P.peerReady = false;
     P2P.guestOpts = null; P2P.guestPick = false; P2P.myPickDone = false;
     P2P.guestAim = null; P2P.guestLaunched = false; P2P.myLaunched = false;
     P2P.buf = null; P2P.snapAcc = 0;
@@ -370,10 +373,9 @@
     if (!P2P.active) return;
     const wasMatch = P2P.inMatch;
     p2pTeardown(null);
+    G.phase = 'idle';
+    switchScreen('start');
     if (wasMatch) {
-      // 对局中掉线：提示后回到选职业界面
-      G.phase = 'idle';
-      switchScreen('start');
       showBanner('连接已断开', '对手离开了对局（' + (why || '网络中断') + '）', 2400);
       addLog('联机对手已断线，本局中止', 'bad');
     }
@@ -388,15 +390,27 @@
         P2P.peerNick = cleanNick(msg.nick) || '对手';
         if (P2P.active) p2pStatus('已连接 · 对手：' + P2P.peerNick);
         if (P2P.inMatch && dom.asyncTag) dom.asyncTag.textContent = '联机对战 · ' + P2P.peerNick;
+        p2pRoomRender();
+        p2pSendRoomState();        // 对端上线后立刻同步一次我方状态
         break;
       case 'bye':
         p2pOnClose('对方主动退出');
         break;
-      case 'cls':
-        P2P.peerCls = msg.id;
-        if (P2P.inMatch) P2P.inMatch = false;   // 再战流程：重置对局标志
-        p2pStatus('对手已选择职业，就绪');
+      case 'ready':
+        P2P.peerReady = !!msg.ready;
+        P2P.peerCls = msg.cls || P2P.peerCls;
+        if (msg.nick) P2P.peerNick = cleanNick(msg.nick) || P2P.peerNick;
+        p2pRoomRender();
         p2pTryStart();
+        break;
+      case 'cls':   // 旧版本兼容：当作「已准备」
+        P2P.peerCls = msg.id;
+        P2P.peerReady = true;
+        p2pRoomRender();
+        p2pTryStart();
+        break;
+      case 'back_room':
+        p2pBackToRoom(false);
         break;
       case 'start':   // 客机收到：房主宣布开局
         if (P2P.role === 'guest') p2pStartMatch(msg.h, msg.g);
@@ -433,8 +447,11 @@
 
   function p2pTryStart() {
     if (!P2P.active || P2P.role !== 'host') return;
-    if (!P2P.myClsSent || !P2P.peerCls) return;
     if (P2P.inMatch) return;
+    // 双方必须都选好职业并都点「准备」
+    if (!P2P.myReady || !P2P.peerReady || !P2P.myCls || !P2P.peerCls) return;
+    P2P.inMatch = true;
+    p2pRoomStatus('双方已准备，正在进入对局…');
     p2pSend({ k: 'start', h: P2P.myCls, g: P2P.peerCls });
     p2pStartMatch(P2P.myCls, P2P.peerCls);
   }
@@ -640,7 +657,7 @@
     el.style.color = kind === 'bad' ? 'var(--bad, #e5484d)' : kind === 'good' ? 'var(--good, #2f9e63)' : 'var(--muted, #8a8f98)';
   }
   function p2pStage(name) {
-    ['p2pStageSel', 'p2pStageHost', 'p2pStageJoin'].forEach(id => { $(id).hidden = id !== name; });
+    ['p2pStageSel', 'p2pStageJoin'].forEach(id => { const el = $(id); if (el) el.hidden = id !== name; });
   }
 
   function openP2P() {
@@ -649,86 +666,219 @@
     if (!P2P.active) p2pStage('p2pStageSel');
   }
 
-  /* 统一给会话挂满全部回调——六个通道缺一不可：
-     onReady(开局横幅) / onCtrl(对局事件) / onGame(快照入缓冲，仅客机)
-     / onClose(断线) / onState(状态行) / onFail(超时诊断) */
+  /* 会话回调统一生成：六个通道缺一不可（onReady/onCtrl/onGame/onClose/onState/onFail），
+     另加 onRoom（好友已输入房间码，尚未建连时的提示）。 */
+  function p2pSessionOpts(bannerTitle) {
+    return {
+      nick: nickName(),
+      onReady: function () {
+        p2pStatus('已连接 · 通道就绪');
+        $('p2pModal').hidden = true;
+        p2pRoomShow();
+        p2pRoomStatus(bannerTitle + ' · 双方选好职业并都点「准备」后开战');
+        p2pSend({ k: 'hello', nick: nickName() });
+        p2pSendRoomState();
+      },
+      onCtrl: p2pOnCtrl,
+      onGame: function (data) {
+        if (P2P.role !== 'guest' || !data || data.k !== 's') return;
+        if (!P2P.buf) P2P.buf = new SYNC.SnapBuf();   // 自愈：缓冲意外缺失时补建
+        P2P.buf.push(data);
+      },
+      onClose: function (why) { p2pOnClose(why || '连接关闭'); },
+      onState: function (text) { p2pStatus(text); },
+      onFail: function (msg) { p2pStatusBad(msg); p2pRoomMsg(msg, 'bad'); },
+      onRoom: function (ev) {
+        if (ev && ev.k === 'joined') {
+          P2P.peerNick = ev.nick || '好友';
+          p2pRoomStatus('好友「' + P2P.peerNick + '」已输入房间码，正在建立直连…');
+          p2pRoomRender();
+        }
+      }
+    };
+  }
+
   function p2pAttachHandlers(bannerTitle) {
-    P2P.net.opts.onReady = function () {
-      p2pStatus('已连接 · 通道就绪，开始选择职业');
-      p2pSend({ k: 'hello', nick: nickName() });
-      $('p2pModal').hidden = true;
-      switchScreen('start');
-      showBanner(bannerTitle, '各自选择职业，点击「开始对战」', 2200);
+    if (!P2P.net) return;
+    const o = p2pSessionOpts(bannerTitle);
+    Object.keys(o).forEach(k => { P2P.net.opts[k] = o[k]; });
+  }
+
+  /* ---------- 房间页面：8 位码 + 双方状态共享 ---------- */
+
+  function p2pRoomShow() {
+    switchScreen('room');
+    p2pRoomBuildClasses();
+    p2pRoomRender();
+  }
+
+  function p2pRoomMsg(text, kind) {
+    const el = $('roomMsg');
+    if (!el) return;
+    if (!text) { el.hidden = true; el.textContent = ''; return; }
+    el.hidden = false;
+    el.textContent = text;
+    el.style.color = kind === 'bad' ? 'var(--bad)' : kind === 'good' ? 'var(--good)' : 'var(--text-dim)';
+  }
+
+  function p2pRoomStatus(text) { const el = $('roomStatus'); if (el) el.textContent = text; }
+
+  function p2pRoomBuildClasses() {
+    const grid = $('roomClassGrid');
+    if (!grid) return;
+    grid.innerHTML = CLASSES.map(c => {
+      const owned = isOwned(c.id);
+      const picked = P2P.myCls === c.id;
+      return '<button class="room-class-btn' + (owned ? '' : ' locked') + (picked ? ' selected' : '') +
+        '" type="button" data-id="' + c.id + '" style="--cls-color:' + c.color + '">' +
+        '<div class="rcb-name">' + escHtml(c.name) + (owned ? '' : ' · 未解锁') + '</div>' +
+        '<div class="rcb-trait">' + escHtml(c.trait) + '</div></button>';
+    }).join('');
+    grid.querySelectorAll('.room-class-btn').forEach(btn => {
+      btn.addEventListener('click', () => p2pRoomSelectClass(btn.dataset.id));
+    });
+  }
+
+  function p2pRoomSelectClass(id) {
+    const cls = CLASSES.find(c => c.id === id);
+    if (!cls) return;
+    if (!isOwned(id)) { openShop(); return; }
+    P2P.myCls = id;
+    G.selectedClass = cls;
+    p2pRoomBuildClasses();
+    p2pRoomRender();
+    p2pSendRoomState();       // 职业变化也实时共享给对方
+  }
+
+  function p2pSendRoomState() {
+    if (!P2P.active) return;
+    p2pSend({ k: 'ready', ready: P2P.myReady, cls: P2P.myCls, nick: nickName() });
+  }
+
+  function p2pRoomToggleReady() {
+    if (!P2P.active) return;
+    if (!P2P.myCls) { p2pRoomMsg('请先在上面选择一个职业', 'bad'); return; }
+    P2P.myReady = !P2P.myReady;
+    p2pRoomRender();
+    p2pSendRoomState();
+    p2pTryStart();
+  }
+
+  function p2pRoomRender() {
+    const connected = !!(P2P.net && P2P.net.ready);
+    const myName = P2P.myCls ? ((CLASSES.find(c => c.id === P2P.myCls) || {}).name || '—') : '未选择职业';
+    const peerName = P2P.peerCls ? ((CLASSES.find(c => c.id === P2P.peerCls) || {}).name || '—') : '未选择职业';
+    const set = (id, text, cls) => {
+      const el = $(id);
+      if (!el) return;
+      el.textContent = text;
+      if (cls != null) el.className = cls;
     };
-    P2P.net.opts.onCtrl = p2pOnCtrl;
-    P2P.net.opts.onGame = function (data) {
-      if (P2P.role !== 'guest' || !data || data.k !== 's') return;
-      if (!P2P.buf) P2P.buf = new SYNC.SnapBuf();   // 自愈：缓冲意外缺失时补建
-      P2P.buf.push(data);
-    };
-    P2P.net.opts.onClose = function (why) { p2pOnClose(why || '连接关闭'); };
-    P2P.net.opts.onState = function (text) { p2pStatus(text); };
-    P2P.net.opts.onFail = function (msg) { p2pStatusBad(msg); };
+    set('roomCode', P2P.roomCode || '········');
+    set('roomMyRole', P2P.role === 'host' ? '房主' : '好友');
+    set('roomPeerRole', P2P.role === 'host' ? '好友' : '房主');
+    set('roomMyNick', nickName());
+    set('roomPeerNick', P2P.peerNick || (connected ? '已连接' : '等待加入…'));
+    set('roomMyClass', myName);
+    set('roomPeerClass', connected ? peerName : '—');
+    set('roomMyReady', P2P.myReady ? '已准备' : '未准备', 'rp-ready' + (P2P.myReady ? ' on' : ''));
+    set('roomPeerReady', P2P.peerReady ? '已准备' : '未准备', 'rp-ready' + (P2P.peerReady ? ' on' : ''));
+    const myCard = $('roomMyCard'), peerCard = $('roomPeerCard');
+    if (myCard) myCard.classList.toggle('is-ready', P2P.myReady);
+    if (peerCard) peerCard.classList.toggle('is-ready', P2P.peerReady);
+    const btn = $('roomReadyBtn');
+    if (btn) {
+      btn.disabled = !connected || !P2P.myCls;
+      btn.textContent = P2P.myReady ? '取消准备' : '准备';
+    }
+    const hint = $('roomSharedHint');
+    if (hint) {
+      if (!connected) hint.textContent = '等待好友加入并建连…';
+      else if (P2P.myReady && P2P.peerReady) hint.textContent = '双方都已准备，房主正在开局…';
+      else if (P2P.myReady) hint.textContent = '你已准备，等待对手准备…';
+      else if (P2P.peerReady) hint.textContent = '对手已准备，等你点「准备」…';
+      else hint.textContent = '双方状态实时共享 · 两边都准备后才开始';
+    }
+    const copyBtn = $('roomCopyBtn'), codeHint = $('roomCodeHint');
+    if (copyBtn) copyBtn.hidden = P2P.role !== 'host';
+    if (codeHint) codeHint.textContent = P2P.role === 'host'
+      ? '把 8 位码发给好友，对方输入即可加入，不需要回传任何码'
+      : '你已加入这个房间，无需回传任何码';
+  }
+
+  /* 一局结束后任一方点「再战」，双方一起回房间重新准备 */
+  function p2pBackToRoom(notify) {
+    if (!P2P.active) return;
+    P2P.inMatch = false;
+    P2P.myReady = false; P2P.peerReady = false;
+    if (notify) p2pSend({ k: 'back_room' });
+    p2pRoomShow();
+    p2pSendRoomState();
+  }
+
+  /* 建连失败时退回联机弹窗，并把错误显示出来 */
+  function p2pRoomFail(stage, text) {
+    P2P.active = false;
+    if (P2P.net) { try { P2P.net.close(); } catch (e) {} }
+    P2P.net = null;
+    $('p2pModal').hidden = false;
+    p2pStage(stage);
+    p2pMsg(stage === 'p2pStageJoin' ? 'p2pJoinMsg' : 'p2pSelMsg', text, 'bad');
+    switchScreen('start');
   }
 
   async function p2pHostCreate() {
     if (!NET) return;
+    const btn = $('p2pCreateBtn');
     try {
-      p2pMsg('p2pHostMsg', '正在生成邀请码…');
-      p2pStage('p2pStageHost');
-      const made = await NET.Session.createHost({
-        onReady: null, onCtrl: null, onClose: null, onState: null
-      });
-      // 先建裸会话拿邀请码，真正的回调在应用应答码后补挂
+      p2pMsg('p2pSelMsg', '正在创建房间…');
+      if (btn) btn.disabled = true;
+      // 先切到房间页显示进度：收集中继候选可能要 10 秒，别让用户对着弹窗干等
+      P2P.role = 'host'; P2P.active = true; P2P.roomCode = '';
+      P2P.myCls = G.selectedClass ? G.selectedClass.id : null;
+      P2P.myReady = false; P2P.peerReady = false; P2P.inMatch = false;
+      $('p2pModal').hidden = true;
+      p2pRoomShow();
+      p2pRoomStatus('正在创建房间并收集网络地址，请稍候…');
+      const made = await NET.Session.createHostRoom(p2pSessionOpts('好友已连接'));
       P2P.net = made.session;
-      P2P.role = 'host';
-      P2P.active = true;
+      P2P.roomCode = made.code;
       p2pAttachHandlers('好友已连接');
-      $('p2pOfferOut').value = made.code;
-      p2pMsg('p2pHostMsg', '邀请码已生成，发给好友；收到应答码后点「完成连接」', 'good');
-      p2pStatus('等待好友应答…');
+      p2pRoomShow();
+      p2pRoomStatus('房间已创建 · 把 8 位邀请码发给好友，等待加入…');
     } catch (e) {
-      p2pMsg('p2pHostMsg', '生成失败：' + e.message, 'bad');
-      P2P.active = false;
-    }
-  }
-
-  async function p2pHostFinish() {
-    const btn = $('p2pFinishBtn');
-    if (P2P.net && P2P.net.ready) { p2pMsg('p2pHostMsg', '已经连接成功了，等双方选职业即可', 'good'); return; }
-    if (btn && btn.disabled) return;
-    const raw = $('p2pAnswerIn').value;
-    if (!raw.trim()) { p2pMsg('p2pHostMsg', '请先粘贴好友回传的应答码'); return; }
-    if (btn) btn.disabled = true;
-    try {
-      await NET.Session.hostFinish(P2P.net, raw);
-      p2pMsg('p2pHostMsg', '应答码已应用，连接成功后会自动进入选职业界面', 'good');
-    } catch (e) {
-      p2pMsg('p2pHostMsg', e.message, 'bad');
+      p2pRoomFail('p2pStageSel', '创建失败：' + e.message);
     } finally {
       if (btn) btn.disabled = false;
     }
   }
 
   async function p2pJoinAccept() {
-    const raw = $('p2pOfferIn').value;
-    if (!raw.trim()) { p2pMsg('p2pJoinMsg', '请先粘贴房主的邀请码'); return; }
+    const inp = $('p2pRoomCodeIn');
+    const raw = inp ? inp.value.trim() : '';
+    if (!raw) { p2pMsg('p2pJoinMsg', '请输入 8 位房间邀请码'); return; }
+    const btn = $('p2pAcceptBtn');
     try {
-      p2pMsg('p2pJoinMsg', '正在生成应答码…');
-      p2pStage('p2pStageJoin');
-      const made = await NET.Session.createGuest(raw, {
-        onReady: null, onCtrl: null, onClose: null, onState: null
-      });
+      p2pMsg('p2pJoinMsg', '正在查找房间并建连…');
+      if (btn) btn.disabled = true;
+      P2P.role = 'guest'; P2P.active = true;
+      P2P.roomCode = NET.normalizeRoomCode(raw);
+      P2P.myCls = G.selectedClass ? G.selectedClass.id : null;
+      P2P.myReady = false; P2P.peerReady = false; P2P.inMatch = false;
+      $('p2pModal').hidden = true;
+      p2pRoomShow();
+      p2pRoomStatus('正在查找房间并收集网络地址，请稍候…');
+      const made = await NET.Session.joinRoom(raw, p2pSessionOpts('已连接房主'));
       P2P.net = made.session;
-      P2P.role = 'guest';
-      P2P.active = true;
       P2P.buf = new SYNC.SnapBuf();
+      P2P.roomCode = made.session.roomCode || P2P.roomCode;
       p2pAttachHandlers('已连接房主');
-      $('p2pAnswerOut').value = made.code;
-      p2pMsg('p2pJoinMsg', '应答码已生成！复制发给房主，等房主完成连接', 'good');
+      p2pRoomShow();
+      p2pRoomStatus('已加入房间 · 正在建立直连…');
     } catch (e) {
-      p2pMsg('p2pJoinMsg', '生成失败：' + e.message, 'bad');
-      P2P.active = false;
+      p2pRoomFail('p2pStageJoin', '加入失败：' + e.message);
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
 
@@ -741,15 +891,6 @@
     } else {
       el.select(); document.execCommand('copy'); done();
     }
-  }
-
-  function p2pSendCls() {
-    P2P.myCls = G.selectedClass.id;
-    P2P.peerCls = null;          // 每局重选：等对方重新上报
-    P2P.myClsSent = true;
-    p2pSend({ k: 'cls', id: P2P.myCls });
-    p2pStatus('已选好职业，等待对手…');
-    showBanner('已就绪', '等待对手选择职业…', 0);
   }
 
 
@@ -959,6 +1100,7 @@
      --------------------------------------------------------- */
   const dom = {
     startScreen: $('startScreen'), battleScreen: $('battleScreen'), resultScreen: $('resultScreen'),
+    roomScreen: $('roomScreen'),
     classGrid: $('classGrid'), selectedClassName: $('selectedClassName'), selectedClassTrait: $('selectedClassTrait'),
     startBtn: $('startBtn'), speedBtn: $('speedBtn'), soundBtn: $('soundBtn'),
     rulesBtn: $('rulesBtn'), rulesModal: $('rulesModal'), closeRulesBtn: $('closeRulesBtn'),
@@ -3955,6 +4097,7 @@
     dom.startScreen.hidden = name !== 'start';
     dom.battleScreen.hidden = name !== 'battle';
     dom.resultScreen.hidden = name !== 'result';
+    dom.roomScreen.hidden = name !== 'room';
     if (name !== 'battle') dom.logModal.hidden = true;
   }
 
@@ -4128,14 +4271,14 @@
     if (!G.selectedClass) return;
     if (P2P.active) {
       ensureAudio();
-      p2pSendCls();      // 联机：双方都上报职业，房主凑齐后宣布开局
+      p2pRoomShow();             // 联机：回房间页选职业并准备
       return;
     }
     startMatch(G.selectedClass);
   });
   if (dom.launchBtn) dom.launchBtn.addEventListener('click', () => launchRound());
   dom.rematchBtn.addEventListener('click', () => {
-    if (P2P.active) { p2pSendCls(); return; }   // 联机再战：重新走一遍职业上报
+    if (P2P.active) { p2pBackToRoom(true); return; }   // 任一方点再战，双方一起回房间重新准备
     ensureAudio(); startMatch(G.playerClass, G.lastGhost ? { ghost: G.lastGhost } : null);
   });
   dom.changeBtn.addEventListener('click', () => {
@@ -4154,17 +4297,33 @@
   });
   const bindP2P = (id, fn) => { const el = $(id); if (el) el.addEventListener('click', fn); };
   bindP2P('p2pCreateBtn', p2pHostCreate);
-  bindP2P('p2pRegenBtn', p2pHostCreate);
-  bindP2P('p2pFinishBtn', p2pHostFinish);
   bindP2P('p2pAcceptBtn', p2pJoinAccept);
   bindP2P('p2pJoinBtn', () => {
     p2pMsg('p2pJoinMsg', null);
     p2pStage('p2pStageJoin');
-    const inp = $('p2pOfferIn');
+    const inp = $('p2pRoomCodeIn');
     if (inp) inp.focus();
   });
-  bindP2P('p2pCopyOffer', () => p2pCopy('p2pOfferOut', 'p2pHostMsg'));
-  bindP2P('p2pCopyAnswer', () => p2pCopy('p2pAnswerOut', 'p2pJoinMsg'));
+  const roomCodeIn = $('p2pRoomCodeIn');
+  if (roomCodeIn) {
+    roomCodeIn.addEventListener('input', () => {
+      roomCodeIn.value = roomCodeIn.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+    });
+    roomCodeIn.addEventListener('keydown', ev => { if (ev.key === 'Enter') p2pJoinAccept(); });
+  }
+  bindP2P('roomCopyBtn', () => {
+    if (!P2P.roomCode) return;
+    const ok = () => p2pRoomMsg('已复制邀请码，发给好友吧', 'good');
+    const bad = () => p2pRoomMsg('复制失败，请手动选中房间码', 'bad');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(P2P.roomCode).then(ok, bad);
+    } else bad();
+  });
+  bindP2P('roomReadyBtn', p2pRoomToggleReady);
+  bindP2P('roomLeaveBtn', () => {
+    if (P2P.active) p2pTeardown('你退出了房间');
+    switchScreen('start');
+  });
 
   dom.speedBtn.addEventListener('click', () => {
     if (P2P.active) return;   // 联机锁 x1：双方节奏必须一致

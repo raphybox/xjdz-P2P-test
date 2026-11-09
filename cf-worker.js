@@ -11,6 +11,9 @@
 
 import { onRequestGet, onRequestOptions } from './functions/api/turn.js';
 
+/* DO 类必须从主模块具名导出，wrangler 才能注册 Durable Object binding */
+export { RoomHub } from './functions/api/room.js';
+
 /* 区域边缘缓存自助清理：
    静态资产响应被区域级缓存规则（如 Cache Everything）钉住时，wrangler 部署
    虽然成功但用户拿到的仍是旧文件。Cache API 只在 Worker 内可用，因此提供
@@ -48,6 +51,23 @@ export default {
         return onRequestOptions({ request, env });
       }
       return onRequestGet({ request, env });
+    }
+
+    if (path === '/api/room' || path.indexOf('/api/room/') === 0) {
+      if (!env.ROOMS) return new Response(JSON.stringify({ error: 'room_service_unavailable' }), { status: 503 });
+      if (request.method === 'OPTIONS') {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+          },
+        });
+      }
+      // 全局单实例：所有房间信令强一致，避免 KV 跨 PoP 的读取延迟
+      const id = env.ROOMS.idFromName('global');
+      return env.ROOMS.get(id).fetch(request);
     }
 
     if (path === '/api/purge' || path.indexOf('/api/purge-') === 0) {

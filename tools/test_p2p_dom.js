@@ -15,10 +15,12 @@ while ((m = re.exec(game))) ids.add(m[1]);
 const missing = [...ids].filter(id => !html.includes('id="' + id + '"'));
 assert.deepStrictEqual(missing, [], '缺失的 DOM id: ' + missing.join(', '));
 
-// P2P 关键元素必须齐
-['p2pBtn', 'p2pModal', 'p2pOfferOut', 'p2pAnswerIn', 'p2pOfferIn', 'p2pAnswerOut',
- 'p2pStatus', 'p2pStageSel', 'p2pStageHost', 'p2pStageJoin'].forEach(id => {
-  assert.ok(html.includes('id="' + id + '"'), 'P2P 元素缺失: ' + id);
+// P2P / 房间页关键元素必须齐
+['p2pBtn', 'p2pModal', 'p2pRoomCodeIn', 'p2pStatus', 'p2pStageSel', 'p2pStageJoin',
+ 'roomScreen', 'roomCode', 'roomCopyBtn', 'roomStatus', 'roomMyReady', 'roomPeerReady',
+ 'roomMyNick', 'roomPeerNick', 'roomClassGrid', 'roomReadyBtn', 'roomLeaveBtn',
+ 'roomSharedHint', 'roomMsg'].forEach(id => {
+  assert.ok(html.includes('id="' + id + '"'), 'P2P/房间元素缺失: ' + id);
 });
 // 脚本引入顺序：net.js / sync.js 必须在 game.js 之前
 const order = ['net.js', 'sync.js', 'game.js'].map(s => html.indexOf('src="' + s + '"'));
