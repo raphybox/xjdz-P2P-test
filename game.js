@@ -314,6 +314,436 @@
   };
 
   /* ---------------------------------------------------------
+     5.1 联机对战（P2P · 房主权威）
+     角色：房主 = 模拟侧 player，客机 = 模拟侧 enemy。
+     所有随机（技能抽取 / 出生抖动 / 天气 / 暴击闪避）只发生在房主端；
+     客机只做两件事：上报输入（选职业 / 选技能 / 瞄准发射）+ 消费快照插值回放。
+     通道分工：ctrl 可靠有序（对局事件）· game 不可靠（20Hz 快照）。
+     --------------------------------------------------------- */
+  const P2P = {
+    active: false,        // 会话已建立（含大厅与对局全程）
+    inMatch: false,       // 已进入对局
+    role: null,           // 'host' | 'guest'
+    peerNick: '',
+    net: null,
+    myCls: null, peerCls: null, myClsSent: false,
+    guestOpts: null,      // 房主为客机抽出的技能选项
+    guestPick: false, myPickDone: false,
+    guestAim: null, guestLaunched: false, myLaunched: false,
+    buf: null,            // 客机快照缓冲（WowPinballSync.SnapBuf）
+    snapAcc: 0            // 房主快照节拍
+  };
+
+  const NET = window.WowPinballNet || null;
+  const SYNC = window.WowPinballSync || null;
+
+  function p2pSend(obj) { if (P2P.net && P2P.net.ready) P2P.net.sendCtrl(obj); }
+
+  /* 模拟侧 → 本地显示侧的映射（客机视角下双方对调） */
+  function p2pMapWinner(w) {
+    if (w === 'draw') return 'draw';
+    const hostWon = w === 'player';
+    return P2P.role === 'host' ? w : (hostWon ? 'enemy' : 'player');
+  }
+  function p2pMapScores(sc) {
+    if (P2P.role === 'host') return { player: sc.player, enemy: sc.enemy, draw: sc.draw };
+    return { player: sc.enemy, enemy: sc.player, draw: sc.draw };
+  }
+
+  function p2pTeardown(why) {
+    if (P2P.net) { try { P2P.net.close(); } catch (e) {} }
+    P2P.net = null;
+    P2P.active = false; P2P.inMatch = false;
+    P2P.role = null; P2P.peerNick = '';
+    P2P.myCls = null; P2P.peerCls = null;
+    P2P.guestOpts = null; P2P.guestPick = false; P2P.myPickDone = false;
+    P2P.guestAim = null; P2P.guestLaunched = false; P2P.myLaunched = false;
+    P2P.buf = null; P2P.snapAcc = 0;
+    if (dom.asyncTag) { dom.asyncTag.hidden = true; dom.asyncTag.textContent = ''; }
+    if (why) p2pStatus('已断开：' + why);
+  }
+
+  function p2pOnClose(why) {
+    if (!P2P.active) return;
+    const wasMatch = P2P.inMatch;
+    p2pTeardown(null);
+    if (wasMatch) {
+      // 对局中掉线：提示后回到选职业界面
+      G.phase = 'idle';
+      switchScreen('start');
+      showBanner('连接已断开', '对手离开了对局（' + (why || '网络中断') + '）', 2400);
+      addLog('联机对手已断线，本局中止', 'bad');
+    }
+  }
+
+  /* ---------- ctrl 通道对局事件 ---------- */
+
+  function p2pOnCtrl(msg) {
+    if (!msg || !msg.k) return;
+    switch (msg.k) {
+      case 'hello':
+        P2P.peerNick = cleanNick(msg.nick) || '对手';
+        if (P2P.active) p2pStatus('已连接 · 对手：' + P2P.peerNick);
+        if (P2P.inMatch && dom.asyncTag) dom.asyncTag.textContent = '联机对战 · ' + P2P.peerNick;
+        break;
+      case 'bye':
+        p2pOnClose('对方主动退出');
+        break;
+      case 'cls':
+        P2P.peerCls = msg.id;
+        if (P2P.inMatch) P2P.inMatch = false;   // 再战流程：重置对局标志
+        p2pStatus('对手已选择职业，就绪');
+        p2pTryStart();
+        break;
+      case 'start':   // 客机收到：房主宣布开局
+        if (P2P.role === 'guest') p2pStartMatch(msg.h, msg.g);
+        break;
+      case 'draft':   // 客机收到：房主发牌
+        if (P2P.role === 'guest') p2pGuestOpenDraft(msg);
+        break;
+      case 'draft_pick':   // 房主收到：客机选的技能
+        if (P2P.role === 'host') p2pHostOnGuestPick(msg);
+        break;
+      case 'aim':     // 客机收到：瞄准阶段（含双方出生位）
+        if (P2P.role === 'guest') p2pGuestAim(msg);
+        break;
+      case 'launch':  // 对方已发射
+        if (P2P.role === 'host') {
+          P2P.guestAim = msg.aim;
+          P2P.guestLaunched = true;
+          if (G.phase === 'wait-launch' && P2P.myLaunched) beginRound();
+        } else {
+          showBanner('对方已发射', '等待回合开始…', 1200);
+        }
+        break;
+      case 'round_start':   // 客机收到：回合正式开始
+        if (P2P.role === 'guest') p2pGuestRoundStart(msg);
+        break;
+      case 'round_end':     // 客机收到：回合结算
+        if (P2P.role === 'guest') p2pGuestRoundEnd(msg);
+        break;
+      case 'match_end':     // 客机收到：整局结算
+        if (P2P.role === 'guest') p2pGuestMatchEnd(msg);
+        break;
+    }
+  }
+
+  function p2pTryStart() {
+    if (!P2P.active || P2P.role !== 'host') return;
+    if (!P2P.myClsSent || !P2P.peerCls) return;
+    if (P2P.inMatch) return;
+    p2pSend({ k: 'start', h: P2P.myCls, g: P2P.peerCls });
+    p2pStartMatch(P2P.myCls, P2P.peerCls);
+  }
+
+  function p2pStartMatch(hostClsId, guestClsId) {
+    const hostCls = CLASSES.find(c => c.id === hostClsId);
+    const guestCls = CLASSES.find(c => c.id === guestClsId);
+    if (!hostCls || !guestCls) return;
+    P2P.inMatch = true;
+    P2P.myClsSent = false;
+    const myCls = P2P.role === 'host' ? hostCls : guestCls;
+    const foeCls = P2P.role === 'host' ? guestCls : hostCls;
+    startMatch(myCls, { enemyClass: foeCls.id });
+  }
+
+  /* ---------- 客机：各阶段 ---------- */
+
+  function p2pGuestOpenDraft(msg) {
+    if (!SYNC || !G.player) return;
+    G.round = msg.r;
+    G.draftOptions = (msg.opts || []).map(id => SKILLS.find(s => s.id === id)).filter(Boolean);
+    if (!G.draftOptions.length) return;
+    G.phase = 'draft';
+    dom.draftTitle.textContent = '第 ' + (G.round + 1) + ' 回合休整 · 随机三选一';
+    dom.draftSub.textContent = '联机对战 · 房主发牌，选择一个技能';
+    dom.draftModal.hidden = false;
+    dom.draftCards.innerHTML = G.draftOptions.map((s, i) =>
+      '<button class="skill-card" type="button" data-i="' + i + '" data-tier="' + escHtml(s.tier) + '"' +
+      ' title="' + escHtml(s.intro ? s.intro + '\n【机制】' + s.desc : s.desc) + '">' +
+      '<div class="sc-top"><span class="sc-name">' + escHtml(s.name) + '</span><span class="sc-tier">' + escHtml(TIER_NAME[s.tier]) + '</span></div>' +
+      '<div class="sc-origin">' + escHtml(s.origin) + '</div>' +
+      '<div class="sc-effect">' + escHtml(s.intro || s.desc) + '</div>' +
+      '<div class="sc-hotkey">' + (i < 3 ? '按 ' + (i + 1) + ' 选择' : '点击选择') + '</div></button>'
+    ).join('');
+    dom.draftCards.querySelectorAll('.skill-card').forEach(btn => {
+      btn.addEventListener('click', () => chooseSkill(Number(btn.getAttribute('data-i'))));
+    });
+    dom.phaseLabel.textContent = '休整 · 选择技能';
+    updateScoreboard();
+  }
+
+  function p2pGuestAim(msg) {
+    if (!G.player || !G.enemy) return;
+    const pos = P2P.role === 'host' ? msg.p : { p: msg.p.e, e: msg.p.p };
+    [G.player, G.enemy].forEach(f => {
+      recompute(f);
+      f.hp = f.maxHp;
+      f.shield = f.maxHp * f.mods.shield;
+      f.combo = 0; f.firstHitUsed = false;
+      f.slowUntil = -1; f.slowFactor = 1;
+      f.dotDps = 0; f.dotUntil = -1; f._statusTags = {};
+      f._dotAccum = 0; f._dotLogAt = null;
+      f.squash = 0; f.trail = []; f.lastDmgAt = -10;
+      f._p2pHp = null;
+    });
+    G.player.x = pos.p.x; G.player.y = pos.p.y;
+    G.enemy.x = pos.e.x; G.enemy.y = pos.e.y;
+    G.player.vx = 0; G.player.vy = 0;
+    G.enemy.vx = 0; G.enemy.vy = 0;
+    initSkillCasters();
+    G.phase = 'aim';
+    dom.phaseLabel.textContent = '瞄准 · 第 ' + msg.r + ' 回合';
+    dom.timerText.textContent = CONFIG.ROUND_SECONDS.toFixed(1);
+    showBanner('选择发射方向', '拖动弹球上的箭头，点击发射开始第 ' + msg.r + ' 回合', 0);
+    if (dom.aimOverlay) dom.aimOverlay.hidden = false;
+    if (dom.launchBtn) dom.launchBtn.hidden = false;
+    updateScoreboard();
+  }
+
+  function p2pGuestRoundStart(msg) {
+    G.round = msg.r;
+    G.weather = msg.w ? Object.assign({}, msg.w) : null;
+    G.weatherFx = [];
+    if (G.weather && G.weather.id === 'wind') seedWindFx();
+    else if (G.weather && G.weather.id === 'rain') seedRainFx();
+    G.roundTime = CONFIG.ROUND_SECONDS;
+    G.phase = 'fighting';
+    if (P2P.buf) { P2P.buf.snaps = []; P2P.buf.renderT = null; }
+    [G.player, G.enemy].forEach(f => { f._p2pHp = null; });
+    dom.phaseLabel.textContent = '对撞中';
+    showBanner('第 ' + G.round + ' 回合', G.playerClass.name + '  对阵  ' + G.enemyClass.name, 900);
+    if (G.weather) addLog('本回合天气：' + G.weather.name + (G.weather.id === 'wind' ? (G.weather.dir > 0 ? '（吹向右侧 →）' : '（吹向左侧 ←）') : ''), 'hl');
+    resetRoundDmg();
+    sfx.round();
+    updateScoreboard();
+  }
+
+  function p2pGuestRoundEnd(msg) {
+    if (G.phase !== 'fighting') return;
+    G.phase = 'rest';
+    G.round = msg.r;
+    const winner = p2pMapWinner(msg.w);
+    const pp = P2P.role === 'host' ? msg.pp : msg.ep;   // 我方剩余生命百分比
+    const ep = P2P.role === 'host' ? msg.ep : msg.pp;
+    G.roundResults.push({ round: msg.r, pp: pp, ep: ep, winner: winner, reason: 'sync' });
+    G.scores = p2pMapScores(msg.sc);
+    const label = winner === 'player' ? '本回合胜' : (winner === 'enemy' ? '本回合负' : '本回合平');
+    addLog('第 ' + msg.r + ' 回合结束 · ' + label + ' · 我方 ' + Math.round(pp * 100) + '% / 对手 ' + Math.round(ep * 100) + '%',
+      winner === 'player' ? 'good' : (winner === 'enemy' ? 'bad' : 'hl'));
+    showBanner(label, msg.reason === 'ko' ? '一方弹珠被击碎' : '按剩余生命百分比判定', 1350);
+    sfx.round();
+    updateScoreboard();
+    setTimeout(() => { if (G.phase === 'rest') G.phase = 'wait-draft'; }, 1400);
+  }
+
+  function p2pGuestMatchEnd(msg) {
+    G.scores = p2pMapScores(msg.sc);
+    G.roundResults = (msg.rs || []).map(r => ({
+      round: r.round,
+      pp: P2P.role === 'host' ? r.pp : r.ep,
+      ep: P2P.role === 'host' ? r.ep : r.pp,
+      winner: p2pMapWinner(r.winner), reason: r.reason || 'sync'
+    }));
+    showResult();
+  }
+
+  /* ---------- 房主：客机输入落地 ---------- */
+
+  function p2pHostOnGuestPick(msg) {
+    if (P2P.guestPick) return;
+    P2P.guestPick = true;
+    const s = P2P.guestOpts && P2P.guestOpts[msg.i];
+    if (s && G.enemySkills.every(x => x.id !== s.id)) {
+      G.enemySkills.push(s);
+      addLog('对手获得「' + s.name + '」', 'hl');
+    }
+    recompute(G.enemy);
+    if (P2P.myPickDone && G.phase === 'transition') startAimPhase();
+  }
+
+  /* ---------- 主循环钩子 ---------- */
+
+  function p2pSendSnap() {
+    if (!P2P.net || !P2P.net.ready || !G.player || !G.enemy || !SYNC) return;
+    P2P.net.sendGame(JSON.stringify(SYNC.encodeSnap(G.round, G.clock, G.player, G.enemy, G.roundTime)));
+  }
+
+  function p2pGuestFrame(dt) {
+    const buf = P2P.buf;
+    if (!buf) return;
+    buf.advance(dt);
+    buf.resyncIfNeeded();
+    const sm = buf.sample();
+    if (sm) {
+      const mine = P2P.role === 'host' ? sm.p : sm.e;
+      const foe = P2P.role === 'host' ? sm.e : sm.p;
+      const mf = G.player, ef = G.enemy;
+      mf.x = mine.x; mf.y = mine.y; mf.vx = mine.vx; mf.vy = mine.vy;
+      mf.hp = mine.hp; mf.shield = mine.shield;
+      ef.x = foe.x; ef.y = foe.y; ef.vx = foe.vx; ef.vy = foe.vy;
+      ef.hp = foe.hp; ef.shield = foe.shield;
+      G.roundTime = sm.rt;
+      p2pGuestHitFx(mine.hp, mf, true);
+      p2pGuestHitFx(foe.hp, ef, false);
+      updateHud();
+    }
+    dom.timerText.textContent = Math.max(0, G.roundTime).toFixed(1);
+  }
+
+  /* 客机没有伤害结算，靠快照血量差补火花 / 飘字 / 音效 */
+  function p2pGuestHitFx(hp, f, isMine) {
+    if (f._p2pHp == null) { f._p2pHp = hp; return; }
+    const drop = f._p2pHp - hp;
+    if (drop >= 1) {
+      spawnSparks(f.x + rand(-f.r, f.r), f.y + rand(-f.r, f.r), 0, -1, Math.min(8, 2 + Math.round(drop / 4)), '#ffd27a', '#ff7b6b');
+      addFloater(f.x, f.y - f.r - 8, '-' + Math.round(drop), isMine ? '#ff7b6b' : '#ffd27a', 15);
+      if (drop >= 6) sfx.hit();
+    }
+    f._p2pHp = hp;
+  }
+
+  /* ---------- 大厅 UI ---------- */
+
+  function p2pStatus(text) {
+    const el = $('p2pStatus');
+    if (el) el.textContent = text;
+  }
+  function p2pMsg(id, text, kind) {
+    const el = $(id);
+    if (!el) return;
+    if (!text) { el.hidden = true; el.textContent = ''; return; }
+    el.hidden = false;
+    el.textContent = text;
+    el.style.color = kind === 'bad' ? 'var(--bad, #e5484d)' : kind === 'good' ? 'var(--good, #2f9e63)' : 'var(--muted, #8a8f98)';
+  }
+  function p2pStage(name) {
+    ['p2pStageSel', 'p2pStageHost', 'p2pStageJoin'].forEach(id => { $(id).hidden = id !== name; });
+  }
+
+  function openP2P() {
+    if (!NET || !SYNC) { p2pMsg('p2pSelMsg', '联机模块加载失败，请刷新页面', 'bad'); }
+    $('p2pModal').hidden = false;
+    if (!P2P.active) p2pStage('p2pStageSel');
+  }
+
+  function p2pMakeSession(role) {
+    P2P.role = role;
+    P2P.active = true;
+    return new NET.Session({
+      onReady: function () {
+        p2pStatus('已连接 · 通道就绪，开始选择职业');
+        p2pSend({ k: 'hello', nick: nickName() });
+        // 连上就回到选职业界面，双方各自选职业后按「开始对战」
+        p2pStage('p2pStageSel');
+        $('p2pModal').hidden = true;
+        switchScreen('start');
+        showBanner('好友已连接', '各自选择职业，点击「开始对战」', 2200);
+      },
+      onCtrl: p2pOnCtrl,
+      onGame: function (data) {
+        if (P2P.role === 'guest' && P2P.buf && data && data.k === 's') P2P.buf.push(data);
+      },
+      onClose: function (why) { p2pOnClose(why || '连接关闭'); },
+      onState: function (text) { p2pStatus(text); }
+    });
+  }
+
+  async function p2pHostCreate() {
+    if (!NET) return;
+    try {
+      p2pMsg('p2pHostMsg', '正在生成邀请码…');
+      p2pStage('p2pStageHost');
+      const made = await NET.Session.createHost({
+        onReady: null, onCtrl: null, onClose: null, onState: null
+      });
+      // 先建裸会话拿邀请码，真正的回调在应用应答码后补挂
+      P2P.net = made.session;
+      P2P.role = 'host';
+      P2P.active = true;
+      $('p2pOfferOut').value = made.code;
+      p2pMsg('p2pHostMsg', '邀请码已生成，发给好友；收到应答码后点「完成连接」', 'good');
+      p2pStatus('等待好友应答…');
+      P2P.net.opts.onReady = function () {
+        p2pStatus('已连接 · 通道就绪，开始选择职业');
+        p2pSend({ k: 'hello', nick: nickName() });
+        $('p2pModal').hidden = true;
+        switchScreen('start');
+        showBanner('好友已连接', '各自选择职业，点击「开始对战」', 2200);
+      };
+      P2P.net.opts.onCtrl = p2pOnCtrl;
+      P2P.net.opts.onClose = function (why) { p2pOnClose(why || '连接关闭'); };
+      P2P.net.opts.onState = function (text) { p2pStatus(text); };
+    } catch (e) {
+      p2pMsg('p2pHostMsg', '生成失败：' + e.message, 'bad');
+      P2P.active = false;
+    }
+  }
+
+  async function p2pHostFinish() {
+    const raw = $('p2pAnswerIn').value;
+    if (!raw.trim()) { p2pMsg('p2pHostMsg', '请先粘贴好友回传的应答码'); return; }
+    try {
+      await NET.Session.hostFinish(P2P.net, raw);
+      p2pMsg('p2pHostMsg', '应答码已应用，正在建立连接…', 'good');
+    } catch (e) {
+      p2pMsg('p2pHostMsg', '连接失败：' + e.message, 'bad');
+    }
+  }
+
+  async function p2pJoinAccept() {
+    const raw = $('p2pOfferIn').value;
+    if (!raw.trim()) { p2pMsg('p2pJoinMsg', '请先粘贴房主的邀请码'); return; }
+    try {
+      p2pMsg('p2pJoinMsg', '正在生成应答码…');
+      p2pStage('p2pStageJoin');
+      const made = await NET.Session.createGuest(raw, {
+        onReady: null, onCtrl: null, onClose: null, onState: null
+      });
+      P2P.net = made.session;
+      P2P.role = 'guest';
+      P2P.active = true;
+      P2P.buf = new SYNC.SnapBuf();
+      $('p2pAnswerOut').value = made.code;
+      p2pMsg('p2pJoinMsg', '应答码已生成！复制发给房主，等房主完成连接', 'good');
+      P2P.net.opts.onReady = function () {
+        p2pStatus('已连接 · 通道就绪，开始选择职业');
+        p2pSend({ k: 'hello', nick: nickName() });
+        $('p2pModal').hidden = true;
+        switchScreen('start');
+        showBanner('已连接房主', '选择职业，点击「开始对战」', 2200);
+      };
+      P2P.net.opts.onCtrl = p2pOnCtrl;
+      P2P.net.opts.onClose = function (why) { p2pOnClose(why || '连接关闭'); };
+      P2P.net.opts.onState = function (text) { p2pStatus(text); };
+    } catch (e) {
+      p2pMsg('p2pJoinMsg', '生成失败：' + e.message, 'bad');
+      P2P.active = false;
+    }
+  }
+
+  function p2pCopy(id, msgId) {
+    const el = $(id);
+    if (!el || !el.value) return;
+    const done = () => p2pMsg(msgId, '已复制，发给对方吧', 'good');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(el.value).then(done, () => { el.select(); document.execCommand('copy'); done(); });
+    } else {
+      el.select(); document.execCommand('copy'); done();
+    }
+  }
+
+  function p2pSendCls() {
+    P2P.myCls = G.selectedClass.id;
+    P2P.peerCls = null;          // 每局重选：等对方重新上报
+    P2P.myClsSent = true;
+    p2pSend({ k: 'cls', id: P2P.myCls });
+    p2pStatus('已选好职业，等待对手…');
+    showBanner('已就绪', '等待对手选择职业…', 0);
+  }
+
+
+  /* ---------------------------------------------------------
      5.2 玩家昵称 / 阵营标识
      昵称只存在浏览器本地，不进后台配置；分享码会带上它。
      --------------------------------------------------------- */
@@ -333,6 +763,7 @@
   }
   function nickName() { return PROFILE.name || '玩家'; }
   function enemyNick() {
+    if (P2P.active) return P2P.peerNick || '对手';
     if (G.ghost) return G.ghost.nick || G.ghost.name || '幽灵对手';
     return '电脑陪练';
   }
@@ -1001,8 +1432,8 @@
       const jitter = MAP && MAP.spawnJitter != null ? MAP.spawnJitter : 55;
       f.x = clamp(sp.x, f.r, CONFIG.ARENA_W - f.r);
       f.y = clamp(sp.y + rand(-jitter, jitter), f.r, CONFIG.ARENA_H - f.r);
-      // 初始发射：玩家用选定方向，敌方用指向玩家的朝向（异步对战时取幽灵录像）
-      const aim = i === 0 ? G.playerAim : enemyLaunchAim();
+      // 初始发射：玩家用选定方向，敌方用指向玩家的朝向（联机时用房主转发的客机瞄准角，异步对战取幽灵录像）
+      const aim = i === 0 ? G.playerAim : (P2P.active ? (P2P.guestAim || enemyAimAngle()) : enemyLaunchAim());
       f.vx = Math.cos(aim) * CONFIG.LAUNCH_SPEED * f.speed;
       f.vy = Math.sin(aim) * CONFIG.LAUNCH_SPEED * f.speed;
       f.combo = 0;
@@ -1041,11 +1472,18 @@
     // 异步对战：对手按幽灵录像选技能；失效（已拥有 / 已被删）时退回随机
     let forced = null;
     const gr = ghostRound(G.round);
-    if (gr && gr.skill) {
+    if (!P2P.active && gr && gr.skill) {
       const cand = ghostSkill(gr.skill);
       if (cand && G.enemySkills.every(s => s.id !== cand.id)) forced = cand;
     }
-    G.enemyDraftPick = forced || enemyOptions[randInt(enemyOptions.length)];
+    G.enemyDraftPick = P2P.active ? null : (forced || enemyOptions[randInt(enemyOptions.length)]);
+
+    // 联机（房主）：为客机抽好技能牌发过去，客机只挑不发牌
+    if (P2P.active && P2P.role === 'host') {
+      P2P.guestOpts = enemyOptions;
+      P2P.guestPick = false; P2P.myPickDone = false;
+      p2pSend({ k: 'draft', r: G.round, opts: enemyOptions.map(s => s.id) });
+    }
 
     dom.draftTitle.textContent = title;
     dom.draftSub.textContent = sub;
@@ -1073,15 +1511,33 @@
     const s = G.draftOptions[i];
     G.playerSkills.push(s);
     G.myPicks[G.round] = { skill: s.id, aim: null };   // 录制：这一回合我选的技能
+    sfx.pick();
+    G.draftOptions = [];
+    dom.draftModal.hidden = true;
+    dom.draftCards.innerHTML = '';
+
+    if (P2P.active) {
+      recompute(G.player); recompute(G.enemy);
+      if (P2P.role === 'guest') {
+        // 客机：技能自己先记上，选择上报给房主，然后等房主开瞄准阶段
+        p2pSend({ k: 'draft_pick', r: G.round, i: i });
+        addLog('我方获得「' + s.name + '」，等待房主进入瞄准阶段', 'good');
+        showBanner('已选择', '等待其他玩家…', 0);
+      } else {
+        // 房主：等客机的 draft_pick 一起进瞄准
+        P2P.myPickDone = true;
+        addLog('我方获得「' + s.name + '」，等待对手选择技能', 'good');
+        showBanner('已选择', '等待对手选择技能…', 0);
+        if (P2P.guestPick) setTimeout(startAimPhase, 260);
+      }
+      return;
+    }
+
     if (G.enemyDraftPick) G.enemySkills.push(G.enemyDraftPick);
     recompute(G.player);
     recompute(G.enemy);
-    sfx.pick();
     addLog('我方获得「' + s.name + '」，对手获得「' + (G.enemyDraftPick ? G.enemyDraftPick.name : '—') + '」', 'good');
-    G.draftOptions = [];
     G.enemyDraftPick = null;
-    dom.draftModal.hidden = true;
-    dom.draftCards.innerHTML = '';
     setTimeout(startAimPhase, 260);
   }
 
@@ -1138,6 +1594,17 @@
     G.roundTime = CONFIG.ROUND_SECONDS;
     G.phase = 'fighting';
     pickWeather();   // 进入倒计时后随机抽取本回合天气（风 / 雨 / 无）
+    // 联机（房主）：广播回合开始，客机同步天气后进入对撞
+    if (P2P.active && P2P.role === 'host') {
+      p2pSend({
+        k: 'round_start', r: G.round,
+        w: G.weather ? {
+          id: G.weather.id, name: G.weather.name, dir: G.weather.dir,
+          force: G.weather.force, sway: G.weather.sway,
+          slipExtra: G.weather.slipExtra, rainForce: G.weather.rainForce
+        } : null
+      });
+    }
     dom.phaseLabel.textContent = '对撞中';
     showBanner('第 ' + G.round + ' 回合', G.playerClass.name + '  对阵  ' + G.enemyClass.name, 900);
     resetRoundDmg();   // 本回合伤害统计清零（整局累计保留）
@@ -1174,6 +1641,14 @@
     showBanner(label, reason === 'ko' ? '一方弹珠被击碎' : '按剩余生命百分比判定', 1350);
     sfx.round();
     updateScoreboard();
+    // 联机（房主）：广播回合结算，客机按同一份数据判定显示
+    if (P2P.active && P2P.role === 'host') {
+      p2pSend({
+        k: 'round_end', r: G.round, w: winner, reason: reason,
+        pp: Math.round(pp * 100) / 100, ep: Math.round(ep * 100) / 100,
+        sc: { player: G.scores.player, enemy: G.scores.enemy, draw: G.scores.draw }
+      });
+    }
     emitPreview('round', { round: G.round, winner: winner, pp: Math.round(pp * 100), ep: Math.round(ep * 100) });
 
     setTimeout(() => {
@@ -3419,12 +3894,28 @@
       }
       dom.resultDesc.textContent = '异步挑战「' + ghostDisplayName(G.ghost) + '」 · ' + dom.resultDesc.textContent;
     }
-    // 无论普通还是异步对局，结束后都把「我的这一局」收录成幽灵
-    RESULT_GHOST = recordGhost();
-    if (RESULT_GHOST) dom.resultDesc.textContent += '  ·  已收录你的幽灵，可生成分享码发给好友';
-    if (dom.shareResultBtn) {
-      dom.shareResultBtn.disabled = !RESULT_GHOST;
-      dom.shareResultBtn.title = RESULT_GHOST ? '把这局的技能与发射方向生成分享码' : '本局没有可分享的决策记录';
+    // 联机局不录幽灵；房主先把整局结果广播给客机再走本地结算
+    if (P2P.active) {
+      if (P2P.role === 'host') {
+        p2pSend({
+          k: 'match_end',
+          sc: { player: G.scores.player, enemy: G.scores.enemy, draw: G.scores.draw },
+          rs: G.roundResults.map(r => ({ round: r.round, pp: r.pp, ep: r.ep, winner: r.winner, reason: r.reason }))
+        });
+      }
+      RESULT_GHOST = null;
+      if (dom.shareResultBtn) {
+        dom.shareResultBtn.disabled = true;
+        dom.shareResultBtn.title = '联机对战不支持幽灵分享';
+      }
+    } else {
+      // 无论普通还是异步对局，结束后都把「我的这一局」收录成幽灵
+      RESULT_GHOST = recordGhost();
+      if (RESULT_GHOST) dom.resultDesc.textContent += '  ·  已收录你的幽灵，可生成分享码发给好友';
+      if (dom.shareResultBtn) {
+        dom.shareResultBtn.disabled = !RESULT_GHOST;
+        dom.shareResultBtn.title = RESULT_GHOST ? '把这局的技能与发射方向生成分享码' : '本局没有可分享的决策记录';
+      }
     }
 
     dom.roundReview.innerHTML = G.roundResults.map(r => {
@@ -3466,7 +3957,8 @@
     G.ghost = opts.ghost || null;
     G.lastGhost = G.ghost;
     const ghostCls = G.ghost ? (CLASSES.find(c => c.id === G.ghost.cls) || null) : null;
-    G.enemyClass = ghostCls || CLASSES[randInt(CLASSES.length)];
+    G.enemyClass = ghostCls
+      || (opts.enemyClass ? (CLASSES.find(c => c.id === opts.enemyClass) || CLASSES[randInt(CLASSES.length)]) : CLASSES[randInt(CLASSES.length)]);
     G.player = makeFighter('player', cls);
     G.enemy = makeFighter('enemy', G.enemyClass);
     G.round = 0;
@@ -3488,11 +3980,23 @@
     switchScreen('battle');
     resizeCanvas();   // 必须在面板可见后取尺寸，否则 clientWidth 为 0
     if (dom.asyncTag) {
-      dom.asyncTag.hidden = !G.ghost;
-      dom.asyncTag.textContent = G.ghost ? ('异步对战 · ' + ghostDisplayName(G.ghost)) : '';
+      if (P2P.active) {
+        dom.asyncTag.hidden = false;
+        dom.asyncTag.textContent = '联机对战 · ' + enemyNick();
+      } else {
+        dom.asyncTag.hidden = !G.ghost;
+        dom.asyncTag.textContent = G.ghost ? ('异步对战 · ' + ghostDisplayName(G.ghost)) : '';
+      }
     }
     addLog('对战开始：' + nickName() + '（' + cls.name + '） 对阵 ' + enemyNick() + '（' + G.enemyClass.name + '）', 'hl');
-    if (G.ghost) addLog('对手是「' + ghostDisplayName(G.ghost) + '」的幽灵，会按它录下的技能与发射方向出手', 'hl');
+    if (P2P.active) addLog('联机对战 · ' + (P2P.role === 'host' ? '本端为房主，判定在本端进行' : '本端为客机，画面由房主同步'), 'hl');
+    else if (G.ghost) addLog('对手是「' + ghostDisplayName(G.ghost) + '」的幽灵，会按它录下的技能与发射方向出手', 'hl');
+    if (P2P.active && P2P.role === 'guest') {
+      // 联机客机：不自己发牌，等房主的 draft / aim 事件
+      G.phase = 'wait-draft';
+      showBanner('等待房主发牌', '双方技能与出生位由房主同步', 0);
+      return;
+    }
     openDraft('战前准备 · 随机三选一', G.ghost ? '异步对战 · 对手由幽灵接管' : '选择一个技能，本局全程生效');
   }
 
@@ -3571,21 +4075,31 @@
     const realDt = Math.min((ts - lastTs) / 1000, 0.05);
     lastTs = ts;
 
-    if (G.screen === 'battle' && G.phase === 'fighting' && ts >= G.hitStopUntil) {
-      const dt = realDt * SPEEDS[G.speedIdx];
-      const steps = Math.max(1, Math.ceil(dt / (1 / 120)));
-      for (let i = 0; i < steps; i++) {
-        step(dt / steps);
-        if (G.player.hp <= 0 || G.enemy.hp <= 0) break;
-      }
-      G.roundTime -= dt;
-      dom.timerText.textContent = Math.max(0, G.roundTime).toFixed(1);
-      if (G.player.hp <= 0 || G.enemy.hp <= 0) {
-        endRound('ko');
-      } else if (G.roundTime <= 0) {
-        endRound('time');
-      } else {
-        updateHud();
+    if (G.screen === 'battle' && G.phase === 'fighting') {
+      if (P2P.active && P2P.role === 'guest') {
+        // 联机客机：不跑物理，消费房主快照做插值回放
+        p2pGuestFrame(realDt);
+      } else if (ts >= G.hitStopUntil) {
+        const dt = realDt * (P2P.active ? 1 : SPEEDS[G.speedIdx]);   // 联机锁 x1：双方节奏必须一致
+        const steps = Math.max(1, Math.ceil(dt / (1 / 120)));
+        for (let i = 0; i < steps; i++) {
+          step(dt / steps);
+          if (G.player.hp <= 0 || G.enemy.hp <= 0) break;
+        }
+        G.roundTime -= dt;
+        dom.timerText.textContent = Math.max(0, G.roundTime).toFixed(1);
+        if (G.player.hp <= 0 || G.enemy.hp <= 0) {
+          endRound('ko');
+        } else if (G.roundTime <= 0) {
+          endRound('time');
+        } else {
+          updateHud();
+          // 联机（房主）：20Hz 快照广播（不可靠 game 通道）
+          if (P2P.active && P2P.role === 'host') {
+            P2P.snapAcc += realDt;
+            if (P2P.snapAcc >= 0.05) { P2P.snapAcc = 0; p2pSendSnap(); }
+          }
+        }
       }
     }
 
@@ -3599,12 +4113,44 @@
   /* ---------------------------------------------------------
      20. 事件绑定
      --------------------------------------------------------- */
-  dom.startBtn.addEventListener('click', () => { if (G.selectedClass) startMatch(G.selectedClass); });
+  dom.startBtn.addEventListener('click', () => {
+    if (!G.selectedClass) return;
+    if (P2P.active) {
+      ensureAudio();
+      p2pSendCls();      // 联机：双方都上报职业，房主凑齐后宣布开局
+      return;
+    }
+    startMatch(G.selectedClass);
+  });
   if (dom.launchBtn) dom.launchBtn.addEventListener('click', () => launchRound());
-  dom.rematchBtn.addEventListener('click', () => { ensureAudio(); startMatch(G.playerClass, G.lastGhost ? { ghost: G.lastGhost } : null); });
-  dom.changeBtn.addEventListener('click', () => { switchScreen('start'); });
+  dom.rematchBtn.addEventListener('click', () => {
+    if (P2P.active) { p2pSendCls(); return; }   // 联机再战：重新走一遍职业上报
+    ensureAudio(); startMatch(G.playerClass, G.lastGhost ? { ghost: G.lastGhost } : null);
+  });
+  dom.changeBtn.addEventListener('click', () => {
+    if (P2P.active) p2pTeardown('你退出了对局');   // 通知对方后断开
+    switchScreen('start');
+  });
+
+  // 联机大厅
+  const p2pBtn = $('p2pBtn');
+  if (p2pBtn) p2pBtn.addEventListener('click', openP2P);
+  const p2pClose = $('closeP2pBtn');
+  if (p2pClose) p2pClose.addEventListener('click', () => {
+    $('p2pModal').hidden = true;
+    // 连接还没建起来就关窗：清理半成品会话
+    if (P2P.active && !P2P.inMatch && (!P2P.net || !P2P.net.ready)) p2pTeardown(null);
+  });
+  const bindP2P = (id, fn) => { const el = $(id); if (el) el.addEventListener('click', fn); };
+  bindP2P('p2pCreateBtn', p2pHostCreate);
+  bindP2P('p2pRegenBtn', p2pHostCreate);
+  bindP2P('p2pFinishBtn', p2pHostFinish);
+  bindP2P('p2pAcceptBtn', p2pJoinAccept);
+  bindP2P('p2pCopyOffer', () => p2pCopy('p2pOfferOut', 'p2pHostMsg'));
+  bindP2P('p2pCopyAnswer', () => p2pCopy('p2pAnswerOut', 'p2pJoinMsg'));
 
   dom.speedBtn.addEventListener('click', () => {
+    if (P2P.active) return;   // 联机锁 x1：双方节奏必须一致
     G.speedIdx = (G.speedIdx + 1) % SPEEDS.length;
     dom.speedBtn.textContent = '速度 x' + SPEEDS[G.speedIdx];
   });
@@ -3740,6 +4286,11 @@
     G.enemy.vx = 0; G.enemy.vy = 0;  // 瞄准阶段弹珠静止
     G.aimPos = { p: { x: G.player.x, y: G.player.y }, e: { x: G.enemy.x, y: G.enemy.y } };
     G.phase = 'aim';
+    // 联机（房主）：把双方出生位发给客机，客机进入同样的瞄准阶段
+    if (P2P.active && P2P.role === 'host') {
+      P2P.myLaunched = false; P2P.guestLaunched = false;
+      p2pSend({ k: 'aim', r: G.round + 1, p: { p: { x: G.player.x, y: G.player.y }, e: { x: G.enemy.x, y: G.enemy.y } } });
+    }
     const upcoming = G.round + 1;
     dom.phaseLabel.textContent = '瞄准 · 第 ' + upcoming + ' 回合';
     dom.timerText.textContent = CONFIG.ROUND_SECONDS.toFixed(1);
@@ -3755,6 +4306,24 @@
     if (dom.aimOverlay) dom.aimOverlay.hidden = true;
     if (dom.launchBtn) dom.launchBtn.hidden = true;
     if (dom.banner) dom.banner.hidden = true;
+
+    if (P2P.active) {
+      if (P2P.role === 'guest') {
+        // 客机：把瞄准角报给房主，等房主的 round_start 开打
+        p2pSend({ k: 'launch', r: G.round + 1, aim: G.playerAim });
+        G.phase = 'wait-launch';
+        showBanner('已发射', '等待对方完成瞄准…', 0);
+        return;
+      }
+      // 房主：上报自己的发射，双方都就位才开回合
+      P2P.myLaunched = true;
+      p2pSend({ k: 'launch', r: G.round + 1, aim: G.playerAim });
+      if (!P2P.guestLaunched) {
+        G.phase = 'wait-launch';
+        showBanner('已发射', '等待对手完成瞄准…', 0);
+        return;
+      }
+    }
     beginRound();
   }
 

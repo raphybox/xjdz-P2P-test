@@ -52,6 +52,7 @@
       </div>
       <div class="start-actions">
         <span id="coinChip" class="coin-chip">金币 0</span>
+        <button id="p2pBtn" class="ghost-btn" type="button">联机对战</button>
         <button id="ghostBtn" class="ghost-btn" type="button">异步对战</button>
         <button id="shopBtn" class="ghost-btn" type="button">商店</button>
         <button id="startBtn" class="primary-btn" type="button" disabled>开始对战</button>
@@ -212,6 +213,54 @@
   </div>
 </div>
 
+<!-- 联机对战弹层：P2P 手动信令（邀请码 / 应答码互换） -->
+<div id="p2pModal" class="modal" hidden>
+  <div class="modal-card ghost-modal-card">
+    <div class="modal-head">
+      <h3>联机对战 · 好友直连</h3>
+      <div class="shop-head-right">
+        <span class="faint">数据走两端直连 · 不经服务器</span>
+        <button id="closeP2pBtn" class="icon-btn" type="button">关闭</button>
+      </div>
+    </div>
+
+    <div id="p2pStageSel" class="p2p-stage">
+      <div class="p2p-tip">和好友各开一个网页，互换两串码即可建连。第一步你发邀请码，第二步好友回你一段应答码。</div>
+      <div class="p2p-choice">
+        <button id="p2pCreateBtn" class="primary-btn" type="button">创建房间（我是房主）</button>
+        <button id="p2pJoinBtn" class="ghost-btn" type="button">加入房间（ paste 邀请码）</button>
+      </div>
+      <div id="p2pSelMsg" class="ghost-msg" hidden></div>
+    </div>
+
+    <div id="p2pStageHost" class="p2p-stage" hidden>
+      <div class="share-code-head"><span>第 1 步 · 邀请码</span><span class="faint">复制发给好友</span></div>
+      <textarea id="p2pOfferOut" class="textarea ghost-code" rows="5" readonly placeholder="点击「创建房间」后自动生成"></textarea>
+      <div class="share-actions">
+        <button id="p2pCopyOffer" class="primary-btn" type="button">复制邀请码</button>
+        <button id="p2pRegenBtn" class="ghost-btn" type="button">重新生成</button>
+      </div>
+      <div class="share-code-head"><span>第 2 步 · 好友的应答码</span><span class="faint">好友回传后粘贴到下面</span></div>
+      <textarea id="p2pAnswerIn" class="textarea ghost-code" rows="4" placeholder="粘贴好友回传的应答码"></textarea>
+      <div class="share-actions"><button id="p2pFinishBtn" class="primary-btn" type="button">完成连接</button></div>
+      <div id="p2pHostMsg" class="ghost-msg" hidden></div>
+    </div>
+
+    <div id="p2pStageJoin" class="p2p-stage" hidden>
+      <div class="share-code-head"><span>第 1 步 · 房主的邀请码</span><span class="faint">粘贴房主发来的那段</span></div>
+      <textarea id="p2pOfferIn" class="textarea ghost-code" rows="5" placeholder="粘贴房主的邀请码"></textarea>
+      <div class="share-actions"><button id="p2pAcceptBtn" class="primary-btn" type="button">生成应答码</button></div>
+      <div class="share-code-head"><span>第 2 步 · 你的应答码</span><span class="faint">复制后发给房主，等房主完成连接</span></div>
+      <textarea id="p2pAnswerOut" class="textarea ghost-code" rows="5" readonly placeholder="生成后显示在这里"></textarea>
+      <div class="share-actions"><button id="p2pCopyAnswer" class="ghost-btn" type="button">复制应答码</button></div>
+      <div id="p2pJoinMsg" class="ghost-msg" hidden></div>
+    </div>
+
+    <div class="share-code-head"><span>连接状态</span></div>
+    <div id="p2pStatus" class="faint">未连接</div>
+  </div>
+</div>
+
 <!-- 结算分享码弹层 -->
 <div id="shareModal" class="modal" hidden>
   <div class="modal-card share-modal-card">
@@ -251,6 +300,8 @@
 <script src="motion-engine.js"></script>
 <script src="skill-modules.js"></script>
 <script src="skill-effects.js"></script>
+<script src="net.js"></script>
+<script src="sync.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

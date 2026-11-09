@@ -580,6 +580,15 @@ canvas.cc-orb { background: none; display: block; }
 .share-actions { display: flex; gap: 10px; margin-top: 14px; }
 .share-actions .primary-btn { flex: 1; }
 
+/* ---------- 联机对战（P2P）弹层 ---------- */
+.p2p-stage { margin-bottom: 14px; }
+.p2p-tip { font-size: 12.5px; color: var(--text-dim); line-height: 1.7; margin-bottom: 12px; }
+.p2p-choice { display: flex; gap: 10px; }
+.p2p-choice .primary-btn, .p2p-choice .ghost-btn { flex: 1; padding: 11px 14px; }
+.p2p-stage .textarea { width: 100%; }
+.p2p-stage .ghost-msg { margin-top: 10px; font-size: 12px; }
+#p2pStatus { font-size: 12px; line-height: 1.6; min-height: 18px; word-break: break-all; }
+
 /* ---------- 配置更新提示 ---------- */
 .reload-notice {
   display: flex; align-items: center; gap: 10px;
