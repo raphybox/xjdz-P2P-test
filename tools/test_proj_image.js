@@ -27,7 +27,7 @@ const fImg = fields.find(f => f.key === 'image');
 ok('投射物模块有「投射物图片」字段', !!fImg, JSON.stringify(Object.keys(fImg || {})));
 ok('字段类型 = image', fImg && fImg.type === 'image');
 ok('默认值为空字符串（缺省不改变外观）', fImg && fImg.def === '');
-ok('说明写明 PNG 与 100 KB 上限', !!fImg && /PNG/.test(fImg.hint || '') && /100\s*KB/.test(fImg.hint || ''));
+ok('说明写明 PNG 与 200 KB 上限', !!fImg && /PNG/.test(fImg.hint || '') && /200\s*KB/.test(fImg.hint || ''));
 ok('说明写明留空回退元素颜色圆', !!fImg && /留空/.test(fImg.hint || ''));
 const iSize = fields.findIndex(f => f.key === 'size');
 const iImg = fields.findIndex(f => f.key === 'image');
@@ -137,8 +137,8 @@ function drawWith(w, h, r, rot) {
 
 console.log('\n6) 100 KB 口径与上传逻辑（源码断言）');
 const adminSrc = fs.readFileSync(path.join(ROOT, 'admin.js'), 'utf8');
-ok('体积上限常量 = 100 × 1024', /PROJ_IMG_MAX_BYTES\s*=\s*100\s*\*\s*1024/.test(adminSrc));
-ok('原图最长边上限 512（避免贴图过大拖慢绘制）', /PROJ_IMG_MAX_SIDE\s*=\s*512/.test(adminSrc));
+ok('体积上限常量 = 200 × 1024', /PROJ_IMG_MAX_BYTES\s*=\s*200\s*\*\s*1024/.test(adminSrc));
+ok('原图最长边上限 1024', /PROJ_IMG_MAX_SIDE\s*=\s*1024/.test(adminSrc));
 ok('原文件上限 8 MB（读图前先挡掉超大文件）', /PROJ_IMG_MAX_FILE\s*=\s*8\s*\*\s*1024\s*\*\s*1024/.test(adminSrc));
 ok('只接受 PNG（按扩展名 / MIME 双重判断）', /\\\.png\$/.test(adminSrc) && /image\\\/png/.test(adminSrc));
 ok('超限时逐步降采样（每次 ×0.8）', /k \*= 0\.8/.test(adminSrc));
@@ -148,8 +148,8 @@ ok('清除按钮存在', /se-img-clear/.test(adminSrc));
 ok('属性面板渲染 image 类型', /f\.type === 'image'/.test(adminSrc) && /seImgFieldHtml/.test(adminSrc));
 ok('文件选择走 change（input 不抛 input 事件）', /dataset\.seimg/.test(adminSrc) && /seProjImageUpload\(/.test(adminSrc));
 ok('节点摘要标出「贴图」', /' · 贴图'/.test(adminSrc));
-ok('发布前校验：非内嵌 PNG 报错、超 100 KB 告警',
-  /的投射物图片不是内嵌 PNG/.test(adminSrc) && /超过 100 KB 上限/.test(adminSrc));
+ok('发布前校验：非内嵌 PNG 报错、超上限动态告警',
+  /的投射物图片不是内嵌 PNG/.test(adminSrc) && /超过 ' \+ Math\.round\(PROJ_IMG_MAX_BYTES \/ 1024\) \+ ' KB 上限/.test(adminSrc));
 
 console.log('\n6b) 属性面板 HTML（提取真实函数执行）');
 function loadImgField() {
@@ -160,7 +160,7 @@ function loadImgField() {
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fakeWindow = { WowPinballSkin: { image: () => ({ ready: true, w: 96, h: 48 }) } };
   try {
-    return new Function('esc', 'window', src + '\n return seImgFieldHtml;')(esc, fakeWindow);
+    return new Function('esc', 'window', 'PROJ_IMG_MAX_BYTES', src + '\n return seImgFieldHtml;')(esc, fakeWindow, 200 * 1024);
   } catch (e) { return { __error: e }; }
 }
 {
@@ -174,7 +174,7 @@ function loadImgField() {
     ok('未上传：不渲染 <img>', !/<img /.test(empty));
     const filled = fn(f, DATA);
     ok('已上传：渲染 <img src="data:image/png;base64,', /<img src="data:image\/png;base64,/.test(filled));
-    ok('已上传：显示尺寸与体积读数', /96×48 · 0\.1 KB \/ 100 KB/.test(filled), filled.match(/se-imgmeta[^>]*>[^<]*/));
+    ok('已上传：显示尺寸与体积读数', /96×48 · 0\.1 KB \/ 200 KB/.test(filled), filled.match(/se-imgmeta[^>]*>[^<]*/));
     ok('已上传：出现「替换 PNG」与「清除」', /替换 PNG/.test(filled) && /se-img-clear/.test(filled));
     ok('上传控件带 data-seimg（change 事件靠它识别）', /data-seimg="image"/.test(filled));
     ok('只接受 PNG（accept）', /accept="image\/png,\.png"/.test(filled));
