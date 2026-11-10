@@ -156,9 +156,16 @@
     },
     damage: {
       label: '伤害 · 结算', short: '伤害', color: '#ef7c8e',
-      desc: '所有伤害规则统一在此：命中时的公共伤害（与每个元素的伤害相加）、撞墙后留下的残留区域伤害，以及「持续伤害(跟随)」——触发后在跟随点留下一片持续掉血区（与特效模块解耦，特效只负责表现）',
+      desc: '所有伤害规则统一在此：先选「伤害对象」决定打敌方还是自伤，再选「触发事件」何时结算；触发事件=命中时 时，「命中判定」决定认哪种命中（弹珠碰撞 / 投射物命中 / 范围命中 / 必中直击）。撞墙后的残留区域伤害与「持续伤害(跟随)」也在这里配——触发后在跟随点留下一片持续掉血区（与特效模块解耦，特效只负责表现）',
       fields: [
-        sel('triggerEvent', '触发事件', 'onHit', TRIGGERS),
+        sel('affect', '伤害目标', 'enemy', [['enemy', '敌方'], ['self', '自身（反噬 / 自伤）'], ['both', '敌方 + 自身']],
+          '敌方=命中谁就伤害谁；自身=结算时反过来扣自己的血（反噬 / 献祭类技能）；双方=两边都吃这份伤害。自身的伤害不吃护盾以外的命中附加（印记 / 暴击按自身面板算）'),
+        sel('triggerEvent', '触发事件', 'onHit', TRIGGERS,
+          '何时结算这份伤害：施放时=技能一放就结算（自身位移 / 护盾类常用）；命中时=要真的打中才结算；撞墙时=本体撞墙的接触面；消失时=投射物寿命结束'),
+        sel('hitKind', '命中判定', 'auto', [
+          ['auto', '自动（按技能形态）'], ['body', '弹珠碰撞'], ['projectile', '投射物命中'],
+          ['area', '范围命中'], ['direct', '直接命中（必中）']
+        ], '仅「触发事件 = 命中时」生效。自动 = 有投射物→投射物命中；有范围判定→范围命中；只有自身位移（冲锋 / 突进）→弹珠碰撞；都没有→必中直击。选了「弹珠碰撞」就绝不会隔空扣血——本体必须真的碰到对手（试放沙盘里两颗弹珠有碰撞物理，可以直接撞出来）'),
         n('base', '基础伤害', 0, 0, 300, 1),
         n('pctMaxHp', '基础最大生命伤害(%)', 0, 0, 40, 0.5),
         n('critChance', '暴击率加成', 0, 0, 1, 0.02),
@@ -680,6 +687,44 @@
     return out;
   }
 
+  /* ---- 命中判定 / 伤害对象的共享口径（对局 game.js 与试放 admin.js 共用同一套判断）---- */
+  var HIT_KIND_LABEL = {
+    body: '弹珠碰撞', projectile: '投射物命中', area: '范围命中', direct: '直接命中', auto: '自动'
+  };
+  /** 节点实际生效的命中来源：编译期已把 auto 落成具体值，这里兼容未编译的原始参数 */
+  function damageKindOf(node) {
+    var k = node && (node._hitKind || node.hitKind);
+    return (k && k !== 'auto') ? k : 'direct';
+  }
+  /** 本次命中来源是否被该节点接受。kind 为空 = 没有「碰撞瞬间」的结算（DoT / 区域 tick /
+      印记引爆 / 回响），此时不按来源过滤，保持旧行为。 */
+  function damageAcceptsKind(node, kind) {
+    if (!kind) return true;
+    return damageKindOf(node) === kind;
+  }
+  /** 命中时组里是否存在「必须真实接触」的伤害（弹珠碰撞 / 投射物命中）。
+      有 => 没有投射物 / 指向性的技能不能再走「必中直击」，否则就是隔空扣血。 */
+  function onHitNeedsContact(g) {
+    if (!g) return false;
+    var list = (g.damageList && g.damageList.length) ? g.damageList : (g.damage ? [g.damage] : []);
+    for (var i = 0; i < list.length; i++) {
+      var k = damageKindOf(list[i]);
+      if (k === 'body' || k === 'projectile') return true;
+    }
+    return false;
+  }
+  /** 取出该组里符合「命中来源 + 伤害对象」的伤害节点。
+      affect='enemy' → 敌方与双方；affect='self' → 自身与双方。 */
+  function damageNodesFor(g, kind, affect) {
+    var list = (g && g.damageList && g.damageList.length) ? g.damageList
+      : ((g && g.damage) ? [g.damage] : []);
+    return list.filter(function (d) {
+      var af = d._affect || d.affect || 'enemy';
+      var okAffect = affect === 'self' ? (af === 'self' || af === 'both') : (af !== 'self');
+      return okAffect && damageAcceptsKind(d, kind);
+    });
+  }
+
   /** 「命中时」组里是否有实际内容 —— 用于判定「没有投递模块」的技能要不要走「直接命中」。
    *  对局（game.js）与试放（admin.js）共用同一判定，避免两端对「算不算有输出」理解不一致；
    *  空组（只剩默认值的 damage/impact）不触发，防止纯被动技能凭空震屏。 */
@@ -1088,6 +1133,20 @@
     }
     var live = nodes.filter(function (x) { return seen[x.id]; });
 
+    /* 「命中判定」自动解析：auto 按技能形态落到具体口径，编译期定死；
+       运行时（对局 + 试放）只认节点的 _hitKind，不再各自猜。
+         - 有投射物            → projectile（投射物命中）
+         - 有范围判定          → area（近战 / 区域 / 射线判定命中）
+         - 只有作用于自身的位移 → body（冲锋 / 突进：本体必须真的碰到对手才结算）
+         - 都没有              → direct（必中直击，保持旧行为） */
+    var hasProjectileHost = live.some(function (x) { return x.type === 'projectile'; });
+    var hasRangeHost = live.some(function (x) { return x.type === 'range'; });
+    var hasSelfMotion = live.some(function (x) {
+      return x.type === 'motion' && ((x.params && x.params.scope) || 'self') === 'self';
+    });
+    var AUTO_HIT = hasProjectileHost ? 'projectile'
+      : (hasRangeHost ? 'area' : (hasSelfMotion ? 'body' : 'direct'));
+
     /* 三套节点桶：
        all                 = 全部可达节点（旧行为，保持 C.events / C.projectileFx 原样）
        scoped['']          = 未绑定载体的节点 → 技能级公共效果
@@ -1135,6 +1194,12 @@
       // 运行时反查：这个节点属于哪个载体、自己是哪张节点（光环 / 区域实体据此取专属结算组）
       normalized._nodeId = x.id;
       normalized._hostId = ownerOf[x.id] || '';
+      /* 伤害节点带上编译期定死的「命中判定」与「伤害对象」：
+         运行时按这两个字段决定「这次命中算不算数」「打谁」，两端口径完全一致 */
+      if (x.type === 'damage') {
+        normalized._hitKind = (params.hitKind && params.hitKind !== 'auto') ? params.hitKind : AUTO_HIT;
+        normalized._affect = params.affect || 'enemy';
+      }
       all[evKey][x.type].push(normalized);
       ownBucket[evKey][x.type].push(Object.assign({}, normalized));
     });
@@ -1340,6 +1405,8 @@
     PRESETS: PRESETS, defaults: defaults, node: node, uid: uid, starterGraph: starterGraph,
     compile: compile, makeGraph: makeGraph, DEFAULT_CHARGE: DEFAULT_CHARGE, chargeOf: chargeOf,
     hitHasContent: hitHasContent,
+    HIT_KIND_LABEL: HIT_KIND_LABEL, damageKindOf: damageKindOf, damageAcceptsKind: damageAcceptsKind,
+    onHitNeedsContact: onHitNeedsContact, damageNodesFor: damageNodesFor,
     HOST_TYPES: HOST_TYPES, HOST_LABELS: HOST_LABELS, setHosts: setHosts,
     publicView: publicView, viewFor: viewFor, hostsOf: hostsOf, describeBindings: describeBindings,
     exclusiveView: exclusiveView, viewOfNode: viewOfNode,

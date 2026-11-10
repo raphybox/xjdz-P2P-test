@@ -53,12 +53,15 @@ const C = SM.compile(sk);
 const dm = C.events.onHit.damage;
 ok('旋风斩 onHit 伤害模块存在', !!dm);
 if (dm) {
+  // 用户会在后台改这些数值：期望值以节点原始参数为准，不写死，避免测试变成「数据快照」
+  const rawNode = (sk.graph.nodes || []).find(n => n.type === 'damage') || { params: {} };
+  const rp = rawNode.params || {};
   eq('dotEnable 透传', dm.dotEnable, true);
-  eq('dotDps 透传', dm.dotDps, 8);
-  eq('dotRadius 透传', dm.dotRadius, 70);
-  eq('dotInterval 透传', dm.dotInterval, 0.1);
-  eq('dotFollow 透传', dm.dotFollow, 'caster');
-  eq('dotDuration 透传', dm.dotDuration, 6);
+  eq('dotDps 透传', dm.dotDps, rp.dotDps);
+  eq('dotRadius 透传', dm.dotRadius, rp.dotRadius);
+  eq('dotInterval 透传', dm.dotInterval, rp.dotInterval);
+  eq('dotFollow 透传', dm.dotFollow, rp.dotFollow);
+  eq('dotDuration 透传', dm.dotDuration, rp.dotDuration);
   const fxNode = (sk.graph.nodes || []).find(n => n.type === 'fx');
   ok('fx 节点已清理 tick 字段', !fxNode.params.tickDamage && fxNode.params.tickDps == null);
 }

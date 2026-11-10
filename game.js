@@ -1758,28 +1758,65 @@
   }
 
   // 事件型 source（onHit / onWall / onLowHp / onCast）统一触发入口，带 0.4s 防抖
-  function triggerSkillEvent(f, type, contact) {
+  function triggerSkillEvent(f, type, contact, meta) {
     if (!SKILL_RT || !f._skillCasters) return;
     f._skillCasters.forEach(caster => {
-      if (caster.charge < 1) return;          // 未充能完毕：不释放，也不消耗次数
+      /* 本体碰撞窗口：技能刚施放、本体还在冲刺途中，这时的物理碰撞属于「这一发技能命中」。
+         注意必须放在 source.trigger 过滤之前——冲锋/突进通常由「充能完成时」触发，
+         若先按 trigger==='onHit' 过滤，这条分支永远走不到，表现就是撞上了也不掉血。
+         直接结算「命中时」组，不重新施放、也不要求充能（充能在施放瞬间已清零）。 */
+      if (meta && meta.kind === 'body' && caster.bodyUntil && G.clock <= caster.bodyUntil) {
+        caster.bodyUntil = 0;
+        resolveBodyHit(f, caster.C);
+        return;
+      }
       caster.sources.forEach(s => {
         if (s.src.trigger !== type || s.src.enabled === false) return;
+        if (caster.charge < 1) return;          // 未充能完毕：不释放，也不消耗次数
         if (G.clock - s.lastEv < 0.4) return;
         if (s.src.maxCasts > 0 && s.n >= s.src.maxCasts) return;
         s.lastEv = G.clock; s.n += 1;
         caster.charge = 0;                    // 同一个技能共用一条充能，放完立刻清零
-        fireSkillCast(f, caster.C, s.src, true, contact);
+        fireSkillCast(f, caster.C, s.src, true, contact, meta);
       });
     });
   }
 
-  function fireSkillCast(f, C, src, isEvent, contact) {
+  /* 本体碰撞命中的纯结算入口：只走「命中时」组（伤害 / 状态 / 印记 / 特效），
+     不再重播「施放时」组——否则一次碰撞会把冲锋位移、护盾、施放特效全都再放一遍。 */
+  function resolveBodyHit(f, C) {
+    const opp = (f.side === 'player') ? G.enemy : G.player;
+    if (!C || !opp || opp === f) return;
+    const SM = SKILL_RT && SKILL_RT.SM;
+    const PUB = (SM && SM.publicView) ? SM.publicView(C) : C;
+    directHit(PUB, f, opp, 'body');
+  }
+
+  function fireSkillCast(f, C, src, isEvent, contact, meta) {
     if (!SKILL_RT || !f) return;
     const opp = (f.side === 'player') ? G.enemy : G.player;
     if (!opp) return;
     const SM = SKILL_RT.SM;
     // 技能级公共视图：只含没有绑定到任何载体的模块，施放阶段统一播一次
     const PUB = (SM.publicView ? SM.publicView(C) : C);
+    /* 本体碰撞窗口：命中时组里有「弹珠碰撞」伤害、且本次施放不是碰撞触发的，
+       为这一发开一个窗口（覆盖位移时长）。窗口内的物理碰撞算这一发的命中，
+       不会重新施放、也不受充能条拦截；每次施放只认一次碰撞。 */
+    (function armBodyWindow() {
+      if (!SM || !SM.onHitNeedsContact) return;
+      if (meta && meta.kind) return;
+      const onHitGrp = (PUB.events && PUB.events.onHit) || PUB;
+      if (!SM.onHitNeedsContact(onHitGrp)) return;
+      // 只有真的配了「弹珠碰撞」伤害才开窗：投射物技能的身体摩擦不该触发它的命中组
+      const hasBodyNode = !!SM.damageNodesFor &&
+        (SM.damageNodesFor(onHitGrp, 'body', 'enemy').length > 0 ||
+         SM.damageNodesFor(onHitGrp, 'body', 'self').length > 0);
+      if (!hasBodyNode) return;
+      const castGrp = (PUB.events && PUB.events.onCast) || PUB;
+      const moveDur = (castGrp.motion || []).reduce((a, m) => Math.max(a, Number(m.duration) || 0), 0);
+      const win = Math.max(1.0, moveDur + 0.4);
+      (f._skillCasters || []).forEach(c => { if (c.C === C) c.bodyUntil = G.clock + win; });
+    })();
     // 本次施放的「投射物绑定」待挂队列：applyEventEffects 里登记，投射物真正发射后再结算
     G._pendingProjMovers = [];
     let baseAngle = null;
@@ -1813,11 +1850,18 @@
       if (!isEvent) triggerSkillEvent(f, 'onCast');
       return;
     }
-    /* 既没有「投射物」也没有「指向性」模块：把「命中时」整组直接结算在对手身上
-       （直接命中 = 必中的单体指向）。否则 source → 标记 → 像素特效 这类技能会整条链路空转。 */
+    /* 既没有「投射物」也没有「指向性」模块：
+       · 命中时组里有「弹珠碰撞 / 投射物命中」的伤害 → 必须等真实接触（物理碰撞再触发本函数），
+         这里绝不结算，否则就是冲锋没碰到人也扣血；
+       · 其余情况保持旧行为：整组直接结算在对手身上（等价必中单体指向）。 */
     if (!projectiles.length) {
       G._pendingProjMovers = [];
-      directHit(PUB, f, opp);
+      const grp0 = (PUB.events && PUB.events.onHit) || PUB;
+      const needsContact = (SM && SM.onHitNeedsContact) ? SM.onHitNeedsContact(grp0) : false;
+      const hitKind = (meta && meta.kind) ? meta.kind : null;
+      if (hitKind) directHit(PUB, f, opp, hitKind);          // 真实碰撞 / 投射物触发的命中
+      else if (!needsContact) directHit(PUB, f, opp, 'direct');
+      // 需要真实接触但本次不是接触触发：只留施放表现，等物理碰撞再来
       if (!isEvent) triggerSkillEvent(f, 'onCast');
       return;
     }
@@ -1855,7 +1899,7 @@
         // 旧编译层被浏览器缓存时兜底，避免整局抛错（用户 Ctrl+F5 后走下面的新链路）
         const pt = formPoint(VC, f, opp, baseAngle, form);
         const targets = formTargets(VC, f, opp, pt, form);
-        if (targets.length) resolveAt(VC, f, pt.x, pt.y, Math.atan2(pt.y - f.y, pt.x - f.x), 'onHit', targets);
+        if (targets.length) resolveAt(VC, f, pt.x, pt.y, Math.atan2(pt.y - f.y, pt.x - f.x), 'onHit', targets, undefined, undefined, 'area');
       } else {
         /* 即时形态（近战 / 区域落点 / 射线）：统一走编译层的「范围判定」。
            旧实现把命中整组直接结算在唯一对手身上（melee 只做一次「太远就不放」的二值判断），
@@ -1872,7 +1916,7 @@
         ctx.desc = desc;
         ctx.targets = SM.targetsInRange(desc, ctx);
         if (ctx.targets.length) {
-          resolveAt(VC, f, pt.x, pt.y, desc.angle, 'onHit', ctx.targets, undefined, ctx);
+          resolveAt(VC, f, pt.x, pt.y, desc.angle, 'onHit', ctx.targets, undefined, ctx, 'area');
         } else {
           // 空挥：只在判定点播一次表现，不结算伤害 / 状态 / 震屏
           spawnSkillBurst(VC, pt.x, pt.y, desc.angle, 'impact', f, null, ctx);
@@ -1947,21 +1991,28 @@
     });
   }
 
-  function computeSkillDamage(grp, att, target, pctScale, ctx) {
+  /* 伤害求和：只累计「命中来源 + 伤害对象」都匹配的伤害节点。
+     - kind（ctx.kind）：本次命中的来源。弹珠碰撞 / 投射物命中 / 范围命中 / 必中直击各认各的，
+       配置成「弹珠碰撞」的伤害绝不会在投射物命中或隔空结算时生效。
+       kind 为空 = DoT / 区域 tick / 印记引爆这类没有「碰撞瞬间」的结算，不按来源过滤。
+     - affect：'enemy' 结算敌方伤害（含「双方」节点），'self' 只结算反噬 / 自伤节点。 */
+  function computeSkillDamage(grp, att, target, pctScale, ctx, affect) {
     const SM = SKILL_RT && SKILL_RT.SM;
+    const side = affect === 'self' ? 'self' : 'enemy';
+    const kind = (ctx && ctx.kind) ? ctx.kind : null;
     const scoped = !!(ctx && ctx.desc && SM && SM.moduleInRange);
-    const pass = m => !scoped || SM.moduleInRange(m, ctx.desc, target, ctx);
-    const dmg = grp.damage || {}, els = (grp.elements || []).filter(pass);
+    const inRange = m => !scoped || SM.moduleInRange(m, ctx.desc, target, ctx);
+    const dmg = grp.damage || {};
+    const nodes = (SM && SM.damageNodesFor) ? SM.damageNodesFor(grp, kind, side)
+      : ((grp.damageList && grp.damageList.length) ? grp.damageList : [dmg]);
     let pct = 0, base = 0;
-    if (scoped && grp.damageList && grp.damageList.length) {
-      // 逐节点求和：只有「作用范围」覆盖这个目标的伤害节点才计入本次结算
-      grp.damageList.filter(pass).forEach(dd => {
-        base += Number(dd.base) || 0;
-        pct += Number(dd.pctMaxHp) || 0;
-      });
-    } else {
-      pct = dmg.pctMaxHp || 0; base = dmg.base || 0;
-    }
+    // 逐节点求和：只有「作用范围 + 命中来源 + 伤害对象」都匹配的伤害节点才计入本次结算
+    nodes.filter(inRange).forEach(dd => {
+      base += Number(dd.base) || 0;
+      pct += Number(dd.pctMaxHp) || 0;
+    });
+    // 元素是敌方伤害，自伤结算不叠加
+    const els = side === 'enemy' ? (grp.elements || []).filter(inRange) : [];
     els.forEach(e => { base += (e.damage || 0); pct += (e.damagePct || 0); });
     const critChance = CONFIG.CRIT_BASE + (att.mods.crit || 0) + els.reduce((a, e) => a + (e.critBonus || 0), 0);
     const crit = Math.random() < critChance;
@@ -2287,7 +2338,8 @@
 
   function targetedResolve(C, att, tgt) {
     const ang = Math.atan2(tgt.y - att.y, tgt.x - att.x) || 0;
-    resolveAt(C, att, tgt.x, tgt.y, ang, 'onHit', [tgt]);
+    // 指向性 = 锁定命中，按「直接命中」口径结算（与必中直击一致）
+    resolveAt(C, att, tgt.x, tgt.y, ang, 'onHit', [tgt], undefined, undefined, 'direct');
   }
 
   // 推进指向性队列：延迟命中结算一次即出队；引导到期或目标 / 施法者死亡则中断
@@ -2503,30 +2555,39 @@
     });
   }
 
-  function resolveAt(C, att, x, y, rot, ev, targets, dmgScale, ctx) {
+  function resolveAt(C, att, x, y, rot, ev, targets, dmgScale, ctx, kind) {
     const grp = (C.events && C.events[ev]) || C;
     const sc = (dmgScale == null ? 1 : dmgScale);
     const SM = SKILL_RT && SKILL_RT.SM;
-    /* 结算上下文：判定区域 + 命中点 + 本次合法目标。
+    /* 结算上下文：判定区域 + 命中点 + 本次合法目标 + 命中来源。
        没有 ctx 时（旧调用 / 施放事件）按编译视图补一份，口径与即时形态完全一致。 */
-    const rctx = ctx || (SM && SM.rangeDescriptor ? {
+    let rctx = ctx || (SM && SM.rangeDescriptor ? {
       caster: att, opponent: (targets && targets[0]) || null,
       entities: [G.player, G.enemy].concat(G.enemies || []),
       angle: rot, point: { x: x, y: y }, targets: targets || []
     } : null);
+    // 只带命中来源调用时也要有上下文容器，否则伤害节点拿不到 kind
+    if (!rctx && kind) rctx = { caster: att, point: { x: x, y: y }, angle: rot, targets: targets || [] };
     if (rctx) {
       if (!rctx.point) rctx.point = { x: x, y: y };
       if (rctx.angle == null) rctx.angle = rot;
       if (!rctx.targets) rctx.targets = targets || [];
+      if (kind) rctx.kind = kind;
       if (!rctx.desc && SM && SM.rangeDescriptor) rctx.desc = SM.rangeDescriptor(C, rctx);
     }
     const hitList = (targets || []).filter(t => t && t.side !== att.side);
     hitList.forEach(t => {
-      const d = computeSkillDamage(grp, att, t, sc, rctx);
+      const d = computeSkillDamage(grp, att, t, sc, rctx, 'enemy');
       applyDamage(t, d.amount, att, d.crit, false, skillLabel(C));
       // 「印记」设定为命中即消耗时，本次结算后清空（不触发结束引爆）
       if (t._markConsume) clearMark(t, false);
     });
+    /* 反噬 / 自伤：伤害对象 = 自身（或双方）的节点在同一个结算点反向扣自己的血。
+       不吃元素与印记加成，只按自身面板走一遍护甲 / 暴击。 */
+    const selfDmg = computeSkillDamage(grp, att, att, sc, rctx, 'self');
+    if (selfDmg.amount > 0 && att && !att.dead) {
+      applyDamage(att, selfDmg.amount, att, selfDmg.crit, false, skillLabel(C, '反噬'));
+    }
     G.trauma = Math.min(1, G.trauma + (grp.impact.shake || 0.1));
     spawnSkillBurst(C, x, y, rot, evToAttach(ev), att, null, rctx);
     // 多目标：敌方状态逐个施加，自身状态只施加一次
@@ -2553,11 +2614,10 @@
     }
   }
 
-  /* 直接命中：技能既没有「投射物」也没有「指向性」模块时使用。
-     把「命中时」整组模块（伤害 / 元素 / 状态 / 印记 / 区域 / 回响 / 光环 / 特效 / 粒子）
-     直接结算在对手身上，等价于一个必中的单体指向技能。
-     判定「命中时组是否有内容」与试放共用 SM.hitHasContent，两端行为严格一致。 */
-  function directHit(C, att, opp) {
+  /* 直接命中：没有「投射物 / 指向性」载体时把「命中时」组结算在对手身上。
+     kind 说明这次命中算哪种来源：'direct' = 必中直击（施放即结算）；
+     'body' = 本体物理碰撞后补结算（触发事件选「弹珠碰撞」的技能走这里）。 */
+  function directHit(C, att, opp, kind) {
     if (!C || !att || !opp || opp === att) return;
     if (opp.hp != null && opp.hp <= 0) return;
     const grp = (C.events && C.events.onHit) || C;
@@ -2565,7 +2625,7 @@
       ? SKILL_RT.SM.hitHasContent(grp) : true;
     if (!has) return;   // 「命中时」组为空：纯施放型技能，不凭空产生一次命中
     const rot = Math.atan2(opp.y - att.y, opp.x - att.x);
-    resolveAt(C, att, opp.x, opp.y, rot, 'onHit', [opp]);
+    resolveAt(C, att, opp.x, opp.y, rot, 'onHit', [opp], undefined, undefined, kind || 'direct');
   }
 
   /* 旧入口保留为兼容包装：全部委托给编译层范围判定，杜绝两套口径漂移。
@@ -2611,17 +2671,18 @@
       targets: (target && target.side !== caster.side) ? [target] : []
     };
     if (SM && SM.rangeDescriptor) ctx.desc = SM.rangeDescriptor(C, ctx);
+    ctx.kind = 'projectile';   // 投射物命中：只认「命中判定 = 投射物命中 / 自动」的伤害节点
     if (q._quiet) {
       // 分裂子弹：只结算伤害与命中特效，避免二次分裂 / 区域雪球
       const grp = (C.events && C.events.onHit) || C;
       if (target && target.side !== caster.side) {
-        const d = computeSkillDamage(grp, caster, target, q._dmgScale, ctx);
+        const d = computeSkillDamage(grp, caster, target, q._dmgScale, ctx, 'enemy');
         applyDamage(target, d.amount, caster, d.crit, false, skillLabel(C, '分裂'));
       }
       spawnSkillBurst(C, q.x, q.y, ang, 'impact', caster, null, ctx);
       return;
     }
-    resolveAt(C, caster, q.x, q.y, ang, 'onHit', [target], q._dmgScale, ctx);
+    resolveAt(C, caster, q.x, q.y, ang, 'onHit', [target], q._dmgScale, ctx, 'projectile');
     const grp = (C.events && C.events.onHit) || C;
     (grp.split || []).forEach(s => spawnSplitModule(q, C, caster, s));
   }
@@ -3079,7 +3140,10 @@
         if (vn > CONFIG.MIN_IMPACT && G.clock - G.lastImpact > CONFIG.IMPACT_CD) {
           G.lastImpact = G.clock;
           resolveHit(p, e, nx, ny, vn);
-          triggerSkillEvent(p, 'onHit'); triggerSkillEvent(e, 'onHit');
+          /* 本体物理碰撞：这是唯一合法的「弹珠碰撞」命中来源。
+             同时把 meta 传下去——触发事件=命中时 且 命中判定=弹珠碰撞 的技能只认这一次。 */
+          triggerSkillEvent(p, 'onHit', null, { kind: 'body' });
+          triggerSkillEvent(e, 'onHit', null, { kind: 'body' });
         }
       }
     }
