@@ -288,9 +288,7 @@
     enemySkills: [],
     draftOptions: [],
     enemyDraftPick: null,
-    ghost: null,             // 异步对战中正在挑战的幽灵
-    lastGhost: null,         // 上一局挑战的幽灵（再战沿用）
-    myPicks: [],             // 本局我每回合的选择：{ skill, aim }，用于录制幽灵
+    myPicks: [],             // 本局我每回合的选择：{ skill, aim }
     speedIdx: 0,
     sound: true,
     clock: 0,
@@ -915,7 +913,6 @@
   function nickName() { return PROFILE.name || '玩家'; }
   function enemyNick() {
     if (P2P.active) return P2P.peerNick || '对手';
-    if (G.ghost) return G.ghost.nick || G.ghost.name || '幽灵对手';
     return '电脑陪练';
   }
   function loadProfile() {
@@ -933,167 +930,6 @@
     if (dom.nickBtn) dom.nickBtn.textContent = PROFILE.name ? ('昵称 · ' + PROFILE.name) : '设置昵称';
   }
 
-  /* ---------------------------------------------------------
-     5.5 异步对战 · 幽灵（离线 PvP）
-     一局结束后把「职业 + 每回合技能 + 每回合发射角」录成幽灵；
-     挑战时对手按幽灵的决策出手，全程不需要联网。
-     约定：幽灵里的 aim 记录「站在左侧时」的角度，作为右侧对手复用时镜像为 π - aim。
-     --------------------------------------------------------- */
-  const GHOST_KEY = 'wowpinball.ghosts.v1';
-  const GHOST_MAX = 12;
-  const GHOST_VER = 1;
-
-  let GHOSTS = [];
-  let RESULT_GHOST = null;   // 刚结束这一局录下的幽灵，结算页用它生成分享码
-
-  function ghostNow() { return Date.now(); }
-  function ghostId() {
-    return 'gh_' + ghostNow().toString(36) + Math.random().toString(36).slice(2, 5);
-  }
-  function saveGhosts() {
-    try { window.localStorage.setItem(GHOST_KEY, JSON.stringify(GHOSTS)); } catch (e) { /* 存储不可用时仅本局生效 */ }
-  }
-  function validGhost(g) {
-    return !!g && typeof g === 'object' && typeof g.cls === 'string' &&
-      Array.isArray(g.rounds) && g.rounds.length > 0;
-  }
-  // 统一清洗外部数据（本地存档 / 分享码），避免脏数据进战斗
-  function normalizeGhost(g) {
-    if (!validGhost(g)) return null;
-    const rounds = g.rounds.slice(0, CONFIG.TOTAL_ROUNDS).map(r => ({
-      skill: r && typeof r.skill === 'string' ? r.skill : null,
-      aim: r && isFinite(r.aim) ? Number(r.aim) : 0
-    }));
-    while (rounds.length < CONFIG.TOTAL_ROUNDS) rounds.push({ skill: null, aim: 0 });
-    return {
-      v: GHOST_VER,
-      id: typeof g.id === 'string' && g.id ? g.id : ghostId(),
-      name: typeof g.name === 'string' && g.name ? g.name.slice(0, 16) : '匿名幽灵',
-      nick: typeof g.nick === 'string' ? cleanNick(g.nick) : '',
-      cls: g.cls,
-      rounds: rounds,
-      score: {
-        player: (g.score && g.score.player) || 0,
-        enemy: (g.score && g.score.enemy) || 0,
-        draw: (g.score && g.score.draw) || 0
-      },
-      wins: Math.max(0, Math.round(g.wins || 0)),
-      losses: Math.max(0, Math.round(g.losses || 0)),
-      ts: g.ts || ghostNow(),
-      src: g.src === 'preset' || g.src === 'import' ? g.src : 'self'
-    };
-  }
-  // 同一份挑战的指纹：职业 + 每回合技能 + 每回合发射角。
-  // 分享码是同一份内容逐字节复制，导入时据此判断「库里是不是已经有了」。
-  function ghostSig(g) {
-    const rounds = (g && Array.isArray(g.rounds)) ? g.rounds : [];
-    return (g && g.cls ? g.cls : '?') + '|' + rounds.map(r =>
-      (r && r.skill ? r.skill : '-') + '@' +
-      (r && isFinite(r.aim) ? Number(r.aim).toFixed(3) : '0.000')).join(',');
-  }
-  function ghostBySig(sig) {
-    for (let i = 0; i < GHOSTS.length; i++) {
-      if (ghostSig(GHOSTS[i]) === sig) return GHOSTS[i];
-    }
-    return null;
-  }
-  // 空库时的陪练幽灵：按现有职业生成 3 个，玩家进来就能开一局
-  function makePresetGhosts() {
-    const out = [];
-    if (!CLASSES.length) return out;
-    for (let i = 0; i < Math.min(3, CLASSES.length); i++) {
-      const cls = CLASSES[(i * 3 + 1) % CLASSES.length];
-      const rounds = [];
-      for (let r = 0; r < CONFIG.TOTAL_ROUNDS; r++) {
-        const pick = drawSkills(cls, [], 1)[0];
-        rounds.push({ skill: pick ? pick.id : null, aim: rand(-0.5, 0.5) });
-      }
-      out.push(normalizeGhost({
-        v: GHOST_VER, id: 'gh_pre_' + cls.id, name: cls.name + '·老兵', cls: cls.id,
-        rounds: rounds, score: { player: 2, enemy: 1, draw: 0 },
-        ts: ghostNow() - (i + 1) * 86400000, src: 'preset'
-      }));
-    }
-    return out;
-  }
-  function loadGhosts() {
-    let list = null;
-    try { list = JSON.parse(window.localStorage.getItem(GHOST_KEY)); } catch (e) { list = null; }
-    const out = [], idxBySig = Object.create(null), seenId = Object.create(null);
-    let changed = false;
-    (Array.isArray(list) ? list : []).forEach(raw => {
-      const g = normalizeGhost(raw);
-      if (!g) { changed = true; return; }
-      const sig = ghostSig(g);
-      const prev = idxBySig[sig];
-      if (prev !== undefined) {
-        // 同一个挑战被重复导入过：只留一份，且「原件」优先于「导入的副本」
-        changed = true;
-        if (out[prev].src === 'import' && g.src !== 'import') out[prev] = g;
-        return;
-      }
-      if (seenId[g.id]) { g.id = ghostId(); changed = true; }   // id 撞车会让「删一个」连带删掉另一个
-      seenId[g.id] = 1;
-      idxBySig[sig] = out.length;
-      out.push(g);
-    });
-    GHOSTS = out.slice(0, GHOST_MAX);
-    if (out.length > GHOST_MAX) changed = true;
-    if (!GHOSTS.length) {
-      GHOSTS = makePresetGhosts();
-      saveGhosts();
-    } else if (changed) {
-      saveGhosts();   // 迁移结果写回，避免每次打开都重算
-    }
-    return GHOSTS;
-  }
-  function ghostRound(i) {
-    if (!G.ghost || !G.ghost.rounds.length) return null;
-    return G.ghost.rounds[clamp(i, 0, G.ghost.rounds.length - 1)];
-  }
-  function ghostSkill(id) {
-    return id ? (SKILLS.find(s => s.id === id) || null) : null;
-  }
-  // 把这一局「我的选择」录成幽灵，供下一局或分享给别人挑战
-  function recordGhost() {
-    if (!G.playerClass || !G.myPicks.length) return null;
-    const rounds = [];
-    for (let i = 0; i < CONFIG.TOTAL_ROUNDS; i++) {
-      const p = G.myPicks[i] || {};
-      rounds.push({ skill: p.skill || null, aim: typeof p.aim === 'number' ? p.aim : 0 });
-    }
-    const g = normalizeGhost({
-      v: GHOST_VER, id: ghostId(),
-      name: nickName() + '·幽灵', nick: PROFILE.name,
-      cls: G.playerClass.id, rounds: rounds,
-      score: { player: G.scores.player, enemy: G.scores.enemy, draw: G.scores.draw },
-      ts: ghostNow(), src: 'self'
-    });
-    // 同一构筑只保留最新一份，避免列表被同名幽灵刷满
-    const sig = go => go.cls + '|' + go.rounds.map(r => r.skill || '-').join(',');
-    const mySig = sig(g);
-    GHOSTS = GHOSTS.filter(x => !(x.src === 'self' && sig(x) === mySig));
-    GHOSTS.unshift(g);
-    if (GHOSTS.length > GHOST_MAX) GHOSTS.length = GHOST_MAX;
-    saveGhosts();
-    return g;
-  }
-  function ghostToCode(g) {
-    try { return window.btoa(unescape(encodeURIComponent(JSON.stringify(g)))); } catch (e) { return ''; }
-  }
-  function ghostFromCode(code) {
-    const raw = String(code || '').trim().replace(/^WP-/i, '').replace(/\s+/g, '');
-    if (!raw) return null;
-    let json = '';
-    try { json = decodeURIComponent(escape(window.atob(raw))); } catch (e) { return null; }
-    let obj = null;
-    try { obj = JSON.parse(json); } catch (e) { return null; }
-    const g = normalizeGhost(obj);
-    // 分享码里的 id 属于发送方本地库，导入端必须换成本地新 id；
-    // 否则复制出来的两份共用一个 id，删一个会把另一个一起删掉。
-    if (g) g.id = ghostId();
-    return g;
-  }
 
   /* ---------------------------------------------------------
      6. DOM
@@ -1118,15 +954,10 @@
     shopBtn: $('shopBtn'), shopModal: $('shopModal'), closeShopBtn: $('closeShopBtn'), shopDrawBtn: $('shopDrawBtn'),
     shopPool: $('shopPool'), shopCoin: $('shopCoin'), shopCostLabel: $('shopCostLabel'), shopHint: $('shopHint'),
     shopResult: $('shopResult'), coinChip: $('coinChip'),
-    ghostBtn: $('ghostBtn'), ghostModal: $('ghostModal'), closeGhostBtn: $('closeGhostBtn'),
-    ghostList: $('ghostList'), ghostCode: $('ghostCode'), ghostImportBtn: $('ghostImportBtn'), ghostMsg: $('ghostMsg'),
     asyncTag: $('asyncTag'),
     launchBtn: $('launchBtn'), aimOverlay: $('aimOverlay'),
     resultKicker: $('resultKicker'), resultTitle: $('resultTitle'), resultDesc: $('resultDesc'),
     roundReview: $('roundReview'), buildReview: $('buildReview'),
-    shareResultBtn: $('shareResultBtn'), shareModal: $('shareModal'), closeShareBtn: $('closeShareBtn'),
-    shareMeta: $('shareMeta'), sharePlays: $('sharePlays'), shareCode: $('shareCode'),
-    shareCopyBtn: $('shareCopyBtn'), shareImportBtn: $('shareImportBtn'), shareMsg: $('shareMsg'),
     rematchBtn: $('rematchBtn'), changeBtn: $('changeBtn'), logResultBtn: $('logResultBtn'),
     nickBtn: $('nickBtn'), nameModal: $('nameModal'), nameTitle: $('nameTitle'),
     nameInput: $('nameInput'), nameMsg: $('nameMsg'),
@@ -1277,159 +1108,9 @@
 
   function closeShop() { if (dom.shopModal) dom.shopModal.hidden = true; }
 
-  /* ---------------------------------------------------------
-     8.6 异步对战弹层：幽灵列表 / 挑战 / 分享码
-     --------------------------------------------------------- */
   function escHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
-  function setGhostMsg(text, kind) {
-    if (!dom.ghostMsg) return;
-    dom.ghostMsg.hidden = !text;
-    dom.ghostMsg.className = 'ghost-msg' + (kind ? ' ' + kind : '');
-    dom.ghostMsg.textContent = text || '';
-  }
-  function ghostDate(ts) {
-    const d = new Date(ts || Date.now());
-    return (d.getMonth() + 1) + '/' + d.getDate();
-  }
-  function renderGhostList() {
-    if (!dom.ghostList) return;
-    if (!GHOSTS.length) {
-      dom.ghostList.innerHTML = '<div class="ghost-empty">还没有幽灵。打完一局后，系统会自动把你的这一局收录成幽灵；也可以粘贴朋友的分享码导入。</div>';
-      return;
-    }
-    dom.ghostList.innerHTML = GHOSTS.map(g => {
-      const cls = CLASSES.find(c => c.id === g.cls) || { name: g.cls, color: '#8899aa' };
-      const rec = (g.wins || g.losses) ? ('守擂 ' + g.wins + ' 胜 ' + g.losses + ' 负') : '暂无战绩';
-      const src = g.src === 'self' ? '我的' : (g.src === 'preset' ? '内置' : '导入');
-      return '<div class="ghost-item" data-id="' + escHtml(g.id) + '" style="--gh-color:' + escHtml(cls.color) + '">' +
-        '<span class="gh-orb"></span>' +
-        '<div class="gh-body">' +
-        '<span class="gh-name">' + escHtml(ghostDisplayName(g)) + '</span>' +
-        '<span class="gh-meta">' + escHtml(cls.name) + ' · ' + escHtml(rec) + ' · ' + ghostDate(g.ts) + ' · ' + src + '</span>' +
-        '</div>' +
-        '<button class="ghost-btn gh-share" type="button" data-act="ghost-share" data-id="' + escHtml(g.id) + '">分享码</button>' +
-        '<button class="ghost-btn gh-del" type="button" data-act="ghost-del" data-id="' + escHtml(g.id) + '">删除</button>' +
-        '<button class="primary-btn gh-fight" type="button" data-act="ghost-fight" data-id="' + escHtml(g.id) + '">挑战</button>' +
-        '</div>';
-    }).join('');
-  }
-  function openGhosts() {
-    if (!dom.ghostModal) return;
-    loadGhosts();
-    renderGhostList();
-    setGhostMsg('');
-    dom.ghostModal.hidden = false;
-  }
-  function challengeGhost(id) {
-    const g = GHOSTS.find(x => x.id === id);
-    if (!g) { setGhostMsg('幽灵不存在，可能已被删除', 'bad'); renderGhostList(); return; }
-    if (!G.selectedClass) { setGhostMsg('请先在首页选择一个职业，再挑战幽灵', 'bad'); return; }
-    if (dom.ghostModal) dom.ghostModal.hidden = true;
-    startMatch(G.selectedClass, { ghost: g });
-  }
-  function shareGhost(id) {
-    const g = GHOSTS.find(x => x.id === id);
-    if (!g || !dom.ghostCode) return;
-    const code = ghostToCode(g);
-    if (!code) { setGhostMsg('分享码生成失败：当前环境不支持编码', 'bad'); return; }
-    dom.ghostCode.value = code;
-    dom.ghostCode.focus();
-    dom.ghostCode.select();
-    setGhostMsg('已生成「' + ghostDisplayName(g) + '」的分享码，复制后发给朋友即可', 'ok');
-  }
-  // 重复导入时把已有的那条闪一下，让玩家看清「就是它」
-  function flashGhostRow(id) {
-    if (!dom.ghostList) return;
-    const row = dom.ghostList.querySelector('.ghost-item[data-id="' + id + '"]');
-    if (!row) return;
-    row.classList.remove('is-dup');
-    void row.offsetWidth;   // 强制回流，保证连续两次也能重放动画
-    row.classList.add('is-dup');
-    if (row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
-    window.setTimeout(() => row.classList.remove('is-dup'), 1400);
-  }
-  function importGhost() {
-    if (!dom.ghostCode) return;
-    const g = ghostFromCode(dom.ghostCode.value);
-    if (!g) { setGhostMsg('分享码无法识别，请检查是否完整复制', 'bad'); return; }
-    if (!CLASSES.some(c => c.id === g.cls)) { setGhostMsg('这份幽灵用的弹珠在当前版本里不存在', 'bad'); return; }
-    const dup = ghostBySig(ghostSig(g));
-    if (dup) {
-      dom.ghostCode.value = '';
-      renderGhostList();
-      flashGhostRow(dup.id);
-      setGhostMsg('库里已经有这份挑战了（' + ghostDisplayName(dup) + '），无需重复导入', 'warn');
-      return;
-    }
-    g.src = 'import';
-    GHOSTS.unshift(g);
-    if (GHOSTS.length > GHOST_MAX) GHOSTS.length = GHOST_MAX;
-    saveGhosts();
-    dom.ghostCode.value = '';
-    setGhostMsg('已导入「' + ghostDisplayName(g) + '」的挑战，可以开始对战了', 'ok');
-    renderGhostList();
-  }
-
-  // 结算页分享：把这局录下的「职业 + 每回合技能 + 每回合方向」直接变成可复制的分享码
-  function fmtAimDeg(rad) {
-    const deg = Math.round((Number(rad) || 0) * 180 / Math.PI);
-    return (deg > 0 ? '+' : '') + deg + '°';
-  }
-  function setShareMsg(text, kind) {
-    if (!dom.shareMsg) return;
-    dom.shareMsg.hidden = !text;
-    dom.shareMsg.className = 'ghost-msg' + (kind ? ' ' + kind : '');
-    dom.shareMsg.textContent = text || '';
-  }
-  function openShare() {
-    if (!dom.shareModal) return;
-    const g = RESULT_GHOST;
-    if (!g) return;
-    const code = ghostToCode(g);
-    if (dom.shareCode) dom.shareCode.value = code;
-    if (dom.shareMeta) {
-      const cls = CLASSES.find(c => c.id === g.cls);
-      const sc = g.score || {};
-      dom.shareMeta.innerHTML =
-        '<span class="sm-cls" style="color:' + escHtml(cls ? cls.color : '#8899aa') + '">' + escHtml(g.nick || nickName()) + ' · ' + escHtml(cls ? cls.name : g.cls) + '</span>' +
-        '<span class="sm-sep">·</span><span>回合比分 ' + (sc.player || 0) + ' : ' + (sc.enemy || 0) + '</span>' +
-        '<span class="sm-sep">·</span><span>' + g.rounds.length + ' 回合决策</span>';
-    }
-    if (dom.sharePlays) {
-      dom.sharePlays.innerHTML = g.rounds.map((r, i) => {
-        const sk = SKILLS.find(s => s.id === r.skill);
-        return '<div class="share-play">' +
-          '<span class="sp-no">第 ' + (i + 1) + ' 回合</span>' +
-          '<span class="sp-skill" title="' + escHtml(sk ? (sk.intro ? sk.intro + ' · ' + sk.desc : sk.desc) : '') + '">' + escHtml(sk ? sk.name : '未记录') + '</span>' +
-          '<span class="sp-aim">方向 ' + fmtAimDeg(r.aim) + '</span>' +
-          '</div>';
-      }).join('');
-    }
-    setShareMsg(code ? '' : '当前环境不支持生成分享码', code ? '' : 'bad');
-    dom.shareModal.hidden = false;
-    if (dom.shareCode && code) { dom.shareCode.focus(); dom.shareCode.select(); }
-  }
-  function closeShare() { if (dom.shareModal) dom.shareModal.hidden = true; }
-  function copyShareCode() {
-    const code = dom.shareCode ? dom.shareCode.value : '';
-    if (!code) { setShareMsg('还没有分享码，先打完一局再来', 'bad'); return; }
-    const done = () => setShareMsg('已复制到剪贴板，发给好友就能开一局异步对战', 'ok');
-    const manual = () => {
-      try { dom.shareCode.focus(); dom.shareCode.select(); } catch (e) {}
-      setShareMsg('已全选分享码，按 Ctrl+C（Mac 为 ⌘+C）复制', 'warn');
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(code).then(done, manual);
-      return;
-    }
-    try {
-      dom.shareCode.focus(); dom.shareCode.select();
-      if (document.execCommand && document.execCommand('copy')) { done(); return; }
-    } catch (e) {}
-    manual();
   }
 
   /* ---------------------------------------------------------
@@ -1467,12 +1148,7 @@
     setNameMsg('');
     syncSideNames();
   }
-  // 幽灵的展示名：优先用分享码里带来的玩家昵称，旧码回落到幽灵名
-  function ghostDisplayName(g) {
-    if (!g) return '幽灵对手';
-    return g.nick || g.name || '幽灵对手';
-  }
-  // 把昵称同步到 HUD 两侧（改名 / 开新局 / 异步挑战都会调）
+  // 把昵称同步到 HUD 两侧（改名 / 开新局都会调）
   function syncSideNames() {
     if (dom.pNick) dom.pNick.textContent = nickName();
     if (dom.eNick) dom.eNick.textContent = enemyNick();
@@ -1568,13 +1244,6 @@
     return a;
   }
 
-  // 异步对战：幽灵的上场朝向直接取录像；录像存的是「站在左侧」的角度，换到右侧要镜像
-  function enemyLaunchAim() {
-    const gr = ghostRound(G.round - 1);
-    if (gr && typeof gr.aim === 'number') return Math.PI - gr.aim;
-    return enemyAimAngle();
-  }
-
   function resetForRound() {
     [G.player, G.enemy].forEach((f, i) => {
       recompute(f);
@@ -1584,8 +1253,8 @@
       const jitter = MAP && MAP.spawnJitter != null ? MAP.spawnJitter : 55;
       f.x = clamp(sp.x, f.r, CONFIG.ARENA_W - f.r);
       f.y = clamp(sp.y + rand(-jitter, jitter), f.r, CONFIG.ARENA_H - f.r);
-      // 初始发射：玩家用选定方向，敌方用指向玩家的朝向（联机时用房主转发的客机瞄准角，异步对战取幽灵录像）
-      const aim = i === 0 ? G.playerAim : (P2P.active ? (P2P.guestAim || enemyAimAngle()) : enemyLaunchAim());
+      // 初始发射：玩家用选定方向，敌方用指向玩家的朝向（联机时用房主转发的客机瞄准角）
+      const aim = i === 0 ? G.playerAim : (P2P.active ? (P2P.guestAim || enemyAimAngle()) : enemyAimAngle());
       f.vx = Math.cos(aim) * CONFIG.LAUNCH_SPEED * f.speed;
       f.vy = Math.sin(aim) * CONFIG.LAUNCH_SPEED * f.speed;
       f.combo = 0;
@@ -1621,14 +1290,7 @@
     const draftCount = CONFIG.DRAFT_OPTIONS + EFFECTS.extraDraft;
     G.draftOptions = drawSkills(G.playerClass, G.playerSkills, draftCount);
     const enemyOptions = drawSkills(G.enemyClass, G.enemySkills, draftCount);
-    // 异步对战：对手按幽灵录像选技能；失效（已拥有 / 已被删）时退回随机
-    let forced = null;
-    const gr = ghostRound(G.round);
-    if (!P2P.active && gr && gr.skill) {
-      const cand = ghostSkill(gr.skill);
-      if (cand && G.enemySkills.every(s => s.id !== cand.id)) forced = cand;
-    }
-    G.enemyDraftPick = P2P.active ? null : (forced || enemyOptions[randInt(enemyOptions.length)]);
+    G.enemyDraftPick = P2P.active ? null : enemyOptions[randInt(enemyOptions.length)];
 
     // 联机（房主）：为客机抽好技能牌发过去，客机只挑不发牌
     if (P2P.active && P2P.role === 'host') {
@@ -4036,38 +3698,13 @@
       dom.resultDesc.textContent += '  ·  ' + SHOP.currency + ' +' + gain;
     }
 
-    // 异步对战：结算挑战结果并更新幽灵守擂战绩
-    if (G.ghost) {
-      const g = GHOSTS.find(x => x.id === G.ghost.id);
-      if (g) {
-        if (cls === 'win') g.losses += 1;
-        else if (cls === 'lose') g.wins += 1;
-        saveGhosts();
-      }
-      dom.resultDesc.textContent = '异步挑战「' + ghostDisplayName(G.ghost) + '」 · ' + dom.resultDesc.textContent;
-    }
-    // 联机局不录幽灵；房主先把整局结果广播给客机再走本地结算
-    if (P2P.active) {
-      if (P2P.role === 'host') {
-        p2pSend({
-          k: 'match_end',
-          sc: { player: G.scores.player, enemy: G.scores.enemy, draw: G.scores.draw },
-          rs: G.roundResults.map(r => ({ round: r.round, pp: r.pp, ep: r.ep, winner: r.winner, reason: r.reason }))
-        });
-      }
-      RESULT_GHOST = null;
-      if (dom.shareResultBtn) {
-        dom.shareResultBtn.disabled = true;
-        dom.shareResultBtn.title = '联机对战不支持幽灵分享';
-      }
-    } else {
-      // 无论普通还是异步对局，结束后都把「我的这一局」收录成幽灵
-      RESULT_GHOST = recordGhost();
-      if (RESULT_GHOST) dom.resultDesc.textContent += '  ·  已收录你的幽灵，可生成分享码发给好友';
-      if (dom.shareResultBtn) {
-        dom.shareResultBtn.disabled = !RESULT_GHOST;
-        dom.shareResultBtn.title = RESULT_GHOST ? '把这局的技能与发射方向生成分享码' : '本局没有可分享的决策记录';
-      }
+    // 联机局：房主先把整局结果广播给客机，再走本地结算
+    if (P2P.active && P2P.role === 'host') {
+      p2pSend({
+        k: 'match_end',
+        sc: { player: G.scores.player, enemy: G.scores.enemy, draw: G.scores.draw },
+        rs: G.roundResults.map(r => ({ round: r.round, pp: r.pp, ep: r.ep, winner: r.winner, reason: r.reason }))
+      });
     }
 
     dom.roundReview.innerHTML = G.roundResults.map(r => {
@@ -4104,14 +3741,8 @@
   function startMatch(cls, opts) {
     opts = opts || {};
     ensureAudio();
-    RESULT_GHOST = null;   // 新对局开始，上一局的分享码作废
-    closeShare();
     G.playerClass = cls;
-    G.ghost = opts.ghost || null;
-    G.lastGhost = G.ghost;
-    const ghostCls = G.ghost ? (CLASSES.find(c => c.id === G.ghost.cls) || null) : null;
-    G.enemyClass = ghostCls
-      || (opts.enemyClass ? (CLASSES.find(c => c.id === opts.enemyClass) || CLASSES[randInt(CLASSES.length)]) : CLASSES[randInt(CLASSES.length)]);
+    G.enemyClass = opts.enemyClass ? (CLASSES.find(c => c.id === opts.enemyClass) || CLASSES[randInt(CLASSES.length)]) : CLASSES[randInt(CLASSES.length)];
     G.player = makeFighter('player', cls);
     G.enemy = makeFighter('enemy', G.enemyClass);
     G.round = 0;
@@ -4137,20 +3768,19 @@
         dom.asyncTag.hidden = false;
         dom.asyncTag.textContent = '联机对战 · ' + enemyNick();
       } else {
-        dom.asyncTag.hidden = !G.ghost;
-        dom.asyncTag.textContent = G.ghost ? ('异步对战 · ' + ghostDisplayName(G.ghost)) : '';
+        dom.asyncTag.hidden = true;
+        dom.asyncTag.textContent = '';
       }
     }
     addLog('对战开始：' + nickName() + '（' + cls.name + '） 对阵 ' + enemyNick() + '（' + G.enemyClass.name + '）', 'hl');
     if (P2P.active) addLog('联机对战 · ' + (P2P.role === 'host' ? '本端为房主，判定在本端进行' : '本端为客机，画面由房主同步'), 'hl');
-    else if (G.ghost) addLog('对手是「' + ghostDisplayName(G.ghost) + '」的幽灵，会按它录下的技能与发射方向出手', 'hl');
     if (P2P.active && P2P.role === 'guest') {
       // 联机客机：不自己发牌，等房主的 draft / aim 事件
       G.phase = 'wait-draft';
       showBanner('等待房主发牌', '双方技能与出生位由房主同步', 0);
       return;
     }
-    openDraft('战前准备 · 随机三选一', G.ghost ? '异步对战 · 对手由幽灵接管' : '选择一个技能，本局全程生效');
+    openDraft('战前准备 · 随机三选一', '选择一个技能，本局全程生效');
   }
 
   /* ---------------------------------------------------------
@@ -4279,7 +3909,7 @@
   if (dom.launchBtn) dom.launchBtn.addEventListener('click', () => launchRound());
   dom.rematchBtn.addEventListener('click', () => {
     if (P2P.active) { p2pBackToRoom(true); return; }   // 任一方点再战，双方一起回房间重新准备
-    ensureAudio(); startMatch(G.playerClass, G.lastGhost ? { ghost: G.lastGhost } : null);
+    ensureAudio(); startMatch(G.playerClass);
   });
   dom.changeBtn.addEventListener('click', () => {
     if (P2P.active) p2pTeardown('你退出了对局');   // 通知对方后断开
@@ -4352,23 +3982,6 @@
   if (dom.shopModal) dom.shopModal.addEventListener('click', ev => { if (ev.target === dom.shopModal) closeShop(); });
   if (dom.shopDrawBtn) dom.shopDrawBtn.addEventListener('click', drawMarble);
 
-  // 异步对战弹层
-  if (dom.ghostBtn) dom.ghostBtn.addEventListener('click', openGhosts);
-  if (dom.closeGhostBtn) dom.closeGhostBtn.addEventListener('click', () => { dom.ghostModal.hidden = true; });
-  if (dom.ghostModal) dom.ghostModal.addEventListener('click', ev => { if (ev.target === dom.ghostModal) dom.ghostModal.hidden = true; });
-  if (dom.ghostImportBtn) dom.ghostImportBtn.addEventListener('click', importGhost);
-
-  // 结算分享码弹层
-  if (dom.shareResultBtn) dom.shareResultBtn.addEventListener('click', openShare);
-  if (dom.closeShareBtn) dom.closeShareBtn.addEventListener('click', closeShare);
-  if (dom.shareModal) dom.shareModal.addEventListener('click', ev => { if (ev.target === dom.shareModal) closeShare(); });
-  if (dom.shareCopyBtn) dom.shareCopyBtn.addEventListener('click', copyShareCode);
-  if (dom.shareImportBtn) dom.shareImportBtn.addEventListener('click', () => {
-    closeShare();
-    openGhosts();
-    setGhostMsg('把朋友的分享码粘贴到下面，点「导入」就能挑战', 'ok');
-    if (dom.ghostCode) { dom.ghostCode.focus(); dom.ghostCode.select(); }
-  });
   // 昵称弹层：首次进入强制输入，之后可从顶栏修改
   if (dom.nickBtn) dom.nickBtn.addEventListener('click', () => openNameModal(true));
   if (dom.nameConfirmBtn) dom.nameConfirmBtn.addEventListener('click', confirmName);
@@ -4380,27 +3993,10 @@
     else if (ev.key === 'Escape') { ev.stopPropagation(); closeNameModal(); }
   });
 
-  if (dom.ghostList) dom.ghostList.addEventListener('click', ev => {
-    const btn = ev.target.closest('[data-act]');
-    if (!btn) return;
-    const act = btn.dataset.act, id = btn.dataset.id;
-    if (act === 'ghost-fight') challengeGhost(id);
-    else if (act === 'ghost-share') shareGhost(id);
-    else if (act === 'ghost-del') {
-      const idx = GHOSTS.findIndex(g => g.id === id);
-      if (idx >= 0) GHOSTS.splice(idx, 1);   // 只删命中的这一条，不按 id 批量抹除
-      saveGhosts();
-      renderGhostList();
-      setGhostMsg('已删除该幽灵', 'ok');
-    }
-  });
-
   document.addEventListener('keydown', ev => {
     if (ev.key === 'Escape') {
       if (dom.nameModal && !dom.nameModal.hidden) { closeNameModal(); return; }
       dom.rulesModal.hidden = true; dom.logModal.hidden = true;
-      if (dom.ghostModal) dom.ghostModal.hidden = true;
-      closeShare();
       closeShop();
       return;
     }
@@ -4430,7 +4026,6 @@
         '<strong>回合对撞</strong>：每回合开战前，在地图里拖动你弹珠上的箭头自由设定发射方向，点「发射弹珠」后弹珠以该方向出击；全程依靠墙壁与彼此反弹推进（力量不衰减），每次碰撞还会获得一段加速反弹；撞击按相对速度造成伤害。每回合 ' + CONFIG.ROUND_SECONDS + ' 秒，血量先归零者立即输掉该回合。',
         '<strong>回合判定</strong>：时间到时比较剩余血量百分比，高者赢下该回合；差距小于 ' + (CONFIG.DRAW_WINDOW * 100).toFixed(1) + '% 记为平局。',
         '<strong>休整</strong>：每回合结束后血量重置，再次随机选技能。已获得的技能会累积生效。',
-        '<strong>异步对战</strong>：首页「异步对战」可挑战录像幽灵——对手按它录下的技能与发射方向出手，全程不需要联网；你每打完一局也会被自动收录成幽灵，可用分享码发给朋友。',
         '<strong>胜负</strong>：' + CONFIG.TOTAL_ROUNDS + ' 回合后按赢下的回合数判定；数目相同则比较总剩余血量百分比。'
       ];
       if (SHOP.enabled) {
@@ -4586,7 +4181,6 @@
     requestAnimationFrame(loop);
   } else {
     loadWallet();
-    loadGhosts();
     renderClassGrid();
     p2pRoomBuildClasses();   // 房间页职业网格预建好，后台界面编辑器也能选到「首个职业按钮」
     renderConfigStatus();

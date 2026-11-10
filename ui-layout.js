@@ -29,7 +29,7 @@
     ['footer', '底部操作栏', '#startScreen .start-footer'], ['selected', '已选择信息', '.selected-line'],
     ['actions', '底部按钮组', '.start-actions'], ['coin', '金币标签', '#coinChip'],
     ['p2pBtn', '联机对战按钮', '#p2pBtn'],
-    ['ghostBtn', '异步对战按钮', '#ghostBtn'], ['shopBtn', '商店按钮', '#shopBtn'],
+    ['shopBtn', '商店按钮', '#shopBtn'],
     ['startBtn', '开始对战按钮', '#startBtn']
   ];
   var SCREENS = [
@@ -55,7 +55,7 @@
       ['title', '结果标题', '#resultTitle'], ['desc', '结果说明', '#resultDesc'],
       ['review', '回合回顾', '#roundReview'], ['build', '构筑回顾', '#buildReview'],
       ['actions', '结算按钮行', '.result-actions'], ['rematchBtn', '再战按钮', '#rematchBtn'],
-      ['shareBtn', '分享码按钮', '#shareResultBtn'], ['logResultBtn', '战斗记录按钮', '#logResultBtn']
+      ['logResultBtn', '战斗记录按钮', '#logResultBtn']
     ] },
     { id: 'room', name: '联机房间', kind: 'screen', root: '#roomScreen', items: [
       ['bg', '整页背景', 'body', 1], ['app', '内容容器', '.app', 1],
@@ -112,19 +112,6 @@
       ['drawBtn', '抽取按钮', '#shopDrawBtn'], ['result', '抽取结果', '#shopResult'],
       ['poolTitle', '卡池标题', '.shop-section-title'], ['pool', '卡池列表', '#shopPool'],
       ['pool1', '首个卡池项', '#shopPool .shop-pool-item']
-    ] },
-    { id: 'ghost', name: '弹层 · 异步对战', kind: 'modal', root: '#ghostModal', items: [
-      ['mask', '弹层遮罩', '#ghostModal', 1], ['card', '弹层卡片', '#ghostModal .modal-card'],
-      ['head', '标题栏', '#ghostModal .modal-head'], ['tip', '说明文字', '.ghost-tip'],
-      ['list', '幽灵列表', '#ghostList'], ['item', '首个幽灵条目', '#ghostList .ghost-item'],
-      ['share', '分享码区域', '.ghost-share'], ['code', '分享码输入框', '#ghostCode'],
-      ['importBtn', '导入按钮', '#ghostImportBtn']
-    ] },
-    { id: 'share', name: '弹层 · 分享这局', kind: 'modal', root: '#shareModal', items: [
-      ['mask', '弹层遮罩', '#shareModal', 1], ['card', '弹层卡片', '#shareModal .modal-card'],
-      ['head', '标题栏', '#shareModal .modal-head'], ['tip', '说明文字', '.share-tip'],
-      ['meta', '对局信息', '#shareMeta'], ['plays', '回合决策列表', '#sharePlays'],
-      ['code', '分享码输入框', '#shareCode'], ['actions', '按钮行', '.share-actions']
     ] },
     { id: 'p2p', name: '弹层 · 联机房间入口', kind: 'modal', root: '#p2pModal', items: [
       ['mask', '弹层遮罩', '#p2pModal', 1],
@@ -645,14 +632,13 @@
   }
 
   /* ---------- 屏幕切换（正常模式不调用，仅编辑器使用） ---------- */
-  var FORCE_VISIBLE = ['#banner', '#aimOverlay', '#asyncTag', '#shopResult', '#ghostMsg',
-    '#shareMsg', '#nameMsg', '#nameCancelBtn', '#closeNameBtn',
+  var FORCE_VISIBLE = ['#banner', '#aimOverlay', '#asyncTag', '#shopResult',
+    '#nameMsg', '#nameCancelBtn', '#closeNameBtn',
     /* 联机弹层的加入面板与提示默认 hidden，编辑态强制展开才能改素材 */
     '#p2pStageJoin', '#p2pJoinMsg'];
   // 编辑态下没开局的动态容器是空的，补占位内容后才能被选中、拖拽、换素材
   var SAMPLE_FILL = [
     ['#draftCards', 3, 'draft-card', '技能示例'],
-    ['#sharePlays', 3, 'share-play', '第 N 回合 · 技能 · 方向'],
     ['#battleLog', 6, 'log-line', '战斗记录示例'],
     ['#roundReview', 3, 'rr-item', '第 N 回合'],
     ['#buildReview', 2, 'build-col', '构筑回顾'],

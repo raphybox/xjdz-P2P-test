@@ -197,7 +197,6 @@ window.WOWPINBALL_DEFAULT = {
 
     { id: 'nickBtn', label: '顶栏「设置昵称」按钮', group: '按钮文字', selector: '#nickBtn', mode: 'text', value: '设置昵称' },
     { id: 'rulesBtn', label: '顶栏「规则」按钮', group: '按钮文字', selector: '#rulesBtn', mode: 'text', value: '规则' },
-    { id: 'ghostBtn', label: '底部「异步对战」按钮', group: '按钮文字', selector: '#ghostBtn', mode: 'text', value: '异步对战' },
     { id: 'shopBtn', label: '底部「商店」按钮', group: '按钮文字', selector: '#shopBtn', mode: 'text', value: '商店' },
     { id: 'startBtn', label: '底部「开始对战」按钮', group: '按钮文字', selector: '#startBtn', mode: 'text', value: '开始对战' },
 
@@ -212,11 +211,7 @@ window.WOWPINBALL_DEFAULT = {
     { id: 'shopTitle', label: '商店弹层标题', group: '弹层文案', selector: '#shopModal .modal-head h3', mode: 'text', value: '商店 · 抽取弹珠' },
     { id: 'shopCost', label: '商店单抽价格标签', group: '弹层文案', selector: '#shopCostLabel', mode: 'text', value: '单抽 80 金币' },
     { id: 'shopHint', label: '商店抽取说明', group: '弹层文案', selector: '#shopHint', mode: 'text', value: '每次随机获得一颗卡池中的弹珠，重复获得会返还金币' },
-    { id: 'shopSection', label: '商店卡池标题', group: '弹层文案', selector: '.shop-section-title', mode: 'text', value: '卡池' },
-    { id: 'ghostTitle', label: '异步对战弹层标题', group: '弹层文案', selector: '#ghostModal .modal-head h3', mode: 'text', value: '异步对战 · 幽灵挑战' },
-    { id: 'ghostTip', label: '异步对战说明', group: '弹层文案', selector: '.ghost-tip', mode: 'html', value: '幽灵带着它当时的回合技能与发射方向出手。你每打完一局，系统也会把你的这一局收录成幽灵，可用分享码发给朋友。' },
-    { id: 'shareTitle', label: '分享弹层标题', group: '弹层文案', selector: '#shareModal .modal-head h3', mode: 'text', value: '分享这局挑战' },
-    { id: 'shareTip', label: '分享说明', group: '弹层文案', selector: '.share-tip', mode: 'html', value: '这串码记下了你的昵称、职业、每回合选的技能和拖出的发射方向。好友粘贴导入后，会用你这套决策当对手，随时开一局，不需要同时在线。' }
+    { id: 'shopSection', label: '商店卡池标题', group: '弹层文案', selector: '.shop-section-title', mode: 'text', value: '卡池' }
   ],
 
   /* 对局双方卡片上的 BUFF / DEBUFF 图标栏配置（后台「状态图标」页可逐条编辑、上传自定义 PNG 图标）。

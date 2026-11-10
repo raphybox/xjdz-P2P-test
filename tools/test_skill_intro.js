@@ -27,7 +27,7 @@ function segEnd(src, a, b) {
 
 console.log('1) game.js：SKILLS 映射把 intro 与自动生成的 desc 分开');
 const mapCode = segEnd(game, 'const skillClsArr =', '\n  /* ---------------------------------------------------------\n     4. 工具');
-const escCode = segEnd(game, 'function escHtml(s) {', '\n  function setGhostMsg');
+const escCode = segEnd(game, 'function escHtml(s) {', '\n  /* ---------------------------------------------------------\n     8.7 昵称弹层');
 const ctx = {
   DATA: {
     skills: [
@@ -67,8 +67,6 @@ console.log('3) 其它展示位同样带介绍且已转义');
 const miniAt = game.indexOf('function renderMiniSkills(skills)');
 const mini = game.slice(miniAt, game.indexOf('\n  function ', miniAt + 10));
 ok('技能条 hover 使用 intro 且 escHtml', /s\.intro \?/.test(mini) && /escHtml\(tip\)/.test(mini));
-const share = game.slice(game.indexOf("'<span class=\"sp-skill\""), game.indexOf("'<span class=\"sp-aim\""));
-ok('分享战报 hover 使用 intro 且 escHtml', /sk\.intro/.test(share) && /escHtml\(/.test(share));
 const recap = game.slice(game.indexOf('function buildCol('), game.indexOf('function buildCol(') + 600);
 ok('回合战报 hover 使用 intro 且 escHtml', /s\.intro/.test(recap) && /escHtml\(/.test(recap));
 

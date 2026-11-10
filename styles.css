@@ -504,50 +504,8 @@ canvas.cc-orb { background: none; display: block; }
 .shop-item .si-tag { margin-left: auto; font-size: 10px; color: var(--text-faint); white-space: nowrap; }
 .shop-item .si-tag.owned { color: #6f9ede; }
 
-/* ---------- 异步对战 · 幽灵 ---------- */
+/* ---------- 通用：弹层卡片 / 提示 ---------- */
 .ghost-modal-card { width: min(680px, 100%); }
-.ghost-tip {
-  font-size: 12px; color: var(--text-dim); line-height: 1.7;
-  background: #121926; border: 1px solid var(--line-soft); border-radius: 9px;
-  padding: 10px 12px; margin-bottom: 14px;
-}
-.ghost-list { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow-y: auto; }
-.ghost-empty {
-  padding: 22px 12px; text-align: center; font-size: 12px; color: var(--text-faint);
-  border: 1px dashed #33425a; border-radius: 10px;
-}
-.ghost-item {
-  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-  background: #121926; border: 1px solid var(--line-soft); border-radius: 10px;
-}
-.ghost-item .gh-orb {
-  width: 24px; height: 24px; border-radius: 50%; flex: none;
-  background: radial-gradient(circle at 32% 28%, #ffffffaa, var(--gh-color, #8aa) 45%, #0006 100%);
-  box-shadow: 0 0 10px var(--gh-color, #8aa);
-}
-.ghost-item .gh-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.ghost-item .gh-name { font-size: 13px; font-weight: 700; letter-spacing: .4px; }
-.ghost-item .gh-meta { font-size: 10.5px; color: var(--text-faint); }
-.ghost-item .ghost-btn { padding: 5px 10px; font-size: 11px; flex: none; }
-.ghost-item .gh-fight { padding: 6px 16px; font-size: 12px; flex: none; }
-.ghost-item.is-dup { animation: ghostDup 1.4s ease; }
-@keyframes ghostDup {
-  0%   { border-color: var(--accent); box-shadow: 0 0 0 0 rgba(217, 164, 65, .45); }
-  35%  { border-color: var(--accent); box-shadow: 0 0 0 5px rgba(217, 164, 65, .16); }
-  100% { border-color: var(--line-soft); box-shadow: 0 0 0 0 rgba(217, 164, 65, 0); }
-}
-.ghost-share { margin-top: 14px; }
-.ghost-share-head { display: flex; align-items: baseline; gap: 10px; font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
-.ghost-code-row { display: flex; gap: 9px; align-items: stretch; }
-.ghost-code {
-  flex: 1; min-width: 0; resize: vertical; font-size: 11px; line-height: 1.6;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  background: #0f1621; color: var(--text-dim); border: 1px solid #33425a;
-  border-radius: 7px; padding: 8px 10px; outline: none; transition: border-color .12s;
-}
-.ghost-code:focus { border-color: var(--accent); }
-.ghost-code::placeholder { color: #56657c; }
-.ghost-code-row .ghost-btn { flex: none; padding: 0 16px; }
 .ghost-msg { margin-top: 8px; font-size: 11.5px; color: var(--text-dim); }
 .ghost-msg.ok { color: #7fce9a; }
 .ghost-msg.warn { color: var(--accent-2); }
@@ -556,29 +514,6 @@ canvas.cc-orb { background: none; display: block; }
   margin-top: 4px; max-width: 190px; font-size: 10px; color: var(--accent-2);
   letter-spacing: .3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-
-/* ---------- 结算 · 分享码 ---------- */
-.share-modal-card { width: min(600px, 100%); }
-.share-tip {
-  font-size: 12px; color: var(--text-dim); line-height: 1.7;
-  background: #121926; border: 1px solid var(--line-soft); border-radius: 9px;
-  padding: 10px 12px; margin-bottom: 12px;
-}
-.share-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--text-dim); margin-bottom: 10px; }
-.share-meta .sm-cls { font-weight: 700; letter-spacing: .5px; }
-.share-meta .sm-sep { color: var(--text-faint); }
-.share-plays { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
-.share-play {
-  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
-  background: #121926; border: 1px solid var(--line-soft); border-radius: 9px; font-size: 12px;
-}
-.share-play .sp-no { flex: none; width: 62px; font-size: 10.5px; letter-spacing: 1px; color: var(--text-faint); }
-.share-play .sp-skill { flex: 1; min-width: 0; font-weight: 700; letter-spacing: .4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.share-play .sp-aim { flex: none; color: var(--accent-2); font-variant-numeric: tabular-nums; }
-.share-code-head { display: flex; align-items: baseline; gap: 10px; font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
-.share-code { width: 100%; min-height: 74px; }
-.share-actions { display: flex; gap: 10px; margin-top: 14px; }
-.share-actions .primary-btn { flex: 1; }
 
 /* ---------- 联机对战（P2P）弹层 ---------- */
 .p2p-stage { margin-bottom: 14px; }
@@ -691,8 +626,6 @@ canvas.cc-orb { background: none; display: block; }
   .class-grid { grid-template-columns: 1fr; }
   .class-card { padding: 15px 16px 17px; }
   .cc-trait { min-height: 0; margin-bottom: 13px; }
-  .ghost-item { flex-wrap: wrap; }
-  .ghost-item .gh-body { flex: 1 1 100%; }
   .scoreboard { grid-template-columns: 1fr 1fr; }
   .round-panel { grid-column: 1 / -1; grid-row: 1; flex-direction: row; gap: 14px; padding: 8px; }
   .draft-cards { grid-template-columns: 1fr; }

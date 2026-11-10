@@ -53,7 +53,6 @@
       <div class="start-actions">
         <span id="coinChip" class="coin-chip">金币 0</span>
         <button id="p2pBtn" class="ghost-btn" type="button">联机对战</button>
-        <button id="ghostBtn" class="ghost-btn" type="button">异步对战</button>
         <button id="shopBtn" class="ghost-btn" type="button">商店</button>
         <button id="startBtn" class="primary-btn" type="button" disabled>开始对战</button>
       </div>
@@ -158,7 +157,6 @@
       <div id="buildReview" class="build-review"></div>
       <div class="result-actions">
         <button id="rematchBtn" class="primary-btn" type="button">再战一局（同职业）</button>
-        <button id="shareResultBtn" class="ghost-btn" type="button">分享码 · 发给好友</button>
         <button id="logResultBtn" class="ghost-btn" type="button">战斗记录</button>
         <button id="changeBtn" class="ghost-btn" type="button">更换职业</button>
       </div>
@@ -234,34 +232,6 @@
   </div>
 </div>
 
-<!-- 异步对战弹层 -->
-<div id="ghostModal" class="modal" hidden>
-  <div class="modal-card ghost-modal-card">
-    <div class="modal-head">
-      <h3>异步对战 · 幽灵挑战</h3>
-      <div class="shop-head-right">
-        <span class="faint">离线可玩 · 对手是录好的决策</span>
-        <button id="closeGhostBtn" class="icon-btn" type="button">关闭</button>
-      </div>
-    </div>
-    <div class="ghost-tip">
-      幽灵带着它当时的回合技能与发射方向出手。你每打完一局，系统也会把你的这一局收录成幽灵，可用分享码发给朋友。
-    </div>
-    <div id="ghostList" class="ghost-list"></div>
-    <div class="ghost-share">
-      <div class="ghost-share-head">
-        <span>分享码</span>
-        <span class="faint">复制给朋友，对方粘贴后点「导入」即可挑战你的幽灵</span>
-      </div>
-      <div class="ghost-code-row">
-        <textarea id="ghostCode" class="textarea ghost-code" rows="2" placeholder="点击上方「分享码」生成，或在此粘贴别人的分享码"></textarea>
-        <button id="ghostImportBtn" class="ghost-btn" type="button">导入</button>
-      </div>
-      <div id="ghostMsg" class="ghost-msg" hidden></div>
-    </div>
-  </div>
-</div>
-
 <!-- 联机对战弹层：8 位房间码，服务端只中转一次建连信令 -->
 <div id="p2pModal" class="modal" hidden>
   <div class="modal-card ghost-modal-card">
@@ -294,33 +264,6 @@
   </div>
 </div>
 
-<!-- 结算分享码弹层 -->
-<div id="shareModal" class="modal" hidden>
-  <div class="modal-card share-modal-card">
-    <div class="modal-head">
-      <h3>分享这局挑战</h3>
-      <div class="shop-head-right">
-        <span class="modal-sub">好友导入即可异步对战</span>
-        <button id="closeShareBtn" class="icon-btn" type="button">关闭</button>
-      </div>
-    </div>
-    <div class="share-tip">
-      这串码记下了你的昵称、职业、每回合选的技能和拖出的发射方向。好友粘贴导入后，会用你这套决策当对手，随时开一局，不需要同时在线。
-    </div>
-    <div id="shareMeta" class="share-meta"></div>
-    <div id="sharePlays" class="share-plays"></div>
-    <div class="share-code-head">
-      <span>分享码</span>
-      <span class="faint">复制后发给好友，让对方在「异步对战」里粘贴导入</span>
-    </div>
-    <textarea id="shareCode" class="textarea ghost-code share-code" rows="5" readonly placeholder="完成一局对战后即可生成"></textarea>
-    <div class="share-actions">
-      <button id="shareCopyBtn" class="primary-btn" type="button">复制分享码</button>
-      <button id="shareImportBtn" class="ghost-btn" type="button">去导入朋友的码</button>
-    </div>
-    <div id="shareMsg" class="ghost-msg" hidden></div>
-  </div>
-</div>
 
 <script src="game-data.js"></script>
 <script src="data/published-config.js"></script>
