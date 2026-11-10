@@ -99,58 +99,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .section-head h2 { margin: 0 0 6px; font-size: 21px; letter-spacing: 1px; }
 .section-head p { margin: 0; color: var(--text-dim); font-size: 12.5px; }
 
-/* ---------- 职业选择 ---------- */
-.class-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
-}
-.class-card {
-  position: relative; text-align: left;
-  background: linear-gradient(160deg, var(--panel-2), var(--panel));
-  border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 18px 20px 20px; color: var(--text);
-  overflow: hidden;
-  transition: transform .16s, border-color .16s, box-shadow .16s;
-}
-.class-card::before {
-  content: ""; position: absolute; inset: 0 auto 0 0; width: 3px;
-  background: var(--cls-color); opacity: .75;
-}
-.class-card::after {
-  content: ""; position: absolute; width: 130px; height: 130px;
-  right: -60px; top: -70px; border-radius: 50%;
-  background: var(--cls-color); opacity: .055; filter: blur(8px);
-}
-.class-card:hover { transform: translateY(-3px); border-color: #46566f; }
-.class-card.selected {
-  border-color: var(--cls-color);
-  box-shadow: 0 0 0 1px var(--cls-color), 0 10px 30px #0007, inset 0 0 30px #ffffff06;
-  transform: translateY(-3px);
-}
-.class-card.selected::before { opacity: 1; box-shadow: 0 0 14px var(--cls-color); }
-/* 未解锁：点击进入商店 */
-.class-card.locked { cursor: pointer; }
-.class-card.locked::before { opacity: .3; }
-.class-card.locked .cc-orb { filter: grayscale(1) brightness(.6); box-shadow: none; }
-.class-card.locked .cc-name { color: var(--text-dim); }
-.class-card.locked .cc-stats { opacity: .35; }
-.class-card.locked:hover { border-color: #5a4a34; }
-.cc-lock {
-  margin-left: auto; font-size: 11px; letter-spacing: .5px; color: #d9a441;
-  border: 1px solid #6b542a; background: #241f14; border-radius: 4px; padding: 3px 8px;
-}
-.cc-head { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
-.cc-orb {
-  width: 48px; height: 48px; border-radius: 50%; flex: none;
-  background: radial-gradient(circle at 32% 28%, #ffffffaa, var(--cls-color) 45%, #0006 100%);
-  box-shadow: 0 0 18px var(--cls-color);
-}
-canvas.cc-orb { background: none; display: block; }
-.cc-name { font-size: 18px; font-weight: 700; letter-spacing: 1px; }
-.cc-trait { font-size: 12.5px; color: var(--text-dim); min-height: 36px; line-height: 1.5; margin: 8px 0 16px; }
-.cc-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-.cc-stat label { display: block; font-size: 11px; color: var(--text-faint); margin-bottom: 6px; letter-spacing: .5px; }
-.cc-stat .bar { height: 5px; border-radius: 3px; background: #2a3344; overflow: hidden; }
-.cc-stat .bar i { display: block; height: 100%; border-radius: 3px; background: var(--cls-color); }
+/* 职业卡样式已移除：v3 改用果实库 / 外观卡，见文件末尾「v3 界面」区块 */
 
 .start-footer {
   margin-top: 22px; display: flex; align-items: center; justify-content: space-between;
@@ -568,21 +517,11 @@ canvas.cc-orb { background: none; display: block; }
 .rp-class { margin-top: 4px; font-size: 12.5px; color: var(--text-dim); }
 .rp-ready { margin-top: 12px; font-size: 12px; font-weight: 700; color: var(--text-faint); }
 .rp-ready.on { color: var(--good); }
-.room-class-head { margin: 22px 0 10px; font-size: 13px; color: var(--text-dim); }
-.room-class-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
-.room-class-btn {
-  padding: 10px 11px; border-radius: 9px; text-align: left;
-  border: 1px solid var(--line); background: var(--bg-2); color: var(--text);
-}
-.room-class-btn.selected { border-color: var(--cls-color, var(--accent)); background: var(--panel-2); }
-.room-class-btn.locked { opacity: .42; }
-.rcb-name { font-weight: 700; font-size: 13px; color: var(--cls-color, var(--text)); }
-.rcb-trait { margin-top: 3px; font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 职业网格样式已移除：v3 房间改用 4 座位，见文件末尾「v3 界面」区块 */
 .room-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 22px; }
 .room-shared { font-size: 12.5px; color: var(--text-dim); line-height: 1.6; }
 .room-footer .primary-btn { flex: none; min-width: 120px; }
 @media (max-width: 680px) {
-  .room-class-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .room-players { flex-direction: column; }
   .room-vs { justify-content: center; }
   .room-code { font-size: 30px; letter-spacing: 8px; }
@@ -617,15 +556,9 @@ canvas.cc-orb { background: none; display: block; }
 #nameModal .ghost-msg { margin-top: 10px; }
 
 /* ---------- 自适应 ---------- */
-@media (max-width: 980px) {
-  .class-grid { grid-template-columns: repeat(2, 1fr); }
-}
 @media (max-width: 640px) {
   .app { padding: 14px 12px 32px; }
   .topbar { flex-wrap: wrap; gap: 12px; }
-  .class-grid { grid-template-columns: 1fr; }
-  .class-card { padding: 15px 16px 17px; }
-  .cc-trait { min-height: 0; margin-bottom: 13px; }
   .scoreboard { grid-template-columns: 1fr 1fr; }
   .round-panel { grid-column: 1 / -1; grid-row: 1; flex-direction: row; gap: 14px; padding: 8px; }
   .draft-cards { grid-template-columns: 1fr; }
@@ -660,4 +593,161 @@ body.preview-mode .arena-wrap { height: clamp(360px, 60vh, 720px); }
   font: 600 10.5px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   letter-spacing: .6px; color: rgba(150, 172, 205, .38);
   user-select: none; pointer-events: none; white-space: nowrap;
+}
+
+/* ============================================================
+   v3 界面：果实库 / 外观题材 / 孵化弹层 / 联机模式 /
+            4 座房间 / 4 座位 HUD
+   复用 :root 的 --panel / --text / --line / --accent 等暗色变量
+   ============================================================ */
+
+/* ---------- 首页 · 果实库 ---------- */
+.fruit-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px;
+}
+.fruit-card {
+  position: relative; text-align: center; color: var(--text);
+  background: linear-gradient(160deg, var(--panel-2), var(--panel));
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px 12px 12px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  transition: transform .16s, border-color .16s, box-shadow .16s;
+}
+.fruit-card:hover { transform: translateY(-3px); border-color: #46566f; }
+.fruit-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 10px 30px #0007;
+}
+.fruit-card[data-tier="common"] { --tier-color: #6c829e; }
+.fruit-card[data-tier="rare"] { --tier-color: #6f9ede; }
+.fruit-card[data-tier="epic"] { --tier-color: #b888e8; }
+.fc-icon {
+  width: 48px; height: 48px; flex: none; object-fit: contain; border-radius: 50%;
+  background: radial-gradient(circle at 34% 30%, #ffffff88, var(--tier-color, var(--accent)) 48%, #0006 100%);
+  box-shadow: 0 0 16px var(--tier-color, var(--accent));
+}
+.fc-name { font-size: 14px; font-weight: 700; letter-spacing: .5px; }
+.fc-tier {
+  font-size: 10px; padding: 1px 8px; border-radius: 4px;
+  border: 1px solid var(--tier-color, var(--line)); color: var(--tier-color, var(--text-dim));
+}
+.fc-count { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+/* ---------- 首页 · 外观题材与外观卡 ---------- */
+.skin-themes { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 12px; }
+.skin-theme-btn {
+  padding: 6px 14px; border-radius: 999px; font-size: 12px;
+  background: #18202d; color: var(--text-dim); border: 1px solid var(--line);
+  transition: background .15s, color .15s, border-color .15s;
+}
+.skin-theme-btn:hover { color: var(--text); border-color: #42536c; }
+.skin-theme-btn.active,
+.skin-theme-btn.theme-all.active {
+  color: #1a1408; font-weight: 700;
+  background: var(--accent); border-color: var(--accent-2);
+}
+.skin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+.skin-card {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0;
+  padding: 12px 8px 10px; border-radius: var(--radius); color: var(--text-dim);
+  background: linear-gradient(160deg, var(--panel-2), var(--panel));
+  border: 1px solid var(--line);
+  transition: transform .16s, border-color .16s, box-shadow .16s;
+}
+.skin-card:hover { transform: translateY(-3px); border-color: #46566f; }
+.skin-card.selected {
+  border-color: var(--accent); background: #1d2230;
+  box-shadow: inset 0 0 0 1px #d9a44144;
+}
+.skin-orb { width: 72px; height: 72px; display: block; }
+.sk-name {
+  font-size: 12.5px; font-weight: 700; color: var(--text);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ---------- 弹层 · 果实孵化 ---------- */
+#hatchModal .modal-card { width: min(820px, 100%); }
+.hatch-tip { margin: 0 0 12px; font-size: 12px; color: var(--text-dim); line-height: 1.7; }
+.hatch-canvas {
+  display: block; width: 100%; height: auto; border-radius: 10px;
+  background: #0b1018; border: 1px solid var(--line-soft);
+}
+.hatch-result {
+  margin-top: 12px; min-height: 56px; padding: 12px 14px; border-radius: 10px;
+  border: 1px solid var(--line); background: #101722;
+  font-size: 12.5px; color: var(--text-dim);
+}
+.hatch-fruit {
+  display: inline-flex; align-items: center; gap: 9px; margin: 4px;
+  padding: 7px 11px; border-radius: 8px;
+  background: #121926; border: 1px solid var(--line);
+}
+.hf-icon {
+  width: 30px; height: 30px; flex: none; object-fit: contain; border-radius: 50%;
+  background: radial-gradient(circle at 34% 30%, #ffffff88, var(--accent) 48%, #0006);
+}
+.hf-name { font-size: 13px; font-weight: 700; color: var(--text); }
+
+/* ---------- 联机弹层 · 模式切换 ---------- */
+.p2p-modes { display: flex; gap: 8px; margin-bottom: 14px; }
+.p2p-mode-btn {
+  flex: 1; padding: 9px 12px; border-radius: 8px; font-size: 12.5px;
+  background: #18202d; color: var(--text-dim); border: 1px solid var(--line);
+  transition: background .15s, color .15s, border-color .15s;
+}
+.p2p-mode-btn:hover { color: var(--text); border-color: #42536c; }
+.p2p-mode-btn.active {
+  color: var(--accent-2); font-weight: 700;
+  background: #2a2414; border-color: var(--accent);
+}
+
+/* ---------- 联机房间 · 4 座位 ---------- */
+.room-seats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.room-seat {
+  display: flex; flex-direction: column; gap: 5px; min-width: 0;
+  padding: 13px 15px; border-radius: 10px;
+  background: var(--bg-2); border: 1px solid var(--line-soft);
+}
+.room-seat[data-team="a"] { border-left: 3px solid #6f9ede; }
+.room-seat[data-team="b"] { border-left: 3px solid #ef7b7b; }
+.room-seat.is-ready { border-color: var(--good); }
+.rs-role { font-size: 10.5px; color: var(--text-faint); letter-spacing: .5px; }
+.rs-nick {
+  font-size: 16px; font-weight: 700; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rs-team { font-size: 11px; color: var(--text-dim); }
+.rs-ready { font-size: 12px; font-weight: 700; color: var(--text-faint); }
+.rs-ready.on { color: var(--good); }
+.rs-fruit { font-size: 11px; color: var(--accent-2); }
+#roomFruitHint { margin: 12px 0; font-size: 12px; color: var(--text-dim); }
+
+/* ---------- 战斗页 · 4 座位血量 HUD ---------- */
+.seat-hud { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.seat-hp {
+  display: grid; grid-template-columns: 92px minmax(0, 1fr) 64px;
+  align-items: center; gap: 8px;
+}
+.sh-name {
+  font-size: 11px; color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sh-track {
+  height: 9px; border-radius: 5px; overflow: hidden;
+  background: #0d121b; border: 1px solid #2b3648;
+}
+.sh-bar {
+  display: block; height: 100%; width: 100%;
+  background: linear-gradient(90deg, #b8434e, #e8736a);
+  transition: width .22s cubic-bezier(.2,.8,.3,1);
+}
+.seat-hp[data-team="b"] .sh-bar { background: linear-gradient(90deg, #5d93c9, #8fc4f0); }
+.sh-text { font-size: 11px; color: var(--text-dim); text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---------- v3 自适应 ---------- */
+@media (max-width: 680px) {
+  .fruit-grid { grid-template-columns: repeat(2, 1fr); }
+  .skin-grid { grid-template-columns: repeat(2, 1fr); }
+  .room-seats { grid-template-columns: 1fr; }
+  .seat-hp { grid-template-columns: 72px minmax(0, 1fr) 52px; gap: 6px; }
 }

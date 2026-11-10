@@ -1,9 +1,10 @@
-/* P2P 快照同步单测：编码 / 乱序丢弃 / 插值 / 外推 / 自适应时钟 / 追帧 / 回合重置 */
+/* P2P 快照同步单测：编码 / 乱序丢弃 / 插值 / 外推 / 自适应时钟 / 追帧 / 回合重置
+   另测：N 实体快照 encodeActors/decodeActors 与 SnapBuf.sample().actors */
 const assert = require('assert');
 global.window = {};
 require('../sync.js');
 const S = global.window.WowPinballSync;
-assert.ok(S && S.encodeSnap && S.SnapBuf, 'sync 模块未导出');
+assert.ok(S && S.encodeSnap && S.SnapBuf && S.encodeActors && S.decodeActors, 'sync 模块未导出');
 
 // 1) 编码：字段齐全且量化
 const p = { x: 123.45678, y: 10.11111, vx: -3.789, vy: 4.5678, hp: 88.55, shield: 5.0, maxHp: 100 };
@@ -96,5 +97,53 @@ assert.strictEqual(buf5.sample(), null, '回合切换重置后应暂无可渲染
 buf5.push(mk(40.0, 70));
 assert.ok(Math.abs(buf5.renderT - (40.0 - buf5.delay)) < 0.001, '新回合首包应重启渲染时钟');
 assert.strictEqual(buf5.sample().p.x, 70, '新回合首包立即可渲染');
+
+// 8) N 实体快照（2V2）：encodeActors / decodeActors
+const actors4 = [
+  { x: 1.234, y: 2.345, vx: -0.5, vy: 0.25, hp: 100, shield: 0, maxHp: 100 },
+  { x: 10.1, y: 20.2, vx: 1.1, vy: -2.2, hp: 88.55, shield: 5, maxHp: 90 },
+  { x: 30.3, y: 40.4, vx: 0, vy: 3.3, hp: 70, shield: 2.5, maxHp: 80 },
+  { x: 50.5, y: 60.6, vx: -4.4, vy: 4.4, hp: 60, shield: 0, maxHp: 75 }
+];
+const act = S.encodeActors(3, 5.6789, actors4, 9.8765);
+assert.strictEqual(act.k, 'a');
+assert.strictEqual(act.s[0], 3, 'round');
+assert.strictEqual(act.s[1], 5.68, 'clock 量化');
+assert.strictEqual(act.s[2], 4, '实体数 n');
+assert.strictEqual(act.s.length, 3 + 7 * 4 + 1, '总槽数 = 3 + 7n + 1');
+assert.strictEqual(act.s[3], 1.23, '实体0 x 量化');
+assert.strictEqual(act.s[9], 100, '实体0 maxHp 不量化');
+assert.strictEqual(act.s[act.s.length - 1], 9.88, 'roundTime 量化');
+const dec = S.decodeActors(act.s);
+assert.strictEqual(dec.round, 3);
+assert.strictEqual(dec.clock, 5.68);
+assert.strictEqual(dec.roundTime, 9.88);
+assert.strictEqual(dec.actors.length, 4);
+assert.strictEqual(dec.actors[1].hp, 88.55);
+assert.strictEqual(dec.actors[3].maxHp, 75);
+const dec2 = S.decodeActors(act);      // 也接受完整快照对象
+assert.strictEqual(dec2.actors.length, 4);
+assert.strictEqual(dec2.actors[0].x, 1.23);
+
+// 9) SnapBuf.sample().actors
+// 9a) k==='s'（旧 17 槽）→ actors = [p, e]
+const bufS = new S.SnapBuf();
+bufS.push(mk(3.50, 100, 0, 100, 5));
+bufS.push(mk(3.60, 120, 0, 80, 4.5));
+bufS.startAt(3.55);
+const smS = bufS.sample();
+assert.ok(Array.isArray(smS.actors), 'sample 应带 actors 字段');
+assert.strictEqual(smS.actors.length, 2, 'k=s 时 actors = [p,e]');
+assert.strictEqual(smS.actors[0], smS.p, 'actors[0] 即 p');
+assert.strictEqual(smS.actors[1], smS.e, 'actors[1] 即 e');
+// 9b) k==='a'（N 实体）→ actors 用 decodeActors 解出，原有 p/e/rt/snap 不变
+const bufA = new S.SnapBuf();
+bufA.push(act);
+const smA = bufA.sample();
+assert.ok(Array.isArray(smA.actors), 'k=a 快照 sample 应带 actors');
+assert.strictEqual(smA.actors.length, 4, 'k=a 时 actors 为 4 个实体');
+assert.strictEqual(smA.actors[1].hp, 88.55);
+assert.strictEqual(smA.actors[3].maxHp, 75);
+assert.ok(smA.p && smA.e && smA.rt !== undefined && smA.snap === act, '原有 p/e/rt/snap 字段保持不变');
 
 console.log('test_p2p_sync: all assertions passed');

@@ -116,8 +116,9 @@ console.log('5) 两端消费口径（源码断言）');
 ok('对局：无载体分支按 skillNeedsContact 拦掉隔空结算',
   /needsContact\s*=\s*\(SM && SM\.skillNeedsContact\)/.test(gameSrc));
 ok('对局：只在真实碰撞时带 kind 结算', /if \(hitKind\) directHit\(PUB, f, opp, hitKind\)/.test(gameSrc));
-ok('对局：物理碰撞传 body 来源',
-  /triggerSkillEvent\(p, 'onHit', null, \{ kind: 'body' \}\)/.test(gameSrc));
+ok('对局：物理碰撞传 body 来源（N×N 两两判定）',
+  /triggerSkillEvent\(a, 'onHit', null, \{ kind: 'body' \}\)/.test(gameSrc) &&
+  /for \(let ai = 0; ai < bodies\.length; ai\+\+\)/.test(gameSrc));
 ok('对局：本体碰撞窗口（充能已清零也能结算这一发）',
   /armBodyWindow/.test(gameSrc) && /resolveBodyHit/.test(gameSrc) && /caster\.bodyUntil/.test(gameSrc));
 ok('对局：投射物命中标记 projectile', /ctx\.kind = 'projectile'/.test(gameSrc));

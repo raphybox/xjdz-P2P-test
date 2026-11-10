@@ -39,7 +39,7 @@ vm.runInContext(markSrc + '\nthis.applyMarkModule = applyMarkModule; this.stepMa
 
 const att = { side: 'player', hp: 100, maxHp: 100, x: 0, y: 0, r: 16 };
 const tgt = { side: 'enemy', hp: 100, maxHp: 100, x: 10, y: 0, r: 20 };
-G.player = att; G.enemy = tgt;
+G.player = att; G.enemy = tgt; G.actors = [att, tgt];
 const MK = over => Object.assign({
   stacks: 1, maxStacks: 9, duration: 5, stackMode: 'add', damageAmp: 10, dotDps: 0,
   armorBreak: 0, slowPct: 0, detonate: 'none', detonateDamage: 0, detonateRadius: 0,

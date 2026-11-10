@@ -7,8 +7,6 @@
    patch = { dx, dy, w, h, img, fit, bgX, bgY, imgZoom, imgW, imgH, bg, opacity, radius, z, hide,
              文字排版：fs, fw, ff, fc, ta, va, lh, ls, it, nw, ts,
              盒模型：pt, pr, pb, pl, bw, bc, sh, zoom, rot, bwOff（隐藏元素自带 CSS 边框） }
-   ref   = 'card_<职业 id>'：该元素沿用另一张职业卡的全部样式，只在配置里存一个引用，
-           不重复保存 PNG。用于「一键同步到其它职业卡」，避免 9 份 base64 撑爆存档。
    --------------------------------------------------------- */
 (function () {
   'use strict';
@@ -16,24 +14,28 @@
   /* 每项：[key, 名称, CSS 选择器, 锁定位置尺寸(可选), 多个元素统一应用(可选), 分组(可选)]
      锁定项多为页面根 / 画布，拖拽它们会破坏布局或物理坐标，只允许换素材与样式。
      第 5 位 multi=1：一份覆盖应用到所有匹配元素（选择框只画第一个）。
-     职业卡不是「首张」一张，而是按职业列表动态展开，每个职业的背景都能单独上传 PNG。 */
-  var CLASS_GROUP = '职业卡背景 · 每个职业单独设置';
+     果实库 / 外观卡 / 房间座位 / 座位 HUD 均由 index.html 静态结构承载，
+     多实例元素统一用 multi=1 登记，不再按配置动态展开图层。 */
   var START_BASE = [
     ['bg', '整页背景', 'body', 1], ['app', '内容容器', '.app', 1],
     ['topbar', '顶部栏', '.topbar'], ['brand', '品牌区', '.brand'],
     ['brandMark', '品牌图标', '.brand-mark'], ['brandText', '品牌文字', '.brand-text'],
     ['topActions', '右上按钮组', '.top-actions'], ['nickBtn', '昵称按钮', '#nickBtn'],
-    ['head', '标题说明区', '#startScreen .section-head'], ['grid', '职业卡网格', '#classGrid'],
-    // ↓ setClasses() 在这里插入「每个职业一张卡」的独立图层
-    ['orb', '卡片弹珠头像（全部职业卡）', '#classGrid .cc-orb', 0, 1],
+    ['head', '标题说明区', '#startScreen .section-head'],
+    ['grid', '果实库网格', '#fruitGrid'],
+    ['fruitCard', '果实库卡片', '.fruit-card', 0, 1],
+    ['fruitIcon', '果实图标', '.fc-icon', 0, 1],
+    ['skinThemes', '外观题材切换', '#skinThemes'],
+    ['skinGrid', '外观卡网格', '#skinGrid'],
+    ['skinCard', '外观卡片', '.skin-card', 0, 1],
+    ['orb', '外观弹珠预览（全部外观卡）', '.skin-orb', 0, 1],
     ['footer', '底部操作栏', '#startScreen .start-footer'], ['selected', '已选择信息', '.selected-line'],
-    ['actions', '底部按钮组', '.start-actions'], ['coin', '金币标签', '#coinChip'],
+    ['actions', '底部按钮组', '.start-actions'],
     ['p2pBtn', '联机对战按钮', '#p2pBtn'],
-    ['shopBtn', '商店按钮', '#shopBtn'],
     ['startBtn', '开始对战按钮', '#startBtn']
   ];
   var SCREENS = [
-    { id: 'start', name: '首页 · 选职业', kind: 'screen', root: '#startScreen', items: START_BASE.slice() },
+    { id: 'start', name: '首页 · 果实与外观', kind: 'screen', root: '#startScreen', items: START_BASE.slice() },
     { id: 'battle', name: '对战 · 竞技场', kind: 'screen', root: '#battleScreen', items: [
       ['bg', '整页背景', 'body', 1], ['app', '内容容器', '.app', 1],
       ['score', '计分板', '.scoreboard'], ['pPanel', '我方面板', '.player-panel'],
@@ -47,7 +49,8 @@
       ['launchBtn', '发射按钮', '#launchBtn'], ['pHp', '我方血条', '#pHpBar'],
       ['eHp', '对手血条', '#eHpBar'], ['pSkills', '我方技能条', '#pSkills'],
       ['eSkills', '对手技能条', '#eSkills'],
-      ['pBuffs', '我方状态图标栏', '#pBuffs'], ['eBuffs', '对手状态图标栏', '#eBuffs']
+      ['pBuffs', '我方状态图标栏', '#pBuffs'], ['eBuffs', '对手状态图标栏', '#eBuffs'],
+      ['seatHud', '四座位血量 HUD', '#seatHud']
     ] },
     { id: 'result', name: '对战结算', kind: 'screen', root: '#resultScreen', items: [
       ['bg', '整页背景', 'body', 1], ['app', '内容容器', '.app', 1],
@@ -69,19 +72,13 @@
       ['copyBtn', '复制邀请码按钮', '#roomCopyBtn'],
       ['codeHint', '邀请码说明', '#roomCodeHint'],
       ['status', '房间状态条', '#roomStatus'],
-      ['players', '双方卡片容器', '.room-players'],
-      ['myCard', '我方案卡', '#roomMyCard'],
-      ['peerCard', '对手方卡', '#roomPeerCard'],
-      ['myNick', '我方昵称', '#roomMyNick'],
-      ['peerNick', '对手昵称', '#roomPeerNick'],
-      ['myClass', '我方职业', '#roomMyClass'],
-      ['peerClass', '对手职业', '#roomPeerClass'],
-      ['myReady', '我方准备徽标', '#roomMyReady'],
-      ['peerReady', '对手准备徽标', '#roomPeerReady'],
-      ['vs', 'VS 标识', '.room-vs'],
-      ['classHead', '选职业标题', '.room-class-head'],
-      ['classGrid', '职业网格', '#roomClassGrid'],
-      ['classBtn', '首个职业按钮', '#roomClassGrid .room-class-btn'],
+      ['seats', '四座位容器', '#roomSeats'],
+      ['seat', '座位卡片', '.room-seat', 0, 1],
+      ['seatRole', '座位角色', '.rs-role', 0, 1],
+      ['seatNick', '座位昵称', '.rs-nick', 0, 1],
+      ['seatTeam', '座位队伍', '.rs-team', 0, 1],
+      ['seatReady', '座位准备徽标', '.rs-ready', 0, 1],
+      ['fruitHint', '果实抽取提示', '#roomFruitHint'],
       ['footer', '房间底部操作栏', '.room-footer'],
       ['sharedHint', '共享状态提示', '#roomSharedHint'],
       ['readyBtn', '准备按钮', '#roomReadyBtn']
@@ -117,6 +114,8 @@
       ['mask', '弹层遮罩', '#p2pModal', 1],
       ['card', '弹层卡片', '#p2pModal .modal-card'],
       ['head', '标题栏', '#p2pModal .modal-head'],
+      ['modes', '对战模式切换', '#p2pModeSel'],
+      ['modeBtn', '模式按钮', '.p2p-mode-btn', 0, 1],
       ['tip', '说明文字', '#p2pStageSel .p2p-tip'],
       ['choice', '创建/加入按钮行', '.p2p-choice'],
       ['createBtn', '创建房间按钮', '#p2pCreateBtn'],
@@ -127,6 +126,15 @@
       ['acceptBtn', '加入确认按钮', '#p2pAcceptBtn'],
       ['joinMsg', '加入提示', '#p2pJoinMsg'],
       ['status', '连接状态行', '#p2pStatus']
+    ] },
+    { id: 'hatch', name: '弹层 · 果实孵化', kind: 'modal', root: '#hatchModal', items: [
+      ['mask', '弹层遮罩', '#hatchModal', 1],
+      ['card', '弹层卡片', '#hatchModal .modal-card'],
+      ['head', '标题栏', '#hatchModal .modal-head'],
+      ['tip', '说明文字', '#hatchModal .hatch-tip'],
+      ['canvas', '孵化动画画布', '#hatchCanvas'],
+      ['result', '孵化结果', '#hatchResult'],
+      ['confirmBtn', '收下按钮', '#hatchConfirmBtn']
     ] }
   ];
 
@@ -167,37 +175,11 @@
     inset: 'inset 0 0 0 1px rgba(255,255,255,.08),inset 0 3px 12px rgba(0,0,0,.55)'
   };
 
-  /* ---------- 动态职业卡图层 ----------
-     职业由后台配置决定（可以增删），首页的「职业卡背景」不是写死的一张，
-     而是按 classes 逐张展开：key = card_<职业 id>，选择器锁定对应 data-id 的卡片。
-     后台与预览 iframe 通过 init 消息同步 classes，保证两侧图层一致。 */
-  var CLASS_LIST = [];
-  var GRID_SLOT = (function () {
-    for (var i = 0; i < START_BASE.length; i++) if (START_BASE[i][0] === 'grid') return i + 1;
-    return START_BASE.length;
-  })();
-  function attrVal(v) { return String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
-  function setClasses(list) {
-    var seen = {}, arr = [];
-    (Array.isArray(list) ? list : []).forEach(function (c) {
-      if (!c || c.id === undefined || c.id === null) return;
-      var id = String(c.id);
-      if (!id || seen[id] || arr.length >= 40) return;
-      seen[id] = 1;
-      arr.push({ id: id, name: String(c.name || c.id) });
-    });
-    if (!arr.length) return CLASS_LIST;   // 空列表保留上一次的有效列表，避免图层瞬间清空
-    CLASS_LIST = arr;
-    var dyn = arr.map(function (c) {
-      return ['card_' + c.id, c.name + ' · 卡片背景',
-        '#classGrid .class-card[data-id="' + attrVal(c.id) + '"]', 0, 0, CLASS_GROUP];
-    });
-    SCREENS[0].items = START_BASE.slice(0, GRID_SLOT)
-      .concat(dyn)
-      .concat(START_BASE.slice(GRID_SLOT));
-    return arr;
-  }
-  function classList() { return CLASS_LIST.map(function (c) { return { id: c.id, name: c.name }; }); }
+  /* ---------- 职业卡兼容层 ----------
+     v3 已移除动态职业卡图层，果实库 / 外观卡 / 座位等均由 index.html 静态结构承载。
+     后台旧代码可能仍调用 setClasses / classList，这里保留空壳函数，避免残留调用报错。 */
+  function setClasses() { return []; }
+  function classList() { return []; }
 
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
   function num(v, lo, hi) { var n = parseFloat(v); return isFinite(n) ? clamp(n, lo, hi) : null; }
@@ -227,52 +209,13 @@
     });
   }
 
-  /* ---------- 配置清洗：只保留合法字段，避免脏数据注入样式 ---------- */
+  /* ---------- 配置清洗：只保留合法字段，避免脏数据注入样式 ----------
+     只遍历 SCREENS 里已登记的 key，旧配置残留的未知 key（如 card_*）会被静默忽略。 */
   function normalize(raw) {
     var out = { enabled: !raw || raw.enabled !== false, screens: {} };
     if (!raw || !raw.screens) return out;
     SCREENS.forEach(function (s) {
       var src = raw.screens[s.id]; if (!src || typeof src !== 'object') return;
-      // 旧版只有「首张职业卡」(key=card)：迁移成第一张职业卡的独立配置，
-      // 不复制成 9 份，避免把一张 PNG 在存档里放大 9 倍。
-      if (s.id === 'start' && src.card && CLASS_LIST.length) {
-        var legacyKey = 'card_' + CLASS_LIST[0].id;
-        if (!src[legacyKey]) {
-          var copy = {}; Object.keys(src).forEach(function (k) { copy[k] = src[k]; });
-          copy[legacyKey] = src.card;
-          src = copy;
-        }
-      }
-      // 旧存档里「同一张 PNG 被逐张上传」会让配置变成 9 份 base64（10 MB+）。
-      // 只保留第一张职业卡的二进制，其余同图卡片改成 ref 引用；不同的图不自动丢弃。
-      if (s.id === 'start') {
-        var cardKeys = [];
-        for (var ci = 0; ci < s.items.length; ci++) {
-          var ik = s.items[ci][0];
-          if (ik.indexOf('card_') === 0 && s.items[ci][5]) cardKeys.push(ik);
-        }
-        var master = '', masterImg = '';
-        /* 素材可能是 PNG / WebP / JPEG 的 dataURL（上传端超预算时会用 WebP 压缩），
-           统一按前缀正则判定，避免只认 PNG 把压缩后的图当成「没有素材」。 */
-        cardKeys.forEach(function (k) {
-          var p = src[k];
-          if (!master && p && typeof p.img === 'string' &&
-              /^data:image\/(png|webp|jpeg);base64,/.test(p.img)) { master = k; masterImg = p.img; }
-        });
-        if (master) {
-          var merged = {}; Object.keys(src).forEach(function (k) { merged[k] = src[k]; });
-          cardKeys.forEach(function (k) {
-            if (k === master) return;
-            var p = merged[k];
-            if (!p || typeof p !== 'object' || p.img !== masterImg) return;
-            var q2 = {};
-            Object.keys(p).forEach(function (f) { if (f !== 'img' && f !== 'ref') q2[f] = p[f]; });
-            q2.ref = master;
-            merged[k] = q2;
-          });
-          src = merged;
-        }
-      }
       var dst = {};
       s.items.forEach(function (it) {
         var p = src[it[0]]; if (!p || typeof p !== 'object') return;
@@ -316,7 +259,6 @@
         if (FITS.indexOf(p.fit) >= 0) q.fit = p.fit;
         if (typeof p.bg === 'string' && COLOR_RE.test(p.bg)) q.bg = p.bg;
         if (p.hide === true) q.hide = true;
-        if (typeof p.ref === 'string' && /^card_[A-Za-z0-9_-]{1,40}$/.test(p.ref) && p.ref !== it[0]) q.ref = p.ref;
         /* 画布图层（例如瞄准箭头）：没有 DOM，位置由游戏逻辑决定，
            除通用字段（img / rot / opacity / hide）外还要保留这几个绘制参数。 */
         if (it[6] === 'canvas') {
@@ -632,7 +574,7 @@
   }
 
   /* ---------- 屏幕切换（正常模式不调用，仅编辑器使用） ---------- */
-  var FORCE_VISIBLE = ['#banner', '#aimOverlay', '#asyncTag', '#shopResult',
+  var FORCE_VISIBLE = ['#banner', '#aimOverlay', '#asyncTag', '#hatchResult',
     '#nameMsg', '#nameCancelBtn', '#closeNameBtn',
     /* 联机弹层的加入面板与提示默认 hidden，编辑态强制展开才能改素材 */
     '#p2pStageJoin', '#p2pJoinMsg'];
@@ -664,30 +606,6 @@
       }
     });
   }
-  // 后台新增、但还没保存 / 发布的职业，在预览 iframe 里还没有真实卡片。
-  // 编辑态补一张占位卡，保证「每个职业的背景」都能立刻单独编辑（正常游戏不受影响）。
-  function fillClassPlaceholders() {
-    if (!EDITOR || !CLASS_LIST.length) return;
-    var grid = document.querySelector('#classGrid'); if (!grid) return;
-    var first = grid.querySelector('.class-card'), added = 0;
-    CLASS_LIST.forEach(function (c) {
-      var sel = '.class-card[data-id="' + attrVal(c.id) + '"]';
-      if (grid.querySelector(sel)) return;
-      added++;
-      var e = first ? first.cloneNode(true) : document.createElement('button');
-      e.className = 'class-card'; e.type = 'button';
-      e.setAttribute('data-id', c.id);
-      e.setAttribute('data-ui-sample', '1');
-      var nm = e.querySelector('.cc-name'); if (nm) nm.textContent = c.name;
-      var orb = e.querySelector('canvas.cc-orb');
-      if (orb) {
-        var d = document.createElement('div'); d.className = 'cc-orb';
-        orb.parentNode.replaceChild(d, orb);
-      }
-      grid.appendChild(e);
-    });
-    if (added) applyAll();   // 占位卡也要带上已经配置好的背景
-  }
   function showScreen(id) {
     var s = screenById(id); if (!s) return;
     state.screen = id;
@@ -704,7 +622,6 @@
         var e = document.querySelector(sel); if (e) e.hidden = false;
       });
       fillSamples();
-      fillClassPlaceholders();
     }
     applyAll();
     return true;
@@ -920,7 +837,6 @@
 
     listenParent(function (d) {
       if (d.type === 'init') {
-        if (d.classes) setClasses(d.classes);
         state.ui = normalize(d.ui);
         showScreen(d.screen || 'start');
         select(d.key || null, false);
@@ -929,7 +845,7 @@
       } else if (d.type === 'screen') { showScreen(d.screen); state.key = null; hideGuides(); drawBoxes(); }
       else if (d.type === 'select') { hideGuides(); select(d.key, false); }
       else if (d.type === 'patch') { setPatch(d.screen, d.key, d.patch); drawBoxes(); }
-      else if (d.type === 'ui') { if (d.classes) setClasses(d.classes); state.ui = normalize(d.ui); applyAll(); drawBoxes(); }
+      else if (d.type === 'ui') { state.ui = normalize(d.ui); applyAll(); drawBoxes(); }
       else if (d.type === 'reset') { setPatch(d.screen, d.key, null); drawBoxes(); }
       else if (d.type === 'showScreenOnly') { showScreen(d.screen); drawBoxes(); }
     });
@@ -937,16 +853,12 @@
     // 父窗口若在脚本就绪前就发了 init，这里主动要一次
     post({ type: 'needInit' });
     window.addEventListener('load', function () {
-      fillClassPlaceholders(); drawBoxes();
+      fillSamples(); drawBoxes();
       post({ type: 'ready', schema: publicSchema(), screen: state.screen });
     });
   }
 
   /* ---------- 初始化 ---------- */
-  // 后台页面没有 #startScreen 会提前 return，这里先按默认职业表展开一次图层，
-  // 之后 admin.js 会用 S.data.classes（含尚未保存的新增职业）再同步。
-  var bootData = window.WOWPINBALL_DATA || window.WOWPINBALL_DEFAULT;
-  setClasses(bootData && bootData.classes);
 
   /* ---------- 画布素材缓存 ----------
      瞄准箭头这类「画在 canvas 上」的图层不是 DOM，取不到元素背景，
@@ -1047,9 +959,8 @@
 
   if (!document.querySelector('#startScreen')) return;   // 后台页面只借用 API，不初始化 DOM
 
-  // 游戏端读 config-loader 的最终配置，后台由 admin.js 调用 setClasses 同步内存里的职业列表
+  // 游戏端读 config-loader 的最终配置
   var initialData = window.WOWPINBALL_DATA || window.WOWPINBALL_DEFAULT;
-  setClasses(initialData && initialData.classes);
   var initial = (initialData && initialData.ui) || defaults();
   state.ui = normalize(initial);
 

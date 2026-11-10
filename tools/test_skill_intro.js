@@ -40,10 +40,13 @@ const ctx = {
   CLASSES: [{ id: 'mage', name: '法师' }],
   TIER_NAME: { common: '普通', rare: '稀有', epic: '史诗' },
   window: { SkillModules: null },
+  fruitIcon: x => (x && x.icon) ? x.icon : '',
   console: console
 };
 vm.createContext(ctx);
-vm.runInContext(escCode + '\n' + mapCode + '\nthis.SKILLS = SKILLS; this.escHtml = escHtml;', ctx);
+const fruitCardSrc = segEnd(game, '  function fruitCardHtml(x, i) {', '\n  function chooseSkill(i) {');
+vm.runInContext(escCode + '\n' + fruitCardSrc + '\n' + mapCode +
+  '\nthis.SKILLS = SKILLS; this.escHtml = escHtml;', ctx);
 const S = ctx.SKILLS;
 eq('介绍收尾空白被清理', S[0].intro, '灼烧大地，留下火径');
 eq('旧技能无 intro → 空串', S[1].intro, '');

@@ -12,8 +12,11 @@
    5) resyncIfNeeded 只在严重落后（>1.5s，切后台等）时硬重置
 
    快照为紧凑数组（减少 JSON 体积）：
+   1V1 旧 17 槽（k:'s'）：
    [round, clock, p.x,p.y,p.vx,p.vy,hp,shield,maxHp,
             e.x,e.y,e.vx,e.vy,hp,shield,maxHp, roundTime]
+   2V2 N 实体（k:'a'）：
+   [round, clock, n, (每实体 7 槽 x,y,vx,vy,hp,shield,maxHp)…, roundTime]
    ============================================================= */
 (function () {
   'use strict';
@@ -21,7 +24,7 @@
   var q = function (v) { return Math.round(v * 100) / 100; };
   var clamp = function (v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); };
 
-  /* 房主端：把双方弹珠状态压成一行数组 */
+  /* 房主端：把双方弹珠状态压成一行数组（1V1 旧 17 槽，保持不变） */
   function encodeSnap(round, clock, p, e, roundTime) {
     return {
       k: 's',
@@ -32,6 +35,41 @@
         q(roundTime)
       ]
     };
+  }
+
+  /* 房主端：把 N 个实体（2 或 4 颗弹珠）压成一行数组。
+     布局：[round, q(clock), n, (每实体 7 槽 q(x),q(y),q(vx),q(vy),q(hp),q(shield),maxHp)…, q(roundTime)] */
+  function encodeActors(round, clock, actors, roundTime) {
+    var s = [round, q(clock), actors.length];
+    for (var i = 0; i < actors.length; i++) {
+      var a = actors[i];
+      s.push(q(a.x), q(a.y), q(a.vx), q(a.vy), q(a.hp), q(a.shield), a.maxHp);
+    }
+    s.push(q(roundTime));
+    return { k: 'a', s: s };
+  }
+
+  /* 客机端：解出 N 实体快照。参数可传数组 s 或完整快照 {k:'a', s} */
+  function decodeActors(s) {
+    var arr = Array.isArray(s) ? s : (s && s.s);
+    var n = arr[2];
+    var actors = [];
+    var o = 3;
+    for (var i = 0; i < n; i++) {
+      actors.push({
+        x: arr[o], y: arr[o + 1], vx: arr[o + 2], vy: arr[o + 3],
+        hp: arr[o + 4], shield: arr[o + 5], maxHp: arr[o + 6]
+      });
+      o += 7;
+    }
+    return { round: arr[0], clock: arr[1], actors: actors, roundTime: arr[o] };
+  }
+
+  /* sample().actors 取值：k==='a' 用 decodeActors 解出 N 个实体；
+     k==='s'（旧 17 槽双实体）用插值/外推得到的 [p,e] 作为两个实体。 */
+  function actorsOf(snapObj, p, e) {
+    if (snapObj && snapObj.k === 'a') return decodeActors(snapObj.s).actors;
+    return [p, e];
   }
 
   /* 客机端：带插值的快照缓冲 */
@@ -106,32 +144,35 @@
   };
 
   /* 取 renderT 时刻的插值状态；找不到相邻对时返回 null（沿用上次画面）。
-     回调里写入的是模拟侧语义：out.p = 房主弹珠，out.e = 客机弹珠。 */
+     回调里写入的是模拟侧语义：out.p = 房主弹珠，out.e = 客机弹珠。
+     返回值额外带 actors 字段（N 实体快照用），原有 p/e/rt/snap 不变。 */
   SnapBuf.prototype.sample = function () {
     var t = this.renderT;
     if (t == null || !this.snaps.length) return null;
     var snaps = this.snaps;
+    // 统一构造：在原有 p/e/rt/snap 之外补 actors
+    function out(p, e, rt, snapObj) {
+      return { p: p, e: e, rt: rt, snap: snapObj, actors: actorsOf(snapObj, p, e) };
+    }
     var first = snaps[0].s, last = snaps[snaps.length - 1].s;
     if (t <= first[1]) {
-      return { p: unpackSide(first, 2), e: unpackSide(first, 9), rt: first[16], snap: snaps[0] };
+      return out(unpackSide(first, 2), unpackSide(first, 9), first[16], snaps[0]);
     }
     if (t >= last[1]) {
       var over = t - last[1];
       var lim = Math.min(0.14, this.maxExtrap + Math.min(this.jitter, 0.06));
       if (over > 0 && over <= lim) {
-        return {
-          p: extrapSide(last, 2, over), e: extrapSide(last, 9, over),
-          rt: Math.max(0, last[16] - over), snap: snaps[snaps.length - 1]
-        };
+        return out(extrapSide(last, 2, over), extrapSide(last, 9, over),
+          Math.max(0, last[16] - over), snaps[snaps.length - 1]);
       }
-      return { p: unpackSide(last, 2), e: unpackSide(last, 9), rt: last[16], snap: snaps[snaps.length - 1] };
+      return out(unpackSide(last, 2), unpackSide(last, 9), last[16], snaps[snaps.length - 1]);
     }
     for (var i = 0; i < snaps.length - 1; i++) {
       var a = snaps[i].s, b = snaps[i + 1].s;
       if (t >= a[1] && t <= b[1]) {
         var alpha = (b[1] - a[1]) > 0 ? (t - a[1]) / (b[1] - a[1]) : 0;
         // 位置/速度插值；离散量取较新帧，血条与倒计时不慢半拍
-        return { p: lerpSide(a, b, alpha, 2), e: lerpSide(a, b, alpha, 9), rt: b[16], snap: snaps[i + 1] };
+        return out(lerpSide(a, b, alpha, 2), lerpSide(a, b, alpha, 9), b[16], snaps[i + 1]);
       }
     }
     return null;
@@ -157,6 +198,8 @@
 
   window.WowPinballSync = {
     encodeSnap: encodeSnap,
+    encodeActors: encodeActors,
+    decodeActors: decodeActors,
     SnapBuf: SnapBuf
   };
 })();

@@ -16,10 +16,12 @@ const missing = [...ids].filter(id => !html.includes('id="' + id + '"'));
 assert.deepStrictEqual(missing, [], '缺失的 DOM id: ' + missing.join(', '));
 
 // P2P / 房间页关键元素必须齐
-['p2pBtn', 'p2pModal', 'p2pRoomCodeIn', 'p2pStatus', 'p2pStageSel', 'p2pStageJoin',
- 'roomScreen', 'roomCode', 'roomCopyBtn', 'roomStatus', 'roomMyReady', 'roomPeerReady',
- 'roomMyNick', 'roomPeerNick', 'roomClassGrid', 'roomReadyBtn', 'roomLeaveBtn',
- 'roomSharedHint', 'roomMsg'].forEach(id => {
+['p2pBtn', 'p2pModal', 'p2pModeSel', 'p2pMode1v1', 'p2pMode2v2', 'p2pRoomCodeIn',
+ 'p2pStatus', 'p2pStageSel', 'p2pStageJoin',
+ 'roomScreen', 'roomCode', 'roomCopyBtn', 'roomStatus', 'roomSeats', 'roomFruitHint',
+ 'roomReadyBtn', 'roomLeaveBtn', 'roomSharedHint', 'roomMsg',
+ 'hatchModal', 'hatchCanvas', 'hatchConfirmBtn', 'fruitGrid', 'skinGrid', 'skinThemes',
+ 'seatHud'].forEach(id => {
   assert.ok(html.includes('id="' + id + '"'), 'P2P/房间元素缺失: ' + id);
 });
 // 脚本引入顺序：net.js / sync.js 必须在 game.js 之前

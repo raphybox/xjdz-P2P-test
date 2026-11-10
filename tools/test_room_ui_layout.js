@@ -15,9 +15,8 @@ assert.ok(p2pBlock, 'ui-layout.js 缺少 p2p（联机弹层）定义');
 
 const keySelectors = {
   room: ['#roomScreen', '#roomScreen .room-shell', '#roomCode', '#roomCopyBtn', '#roomStatus',
-         '#roomMyCard', '#roomPeerCard', '#roomMyReady', '#roomPeerReady',
-         '#roomClassGrid', '#roomReadyBtn', '#roomSharedHint', '#roomLeaveBtn'],
-  p2p: ['#p2pModal', '#p2pCreateBtn', '#p2pJoinBtn', '#p2pRoomCodeIn',
+         '#roomSeats', '#roomFruitHint', '#roomReadyBtn', '#roomSharedHint', '#roomLeaveBtn'],
+  p2p: ['#p2pModal', '#p2pModeSel', '#p2pCreateBtn', '#p2pJoinBtn', '#p2pRoomCodeIn',
         '#p2pAcceptBtn', '#p2pStatus', '#p2pStageJoin'],
 };
 [...keySelectors.room.map(s => [s, roomBlock[0]]), ...keySelectors.p2p.map(s => [s, p2pBlock[0]])]
@@ -38,10 +37,11 @@ assert.ok(html.includes('id="p2pBtn"'), 'index.html 缺少 #p2pBtn');
 assert.ok(/#p2pStageJoin/.test(ui.match(/var FORCE_VISIBLE = \[[\s\S]*?\];/)[0]),
   'FORCE_VISIBLE 未包含 #p2pStageJoin');
 
-// 启动即构建房间职业网格，后台才能编辑「首个职业按钮」
+// 启动即渲染果实库（后台界面编辑器才能选中首页新图层）
 const game = fs.readFileSync(path.join(root, 'game.js'), 'utf8');
-assert.ok(/renderClassGrid\(\);\s*\n\s*p2pRoomBuildClasses\(\);/.test(game),
-  'game.js 启动区未预建房间职业网格');
+assert.ok(/renderLibrary\(\);\s*\n\s*p2pRoomBuildClasses\(\);/.test(game),
+  'game.js 启动区未渲染果实库');
+assert.ok(/bindP2PMode\(\);/.test(game), 'game.js 未绑定 1V1/2V2 模式选择');
 
 // 一键同步：推域名绑定仓库 + wrangler 部署
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');

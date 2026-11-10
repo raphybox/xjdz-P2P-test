@@ -1,6 +1,8 @@
 /* =============================================================
-   选技弹珠 · 三回合对撞
-   数据驱动：CLASSES 职业表 / SKILLS 技能表 / CONFIG 手感参数
+   果实弹珠 · 每回合选一枚果实
+   数据驱动：MARBLE 统一弹珠 / SKILLS 果实池 / SKINS 外观库 / CONFIG 手感参数
+   v3 核心玩法：全体玩家弹珠数值相同；果实由「初始蛋孵化」入库，
+   每回合从玩家果实库抽取候选，选中一枚只在本回合生效。
    ============================================================= */
 (function () {
   'use strict';
@@ -64,8 +66,7 @@
     CRIT_BASE: C.critBase,
     CRIT_MULT_BASE: C.critMultBase,
     DRAFT_OPTIONS: C.draftOptions,
-    MAX_SKILLS: C.maxSkills != null ? C.maxSkills : 9,   // 拥有的技能最大数量（封顶后超出回合不再弹技能选项）
-    CLASS_SKILL_WEIGHT: C.classSkillWeight
+    HATCH_EGGS: Math.max(1, Number(C.hatchEggs) || 5)
   };
   const SPEEDS = C.speeds && C.speeds.length ? C.speeds : [1, 2, 4];
 
@@ -101,60 +102,60 @@
   })();
 
   /* ---------------------------------------------------------
-     2. 职业表（来自共享配置，后台可增删改）
+     2. 统一弹珠数值 / 果实库 / 外观库 / 玩家存档（v3 核心玩法）
+     所有玩家弹珠数值完全相同；外观只改贴图，不影响任何数值。
+     果实由初始蛋孵化入库，每回合从库存抽取候选。
      --------------------------------------------------------- */
-  const CLASSES = DATA.classes.filter(c => c.enabled !== false);
+  const MARBLE = Object.assign(
+    { hp: 130, power: 1.05, mass: 1.1, radius: 21, speed: 1.05, color: '#57c8ff' },
+    DATA.marble || {}
+  );
+  const THEMES = Array.isArray(DATA.themes) ? DATA.themes : [];
+  const SKINS = (Array.isArray(DATA.skins) ? DATA.skins : []).filter(x => x && x.enabled !== false);
+  const INVENTORY_KEY = 'wowpinball.fruits.v1';
+  let INV = { owned: [], skinId: '', skinTheme: 'all' };
 
-  /* ---------------------------------------------------------
-     2.5 商店（抽取弹珠）与本地钱包
-     弹珠归属：shop.starter 默认解锁，其余需要抽卡解锁；
-     新增职业若不在 starter 里，会自动进入卡池并处于未解锁状态。
-     --------------------------------------------------------- */
-  const SHOP = Object.assign({
-    enabled: true, currency: '金币', initialCoins: 300,
-    drawCost: 80, duplicateRefund: 30,
-    rewards: { win: 120, draw: 80, lose: 50 },
-    starter: [], pool: []
-  }, DATA.shop || {});
-  SHOP.rewards = Object.assign({ win: 120, draw: 80, lose: 50 }, SHOP.rewards || {});
-  const WALLET_KEY = 'wowpinball.shop.v1';
+  function saveInventory() {
+    try { window.localStorage.setItem(INVENTORY_KEY, JSON.stringify(INV)); } catch (e) { /* 存储不可用仅本次会话生效 */ }
+  }
+  function loadInventory() {
+    let v = null;
+    try { v = JSON.parse(window.localStorage.getItem(INVENTORY_KEY)); } catch (e) { v = null; }
+    if (!v || typeof v !== 'object') v = { owned: [], skinId: '', skinTheme: 'all' };
+    if (!Array.isArray(v.owned)) v.owned = [];
+    // 清掉后台已删除的果实 id，避免脏数据进入发牌
+    const ids = Object.create(null);
+    (DATA.skills || []).forEach(x => { if (x) ids[x.id] = 1; });
+    v.owned = v.owned.filter(o => o && ids[o.id]);
+    if (!v.skinId || !SKINS.some(x => x.id === v.skinId)) v.skinId = SKINS.length ? SKINS[0].id : '';
+    if (!v.skinTheme) v.skinTheme = 'all';
+    INV = v;
+    saveInventory();
+    return v;
+  }
+  function ownFruitIds() { return INV.owned.map(o => o.id); }
+  function fruitById(id) { return SKILLS.find(x => x.id === id) || null; }
+  function fruitIcon(x) { return (x && x.icon) ? x.icon : ''; }
+  function currentSkin() { return SKINS.find(x => x.id === INV.skinId) || SKINS[0] || null; }
+
+  /* 兼容垫片：旧代码里大量读取 f.cls.* / G.playerClass.* / CLASSES。
+     职业移除后保留「双方统一弹珠视图」，数值一律取 MARBLE；skin 字段在
+     applySelectedSkin() 里指向当前选中的外观，让旧绘制代码无需改动。 */
+  function baseView(side) {
+    return {
+      id: side, name: side === 'player' ? '我方队伍' : '对手队伍',
+      color: side === 'player' ? '#57c8ff' : '#ff7b6b',
+      role: '', trait: '', hp: MARBLE.hp, power: MARBLE.power, mass: MARBLE.mass,
+      radius: MARBLE.radius, speed: MARBLE.speed, enabled: true, skin: null
+    };
+  }
+  const CLASSES = [baseView('player'), baseView('enemy')];
+  // 商店 / 钱包已移除，保留空壳避免残留调用抛错
+  const SHOP = { enabled: false, currency: '', initialCoins: 0, drawCost: 0, duplicateRefund: 0, rewards: {}, starter: [], pool: [] };
   const SHOP_RARITY = { common: '普通', rare: '稀有', epic: '史诗' };
-
-  let WALLET = { coins: SHOP.initialCoins, owned: [] };
-  function saveWallet() {
-    try { window.localStorage.setItem(WALLET_KEY, JSON.stringify(WALLET)); } catch (e) { /* 存储不可用时仅本局生效 */ }
-  }
-  function loadWallet() {
-    let w = null;
-    try { w = JSON.parse(window.localStorage.getItem(WALLET_KEY)); } catch (e) { w = null; }
-    if (!w || typeof w !== 'object') w = { coins: SHOP.initialCoins, owned: [] };
-    if (typeof w.coins !== 'number' || !isFinite(w.coins)) w.coins = SHOP.initialCoins;
-    if (!Array.isArray(w.owned)) w.owned = [];
-    // starter 是保底解锁：后台改过 starter 后，老存档也能拿到
-    (SHOP.starter || []).forEach(id => {
-      if (CLASSES.some(c => c.id === id) && w.owned.indexOf(id) < 0) w.owned.push(id);
-    });
-    WALLET = w;
-    saveWallet();
-    return w;
-  }
-  function isOwned(id) { return WALLET.owned.indexOf(id) >= 0; }
-  function addCoins(n) {
-    WALLET.coins = Math.max(0, Math.round(WALLET.coins + n));
-    saveWallet();
-    updateCoinChips();
-  }
-  function shopPool() {
-    return CLASSES.map(function (c) {
-      const meta = (SHOP.pool || []).find(function (p) { return p.classId === c.id; }) || {};
-      return {
-        cls: c,
-        rarity: meta.rarity || 'common',
-        weight: meta.weight == null ? 10 : Number(meta.weight),
-        listed: meta.listed !== false
-      };
-    }).filter(function (e) { return e.listed && e.weight > 0; });
-  }
+  const isOwned = () => true;
+  function addCoins() {}
+  function shopPool() { return []; }
 
   /* ---------------------------------------------------------
      3. 技能表
@@ -192,19 +193,8 @@
     momentum: v => '高速撞击加成 +' + pct(v)
   };
 
-  // 技能归属（cls）统一规范化为数组：字符串 -> [字符串]；null / 空 / undefined -> []
-  // 兼容旧数据，升级后既有技能仍可正常进入对应职业的抽取池；同时去重避免重复入池
-  // 注意：SKILLS 初始化时就要用它，必须定义在 SKILLS 之前，否则会踩 const 的暂时性死区（TDZ）
-  const skillClsArr = s => {
-    const v = s && s.cls;
-    let a;
-    if (Array.isArray(v)) a = v.filter(x => typeof x === 'string' && x);
-    else if (typeof v === 'string' && v) a = [v];
-    else a = [];
-    const seen = Object.create(null), out = [];
-    a.forEach(x => { if (!seen[x]) { seen[x] = 1; out.push(x); } });
-    return out;
-  };
+  // v3：职业归属已移除，所有果实对全体玩家通用；保留空函数兼容残留调用
+  const skillClsArr = () => [];
 
   const SKILLS = DATA.skills.filter(s => s.enabled !== false).map(s => {
     const mods = s.mods || {};
@@ -217,13 +207,14 @@
     const charge = (typeof s.charge === 'number' && s.charge > 0) ? s.charge
       : ((window.SkillModules && window.SkillModules.DEFAULT_CHARGE) || 3);
     return {
-      id: s.id, name: s.name, cls: skillClsArr(s), tier: s.tier, mods: mods, graph: s.graph || null, compiled: compiled,
+      id: s.id, name: s.name, cls: [], icon: String(s.icon || ''), tier: s.tier,
+      mods: mods, graph: s.graph || null, compiled: compiled,
       charge: charge,
       // intro = 后台编辑的技能介绍（用户文案）；desc = 由 mods / 节点图自动生成的机制摘要，两者互不覆盖
       intro: String(s.intro || '').trim(),
       desc: Object.keys(mods).filter(k => MOD_LABEL[k]).map(k => MOD_LABEL[k](mods[k])).join(' / ') +
         (compiled && compiled.active ? (Object.keys(mods).length ? ' / ' : '') + '✸主动技能 · 充能 ' + charge.toFixed(1) + 's' : ''),
-      origin: (function () { const a = skillClsArr(s); return a.length ? a.map(id => (CLASSES.find(c => c.id === id) || { name: id }).name).join('/') + '专属' : '通用'; })()
+      origin: '果实'
     };
   });
 
@@ -239,7 +230,6 @@
     let total = 0;
     const weights = list.map(s => {
       let w = (TIER_WEIGHT[s.tier] || 1) * (EFFECTS.tierMul[s.tier] || 1) *
-        (s.cls.length ? CONFIG.CLASS_SKILL_WEIGHT : 1) *
         (EFFECTS.skillBoost.indexOf(s.id) >= 0 ? 2.5 : 1);
       total += w;
       return w;
@@ -252,17 +242,25 @@
     return list[list.length - 1];
   }
 
-  function drawSkills(cls, owned, n) {
-    const ownedIds = owned.map(s => s.id);
-    const pool = SKILLS.filter(s =>
-      (s.cls.length === 0 || s.cls.indexOf(cls.id) >= 0) &&
-      ownedIds.indexOf(s.id) < 0 &&
-      EFFECTS.skillBan.indexOf(s.id) < 0);
+  /* 每回合从「玩家拥有的果实库」抽取候选。
+     fruitIds 是该玩家库存里的果实 id 列表（实例数组，同名果实可重复 -> 权重更高）；
+     不传时表示电脑陪练 / 预览，用全果实池。一次发牌内不重复抽同一实例。 */
+  function drawSkills(cls, owned, n, fruitIds) {
+    let pool;
+    if (fruitIds && fruitIds.length) {
+      pool = [];
+      fruitIds.forEach(id => {
+        const x = SKILLS.find(y => y.id === id);
+        if (x && EFFECTS.skillBan.indexOf(x.id) < 0) pool.push(x);
+      });
+    } else {
+      pool = SKILLS.filter(x => EFFECTS.skillBan.indexOf(x.id) < 0);
+    }
     const out = [];
     while (out.length < n && pool.length) {
-      const s = weightedPick(pool);
-      out.push(s);
-      pool.splice(pool.indexOf(s), 1);
+      const pick = weightedPick(pool);
+      out.push(pick);
+      pool.splice(pool.indexOf(pick), 1);
     }
     return out;
   }
@@ -273,7 +271,12 @@
   const G = {
     screen: 'start',
     phase: 'idle',           // draft | fighting | rest | finished
-    selectedClass: null,
+    mode: '1v1',             // '1v1' | '2v2'
+    seats: 2,                // 参战弹珠数：1V1=2，2V2=4
+    actors: [],              // 全部弹珠；player / enemy 是 seat0 / seat1 的引用
+    actorFruits: {},         // seat -> 本回合果实（2V2 每队共享一枚）
+    roundFruit: null,        // 我方本回合选中的果实
+    selectedClass: null,     // 兼容垫片（统一弹珠视图）
     playerClass: null,
     enemyClass: null,
     playerAim: 0,            // 玩家选定的初始发射方向（弧度，0 = 向右）
@@ -319,28 +322,37 @@
      通道分工：ctrl 可靠有序（对局事件）· game 不可靠（20Hz 快照）。
      --------------------------------------------------------- */
   const P2P = {
-    active: false,        // 会话已建立（含大厅与对局全程）
-    inMatch: false,       // 已进入对局
-    role: null,           // 'host' | 'guest'
-    peerNick: '',
-    net: null,
-    roomCode: '',         // 8 位房间码
-    myCls: null, peerCls: null, myClsSent: false,
-    myReady: false, peerReady: false,   // 双方准备状态（ctrl 通道实时共享）
-    guestOpts: null,      // 房主为客机抽出的技能选项
-    guestPick: false, myPickDone: false,
+    active: false, inMatch: false, role: null,
+    mode: '1v1', seats: 2, mySeat: 0,
+    members: [], readyBySeat: {}, fruitsBySeat: {}, launchBySeat: {},
+    peerNick: '', net: null, roomCode: '',
+    // 职业系统已移除：这两个字段固定为非空，仅用于兼容旧判断
+    myCls: 'player', peerCls: 'enemy', myClsSent: false,
+    myReady: false, peerReady: false, peerFruits: null,
+    guestOpts: null, guestPick: false, myPickDone: false,
     guestAim: null, guestLaunched: false, myLaunched: false,
-    buf: null,            // 客机快照缓冲（WowPinballSync.SnapBuf）
-    snapAcc: 0,           // 房主快照节拍
-    noSnapT: 0,           // 客机本回合「一帧快照都没收到」的累计时长
-    noSnapWarned: false,
-    snapLogged: false
+    buf: null, snapAcc: 0, noSnapT: 0, noSnapWarned: false, snapLogged: false
   };
+  let P2P_MODE = '1v1';   // 联机弹层里选择的模式：'1v1' | '2v2'
+
+  function allPeersReady() {
+    if (P2P.seats <= 1) return false;
+    for (let i = 1; i < P2P.seats; i++) if (!P2P.readyBySeat[i]) return false;
+    return true;
+  }
+  function allLaunched() {
+    for (let i = 0; i < P2P.seats; i++) if (P2P.launchBySeat[i] == null) return false;
+    return true;
+  }
 
   const NET = window.WowPinballNet || null;
   const SYNC = window.WowPinballSync || null;
 
-  function p2pSend(obj) { if (P2P.net && P2P.net.ready) P2P.net.sendCtrl(obj); }
+  function p2pSend(obj, seat) {
+    if (!P2P.net || !P2P.net.ready) return;
+    // net.js 的 sendCtrl(obj, seat)：省略 seat 即广播给所有已连接座位
+    P2P.net.sendCtrl(obj, seat);
+  }
 
   /* 模拟侧 → 本地显示侧的映射（客机视角下双方对调） */
   function p2pMapWinner(w) {
@@ -358,8 +370,10 @@
     P2P.net = null;
     P2P.active = false; P2P.inMatch = false;
     P2P.role = null; P2P.peerNick = ''; P2P.roomCode = '';
-    P2P.myCls = null; P2P.peerCls = null; P2P.myClsSent = false;
+    P2P.myCls = 'player'; P2P.peerCls = 'enemy'; P2P.myClsSent = false;
     P2P.myReady = false; P2P.peerReady = false;
+    P2P.members = []; P2P.readyBySeat = {}; P2P.launchBySeat = {};
+    P2P.fruitsBySeat = {}; P2P.peerFruits = null; P2P.mySeat = 0;
     P2P.guestOpts = null; P2P.guestPick = false; P2P.myPickDone = false;
     P2P.guestAim = null; P2P.guestLaunched = false; P2P.myLaunched = false;
     P2P.buf = null; P2P.snapAcc = 0;
@@ -381,28 +395,33 @@
 
   /* ---------- ctrl 通道对局事件 ---------- */
 
-  function p2pOnCtrl(msg) {
+  function p2pOnCtrl(msg, seat) {
     if (!msg || !msg.k) return;
+    const from = (seat == null ? (msg.seat != null ? msg.seat : 1) : seat);
     switch (msg.k) {
       case 'hello':
-        P2P.peerNick = cleanNick(msg.nick) || '对手';
-        if (P2P.active) p2pStatus('已连接 · 对手：' + P2P.peerNick);
-        if (P2P.inMatch && dom.asyncTag) dom.asyncTag.textContent = '联机对战 · ' + P2P.peerNick;
+        if (msg.nick) {
+          P2P.peerNick = cleanNick(msg.nick) || '好友';
+          P2P.members[from] = P2P.peerNick;
+        }
+        if (P2P.active) p2pStatus('已连接 · ' + P2P.seats + ' 人对战');
+        if (P2P.inMatch && dom.asyncTag) dom.asyncTag.textContent = '联机对战 · ' + P2P.seats + ' 人';
         p2pRoomRender();
-        p2pSendRoomState();        // 对端上线后立刻同步一次我方状态
+        p2pSendRoomState();
         break;
       case 'bye':
         p2pOnClose('对方主动退出');
         break;
       case 'ready':
-        P2P.peerReady = !!msg.ready;
-        P2P.peerCls = msg.cls || P2P.peerCls;
-        if (msg.nick) P2P.peerNick = cleanNick(msg.nick) || P2P.peerNick;
+        P2P.readyBySeat[from] = !!msg.ready;
+        if (Array.isArray(msg.fruits)) P2P.fruitsBySeat[from] = msg.fruits;
+        if (from === 1 && Array.isArray(msg.fruits)) P2P.peerFruits = msg.fruits;
+        if (msg.nick) P2P.members[from] = cleanNick(msg.nick) || ('好友 ' + from);
+        P2P.peerReady = allPeersReady();
         p2pRoomRender();
         p2pTryStart();
         break;
-      case 'cls':   // 旧版本兼容：当作「已准备」
-        P2P.peerCls = msg.id;
+      case 'cls':   // 旧版本兼容
         P2P.peerReady = true;
         p2pRoomRender();
         p2pTryStart();
@@ -410,59 +429,58 @@
       case 'back_room':
         p2pBackToRoom(false);
         break;
-      case 'start':   // 客机收到：房主宣布开局
-        if (P2P.role === 'guest') p2pStartMatch(msg.h, msg.g);
+      case 'start':
+        if (P2P.role === 'guest') p2pStartMatch(msg.mode || '1v1');
         break;
-      case 'draft':   // 客机收到：房主发牌
-        if (P2P.role === 'guest') p2pGuestOpenDraft(msg);
+      case 'draft':
+        // 只有队伍 B 队长（seat1）需要显示发牌；同队队员共享该队果实
+        if (P2P.role === 'guest' && P2P.mySeat === 1) p2pGuestOpenDraft(msg);
         break;
-      case 'draft_pick':   // 房主收到：客机选的技能
+      case 'draft_pick':
         if (P2P.role === 'host') p2pHostOnGuestPick(msg);
         break;
-      case 'aim':     // 客机收到：瞄准阶段（含双方出生位）
+      case 'aim':
         if (P2P.role === 'guest') p2pGuestAim(msg);
         break;
-      case 'launch':  // 对方已发射
+      case 'launch':
         if (P2P.role === 'host') {
-          P2P.guestAim = msg.aim;
-          P2P.guestLaunched = true;
-          if (G.phase === 'wait-launch' && P2P.myLaunched) beginRound();
+          const st = msg.seat != null ? msg.seat : from;
+          P2P.launchBySeat[st] = msg.aim;
+          if (st === 1) { P2P.guestAim = msg.aim; P2P.guestLaunched = true; }
+          if (G.phase === 'wait-launch' && allLaunched()) beginRound();
         } else {
-          showBanner('对方已发射', '等待回合开始…', 1200);
+          showBanner('已有玩家发射', '等待全员发射…', 1200);
         }
         break;
-      case 'round_start':   // 客机收到：回合正式开始
+      case 'round_start':
         if (P2P.role === 'guest') p2pGuestRoundStart(msg);
         break;
-      case 'round_end':     // 客机收到：回合结算
+      case 'round_end':
         if (P2P.role === 'guest') p2pGuestRoundEnd(msg);
         break;
-      case 'match_end':     // 客机收到：整局结算
+      case 'match_end':
         if (P2P.role === 'guest') p2pGuestMatchEnd(msg);
         break;
     }
   }
 
   function p2pTryStart() {
-    if (!P2P.active || P2P.role !== 'host') return;
-    if (P2P.inMatch) return;
-    // 双方必须都选好职业并都点「准备」
-    if (!P2P.myReady || !P2P.peerReady || !P2P.myCls || !P2P.peerCls) return;
+    if (!P2P.active || P2P.role !== 'host' || P2P.inMatch) return;
+    if (!P2P.myReady || !allPeersReady()) return;
     P2P.inMatch = true;
-    p2pRoomStatus('双方已准备，正在进入对局…');
-    p2pSend({ k: 'start', h: P2P.myCls, g: P2P.peerCls });
-    p2pStartMatch(P2P.myCls, P2P.peerCls);
+    G.mode = P2P.mode; G.seats = P2P.seats;
+    p2pRoomStatus('全员已准备，正在进入对局…');
+    p2pSend({ k: 'start', mode: P2P.mode, seats: P2P.seats });
+    p2pStartMatch(P2P.mode);
   }
 
-  function p2pStartMatch(hostClsId, guestClsId) {
-    const hostCls = CLASSES.find(c => c.id === hostClsId);
-    const guestCls = CLASSES.find(c => c.id === guestClsId);
-    if (!hostCls || !guestCls) return;
+  function p2pStartMatch(mode) {
     P2P.inMatch = true;
     P2P.myClsSent = false;
-    const myCls = P2P.role === 'host' ? hostCls : guestCls;
-    const foeCls = P2P.role === 'host' ? guestCls : hostCls;
-    startMatch(myCls, { enemyClass: foeCls.id });
+    G.mode = mode === '2v2' ? '2v2' : '1v1';
+    G.seats = G.mode === '2v2' ? 4 : 2;
+    P2P.mode = G.mode; P2P.seats = G.seats;
+    startMatch();
   }
 
   /* ---------- 客机：各阶段 ---------- */
@@ -473,28 +491,21 @@
     G.draftOptions = (msg.opts || []).map(id => SKILLS.find(s => s.id === id)).filter(Boolean);
     if (!G.draftOptions.length) return;
     G.phase = 'draft';
-    dom.draftTitle.textContent = '第 ' + (G.round + 1) + ' 回合休整 · 随机三选一';
-    dom.draftSub.textContent = '联机对战 · 房主发牌，选择一个技能';
+    dom.draftTitle.textContent = '第 ' + (G.round + 1) + ' 回合休整 · 果实三选一';
+    dom.draftSub.textContent = '联机对战 · 房主发牌，选择本回合果实';
     dom.draftModal.hidden = false;
-    dom.draftCards.innerHTML = G.draftOptions.map((s, i) =>
-      '<button class="skill-card" type="button" data-i="' + i + '" data-tier="' + escHtml(s.tier) + '"' +
-      ' title="' + escHtml(s.intro ? s.intro + '\n【机制】' + s.desc : s.desc) + '">' +
-      '<div class="sc-top"><span class="sc-name">' + escHtml(s.name) + '</span><span class="sc-tier">' + escHtml(TIER_NAME[s.tier]) + '</span></div>' +
-      '<div class="sc-origin">' + escHtml(s.origin) + '</div>' +
-      '<div class="sc-effect">' + escHtml(s.intro || s.desc) + '</div>' +
-      '<div class="sc-hotkey">' + (i < 3 ? '按 ' + (i + 1) + ' 选择' : '点击选择') + '</div></button>'
-    ).join('');
+    dom.draftCards.innerHTML = G.draftOptions.map((s, i) => fruitCardHtml(s, i)).join('');
     dom.draftCards.querySelectorAll('.skill-card').forEach(btn => {
       btn.addEventListener('click', () => chooseSkill(Number(btn.getAttribute('data-i'))));
     });
-    dom.phaseLabel.textContent = '休整 · 选择技能';
+    dom.phaseLabel.textContent = '休整 · 选择果实';
     updateScoreboard();
   }
 
   function p2pGuestAim(msg) {
     if (!G.player || !G.enemy) return;
     const pos = P2P.role === 'host' ? msg.p : { p: msg.p.e, e: msg.p.p };
-    [G.player, G.enemy].forEach(f => {
+    G.actors.forEach(f => {
       recompute(f);
       f.hp = f.maxHp;
       f.shield = f.maxHp * f.mods.shield;
@@ -529,9 +540,11 @@
     G.phase = 'fighting';
     if (P2P.buf) { P2P.buf.snaps = []; P2P.buf.renderT = null; }
     P2P.noSnapT = 0; P2P.noSnapWarned = false; P2P.snapLogged = false;
-    [G.player, G.enemy].forEach(f => { f._p2pHp = null; });
+    G.actors.forEach(f => { f._p2pHp = null; });
     dom.phaseLabel.textContent = '对撞中';
-    showBanner('第 ' + G.round + ' 回合', G.playerClass.name + '  对阵  ' + G.enemyClass.name, 900);
+    showBanner('第 ' + G.round + ' 回合',
+      (G.mode === '2v2' ? '2V2 · ' : '') + (G.playerClass ? G.playerClass.name : '我方队伍') +
+      '  对阵  ' + (G.enemyClass ? G.enemyClass.name : '对手队伍'), 900);
     if (G.weather) addLog('本回合天气：' + G.weather.name + (G.weather.id === 'wind' ? (G.weather.dir > 0 ? '（吹向右侧 →）' : '（吹向左侧 ←）') : ''), 'hl');
     resetRoundDmg();
     sfx.round();
@@ -572,10 +585,13 @@
   function p2pHostOnGuestPick(msg) {
     if (P2P.guestPick) return;
     P2P.guestPick = true;
-    const s = P2P.guestOpts && P2P.guestOpts[msg.i];
-    if (s && G.enemySkills.every(x => x.id !== s.id)) {
-      G.enemySkills.push(s);
-      addLog('对手获得「' + s.name + '」', 'hl');
+    const x = P2P.guestOpts && P2P.guestOpts[msg.i];
+    if (x) {
+      G.enemySkills = [x];
+      (G.actors).forEach(f => {
+        if (f && f.side === 'enemy') G.actorFruits[f.seat] = x;
+      });
+      addLog('对手本回合果实「' + x.name + '」', 'hl');
     }
     recompute(G.enemy);
     if (P2P.myPickDone && G.phase === 'transition') startAimPhase();
@@ -585,7 +601,15 @@
 
   function p2pSendSnap() {
     if (!P2P.net || !P2P.net.ready || !G.player || !G.enemy || !SYNC) return;
-    P2P.net.sendGame(JSON.stringify(SYNC.encodeSnap(G.round, G.clock, G.player, G.enemy, G.roundTime)));
+    if (G.mode === '2v2' && SYNC.encodeActors && G.actors.length === 4) {
+      const list = G.actors.map(f => ({
+        x: f.x, y: f.y, vx: f.vx, vy: f.vy,
+        hp: f.hp, shield: f.shield, maxHp: f.maxHp
+      }));
+      P2P.net.sendGame(JSON.stringify(SYNC.encodeActors(G.round, G.clock, list, G.roundTime)));
+    } else {
+      P2P.net.sendGame(JSON.stringify(SYNC.encodeSnap(G.round, G.clock, G.player, G.enemy, G.roundTime)));
+    }
   }
 
   function p2pGuestFrame(dt) {
@@ -616,6 +640,19 @@
       mf.hp = mine.hp; mf.shield = mine.shield;
       ef.x = foe.x; ef.y = foe.y; ef.vx = foe.vx; ef.vy = foe.vy;
       ef.hp = foe.hp; ef.shield = foe.shield;
+      /* 2V2：快照的 actors 按 seat 顺序编码，直接按座位原样回放；
+         1V1 保持旧版「显示侧对调」语义（客机把模拟侧 enemy 当成自己）。 */
+      if (sm.actors && sm.actors.length >= 2 && G.actors.length >= 2) {
+        const map = G.mode === '2v2'
+          ? [0, 1, 2, 3]
+          : (P2P.role === 'host' ? [0, 1] : [1, 0]);
+        map.forEach((src, dst) => {
+          const a = sm.actors[src], f = G.actors[dst];
+          if (!a || !f) return;
+          f.x = a.x; f.y = a.y; f.vx = a.vx; f.vy = a.vy;
+          f.hp = a.hp; f.shield = a.shield;
+        });
+      }
       G.roundTime = sm.rt;
       p2pGuestHitFx(mine.hp, mf, true);
       p2pGuestHitFx(foe.hp, ef, false);
@@ -658,6 +695,16 @@
     ['p2pStageSel', 'p2pStageJoin'].forEach(id => { const el = $(id); if (el) el.hidden = id !== name; });
   }
 
+  function bindP2PMode() {
+    if (!dom.p2pModeSel) return;
+    dom.p2pModeSel.addEventListener('click', ev => {
+      const b = ev.target && ev.target.closest ? ev.target.closest('.p2p-mode-btn') : null;
+      if (!b) return;
+      P2P_MODE = b.dataset.mode === '2v2' ? '2v2' : '1v1';
+      dom.p2pModeSel.querySelectorAll('.p2p-mode-btn').forEach(x => x.classList.toggle('active', x === b));
+    });
+  }
+
   function openP2P() {
     if (!NET || !SYNC) { p2pMsg('p2pSelMsg', '联机模块加载失败，请刷新页面', 'bad'); }
     $('p2pModal').hidden = false;
@@ -669,19 +716,31 @@
   function p2pSessionOpts(bannerTitle) {
     return {
       nick: nickName(),
+      mode: P2P.mode,
       onReady: function () {
         p2pStatus('已连接 · 通道就绪');
         $('p2pModal').hidden = true;
         p2pRoomShow();
-        p2pRoomStatus(bannerTitle + ' · 双方选好职业并都点「准备」后开战');
-        p2pSend({ k: 'hello', nick: nickName() });
+        p2pRoomStatus(bannerTitle + ' · 全员点「准备」后开战');
+        p2pSend({ k: 'hello', nick: nickName(), seat: P2P.mySeat });
         p2pSendRoomState();
       },
-      onCtrl: p2pOnCtrl,
+      onCtrl: function (msg, seat) { p2pOnCtrl(msg, seat); },
       onGame: function (data) {
-        if (P2P.role !== 'guest' || !data || data.k !== 's') return;
-        if (!P2P.buf) P2P.buf = new SYNC.SnapBuf();   // 自愈：缓冲意外缺失时补建
+        if (P2P.role !== 'guest' || !data || (data.k !== 's' && data.k !== 'a')) return;
+        if (!P2P.buf) P2P.buf = new SYNC.SnapBuf();
         P2P.buf.push(data);
+      },
+      onSeats: function (members) {
+        if (!Array.isArray(members)) return;
+        P2P.members = members;
+        members.forEach(m => {
+          if (!m) return;
+          P2P.readyBySeat[m.seat] = !!m.ready;
+          if (m.nick) P2P.members[m.seat] = cleanNick(m.nick) || ('好友 ' + m.seat);
+        });
+        P2P.peerReady = allPeersReady();
+        p2pRoomRender();
       },
       onClose: function (why) { p2pOnClose(why || '连接关闭'); },
       onState: function (text) { p2pStatus(text); },
@@ -702,11 +761,11 @@
     Object.keys(o).forEach(k => { P2P.net.opts[k] = o[k]; });
   }
 
-  /* ---------- 房间页面：8 位码 + 双方状态共享 ---------- */
+  /* ---------- 房间页面：8 位码 + 1V1/2V2 座位状态共享 ---------- */
 
   function p2pRoomShow() {
     switchScreen('room');
-    p2pRoomBuildClasses();
+    p2pRoomBuildClasses();   // 兼容旧调用：职业网格已移除，函数为空
     p2pRoomRender();
   }
 
@@ -721,42 +780,23 @@
 
   function p2pRoomStatus(text) { const el = $('roomStatus'); if (el) el.textContent = text; }
 
-  function p2pRoomBuildClasses() {
-    const grid = $('roomClassGrid');
-    if (!grid) return;
-    grid.innerHTML = CLASSES.map(c => {
-      const owned = isOwned(c.id);
-      const picked = P2P.myCls === c.id;
-      return '<button class="room-class-btn' + (owned ? '' : ' locked') + (picked ? ' selected' : '') +
-        '" type="button" data-id="' + c.id + '" style="--cls-color:' + c.color + '">' +
-        '<div class="rcb-name">' + escHtml(c.name) + (owned ? '' : ' · 未解锁') + '</div>' +
-        '<div class="rcb-trait">' + escHtml(c.trait) + '</div></button>';
-    }).join('');
-    grid.querySelectorAll('.room-class-btn').forEach(btn => {
-      btn.addEventListener('click', () => p2pRoomSelectClass(btn.dataset.id));
-    });
-  }
-
-  function p2pRoomSelectClass(id) {
-    const cls = CLASSES.find(c => c.id === id);
-    if (!cls) return;
-    if (!isOwned(id)) { openShop(); return; }
-    P2P.myCls = id;
-    G.selectedClass = cls;
-    p2pRoomBuildClasses();
-    p2pRoomRender();
-    p2pSendRoomState();       // 职业变化也实时共享给对方
-  }
+  function p2pRoomBuildClasses() {}   // 职业选择已移除，保留空函数兼容启动区调用
+  function p2pRoomSelectClass() {}
 
   function p2pSendRoomState() {
     if (!P2P.active) return;
-    p2pSend({ k: 'ready', ready: P2P.myReady, cls: P2P.myCls, nick: nickName() });
+    // 上报本座位准备状态 + 我的果实库存（房主据此为队伍 B 抽候选）
+    p2pSend({
+      k: 'ready', seat: P2P.mySeat, ready: P2P.myReady,
+      nick: nickName(), fruits: ownFruitIds()
+    });
   }
 
   function p2pRoomToggleReady() {
     if (!P2P.active) return;
-    if (!P2P.myCls) { p2pRoomMsg('请先在上面选择一个职业', 'bad'); return; }
+    if (!INV.owned.length) { p2pRoomMsg('请先孵化初始蛋获得果实', 'bad'); return; }
     P2P.myReady = !P2P.myReady;
+    P2P.readyBySeat[P2P.mySeat] = P2P.myReady;
     p2pRoomRender();
     p2pSendRoomState();
     p2pTryStart();
@@ -764,43 +804,42 @@
 
   function p2pRoomRender() {
     const connected = !!(P2P.net && P2P.net.ready);
-    const myName = P2P.myCls ? ((CLASSES.find(c => c.id === P2P.myCls) || {}).name || '—') : '未选择职业';
-    const peerName = P2P.peerCls ? ((CLASSES.find(c => c.id === P2P.peerCls) || {}).name || '—') : '未选择职业';
-    const set = (id, text, cls) => {
-      const el = $(id);
-      if (!el) return;
-      el.textContent = text;
-      if (cls != null) el.className = cls;
-    };
-    set('roomCode', P2P.roomCode || '········');
-    set('roomMyRole', P2P.role === 'host' ? '房主' : '好友');
-    set('roomPeerRole', P2P.role === 'host' ? '好友' : '房主');
-    set('roomMyNick', nickName());
-    set('roomPeerNick', P2P.peerNick || (connected ? '已连接' : '等待加入…'));
-    set('roomMyClass', myName);
-    set('roomPeerClass', connected ? peerName : '—');
-    set('roomMyReady', P2P.myReady ? '已准备' : '未准备', 'rp-ready' + (P2P.myReady ? ' on' : ''));
-    set('roomPeerReady', P2P.peerReady ? '已准备' : '未准备', 'rp-ready' + (P2P.peerReady ? ' on' : ''));
-    const myCard = $('roomMyCard'), peerCard = $('roomPeerCard');
-    if (myCard) myCard.classList.toggle('is-ready', P2P.myReady);
-    if (peerCard) peerCard.classList.toggle('is-ready', P2P.peerReady);
+    const setText = (el, text) => { if (el) el.textContent = text; };
+    setText($('roomCode'), P2P.roomCode || '········');
+    const cards = document.querySelectorAll('#roomSeats .room-seat');
+    const TEAM = ['队伍 A', '队伍 B', '队伍 A', '队伍 B'];
+    cards.forEach(card => {
+      const i = Number(card.dataset.seat);
+      card.hidden = i >= P2P.seats;
+      const isMe = i === P2P.mySeat;
+      const nick = isMe ? nickName() : (P2P.members[i] || (connected ? '已加入' : '等待加入…'));
+      const ready = isMe ? P2P.myReady : !!P2P.readyBySeat[i];
+      setText(card.querySelector('.rs-role'), (i === 0 ? '房主 · ' : '') + TEAM[i] + (i % 2 === 0 ? '' : ' 队长'));
+      setText(card.querySelector('.rs-nick'), nick || '—');
+      setText(card.querySelector('.rs-team'), TEAM[i]);
+      setText(card.querySelector('.rs-fruit'), isMe ? ('果实 ×' + INV.owned.length) : '—');
+      setText(card.querySelector('.rs-ready'), ready ? '已准备' : '未准备');
+      card.classList.toggle('is-ready', ready);
+      card.classList.toggle('is-me', isMe);
+    });
     const btn = $('roomReadyBtn');
     if (btn) {
-      btn.disabled = !connected || !P2P.myCls;
+      btn.disabled = !connected;
       btn.textContent = P2P.myReady ? '取消准备' : '准备';
     }
     const hint = $('roomSharedHint');
     if (hint) {
       if (!connected) hint.textContent = '等待好友加入并建连…';
-      else if (P2P.myReady && P2P.peerReady) hint.textContent = '双方都已准备，房主正在开局…';
-      else if (P2P.myReady) hint.textContent = '你已准备，等待对手准备…';
-      else if (P2P.peerReady) hint.textContent = '对手已准备，等你点「准备」…';
-      else hint.textContent = '双方状态实时共享 · 两边都准备后才开始';
+      else if (allPeersReady() && P2P.myReady) hint.textContent = '全员已准备，房主正在开局…';
+      else if (P2P.myReady) hint.textContent = '你已准备，等待其他人…';
+      else hint.textContent = P2P.mode === '2v2'
+        ? '2V2 · 4 位玩家各控 1 颗弹珠，全员准备后开战'
+        : '1V1 · 双方准备好后开战';
     }
     const copyBtn = $('roomCopyBtn'), codeHint = $('roomCodeHint');
     if (copyBtn) copyBtn.hidden = P2P.role !== 'host';
     if (codeHint) codeHint.textContent = P2P.role === 'host'
-      ? '把 8 位码发给好友，对方输入即可加入，不需要回传任何码'
+      ? '把 8 位码发给好友；2V2 需要 3 位好友依次输入同一串码'
       : '你已加入这个房间，无需回传任何码';
   }
 
@@ -809,6 +848,8 @@
     if (!P2P.active) return;
     P2P.inMatch = false;
     P2P.myReady = false; P2P.peerReady = false;
+    P2P.readyBySeat = {}; P2P.launchBySeat = {};
+    P2P.guestPick = false; P2P.myPickDone = false;
     if (notify) p2pSend({ k: 'back_room' });
     p2pRoomShow();
     p2pSendRoomState();
@@ -825,22 +866,31 @@
     switchScreen('start');
   }
 
+  function initP2PSession() {
+    P2P.mode = P2P_MODE;
+    P2P.seats = P2P_MODE === '2v2' ? 4 : 2;
+    G.mode = P2P.mode; G.seats = P2P.seats;
+    P2P.readyBySeat = {}; P2P.launchBySeat = {};
+    P2P.fruitsBySeat = {}; P2P.members = []; P2P.peerFruits = null;
+    P2P.myReady = false; P2P.peerReady = false; P2P.inMatch = false;
+    P2P.myCls = 'player'; P2P.peerCls = 'enemy';
+  }
+
   async function p2pHostCreate() {
     if (!NET) return;
     const btn = $('p2pCreateBtn');
     try {
       p2pMsg('p2pSelMsg', '正在创建房间…');
       if (btn) btn.disabled = true;
-      // 先切到房间页显示进度：收集中继候选可能要 10 秒，别让用户对着弹窗干等
-      P2P.role = 'host'; P2P.active = true; P2P.roomCode = '';
-      P2P.myCls = G.selectedClass ? G.selectedClass.id : null;
-      P2P.myReady = false; P2P.peerReady = false; P2P.inMatch = false;
+      initP2PSession();
+      P2P.role = 'host'; P2P.active = true; P2P.roomCode = ''; P2P.mySeat = 0;
       $('p2pModal').hidden = true;
       p2pRoomShow();
       p2pRoomStatus('正在创建房间并收集网络地址，请稍候…');
-      const made = await NET.Session.createHostRoom(p2pSessionOpts('好友已连接'));
+      const made = await NET.Session.createHostRoom(P2P.mode, p2pSessionOpts('好友已连接'));
       P2P.net = made.session;
       P2P.roomCode = made.code;
+      if (made.session && made.session.mode) P2P.mode = made.session.mode;
       p2pAttachHandlers('好友已连接');
       p2pRoomShow();
       p2pRoomStatus('房间已创建 · 把 8 位邀请码发给好友，等待加入…');
@@ -861,15 +911,19 @@
       if (btn) btn.disabled = true;
       P2P.role = 'guest'; P2P.active = true;
       P2P.roomCode = NET.normalizeRoomCode(raw);
-      P2P.myCls = G.selectedClass ? G.selectedClass.id : null;
-      P2P.myReady = false; P2P.peerReady = false; P2P.inMatch = false;
+      P2P.myCls = 'enemy'; P2P.peerCls = 'player';
       $('p2pModal').hidden = true;
       p2pRoomShow();
       p2pRoomStatus('正在查找房间并收集网络地址，请稍候…');
       const made = await NET.Session.joinRoom(raw, p2pSessionOpts('已连接房主'));
       P2P.net = made.session;
       P2P.buf = new SYNC.SnapBuf();
-      P2P.roomCode = made.session.roomCode || P2P.roomCode;
+      P2P.mySeat = (made.session && made.session.mySeat != null)
+        ? made.session.mySeat : (made.seat != null ? made.seat : 1);
+      P2P.mode = (made.session && made.session.mode) || made.mode || '1v1';
+      P2P.seats = P2P.mode === '2v2' ? 4 : 2;
+      G.mode = P2P.mode; G.seats = P2P.seats;
+      P2P.roomCode = (made.session && made.session.roomCode) || P2P.roomCode;
       p2pAttachHandlers('已连接房主');
       p2pRoomShow();
       p2pRoomStatus('已加入房间 · 正在建立直连…');
@@ -937,7 +991,11 @@
   const dom = {
     startScreen: $('startScreen'), battleScreen: $('battleScreen'), resultScreen: $('resultScreen'),
     roomScreen: $('roomScreen'),
-    classGrid: $('classGrid'), selectedClassName: $('selectedClassName'), selectedClassTrait: $('selectedClassTrait'),
+    fruitGrid: $('fruitGrid'), skinThemes: $('skinThemes'), skinGrid: $('skinGrid'),
+    selectedSkinName: $('selectedSkinName'), selectedSkinTheme: $('selectedSkinTheme'),
+    hatchModal: $('hatchModal'), hatchCanvas: $('hatchCanvas'), hatchSub: $('hatchSub'),
+    hatchResult: $('hatchResult'), hatchConfirmBtn: $('hatchConfirmBtn'), hatchCloseBtn: $('hatchCloseBtn'),
+    p2pModeSel: $('p2pModeSel'), roomSeats: $('roomSeats'), seatHud: $('seatHud'),
     startBtn: $('startBtn'), speedBtn: $('speedBtn'), soundBtn: $('soundBtn'),
     rulesBtn: $('rulesBtn'), rulesModal: $('rulesModal'), closeRulesBtn: $('closeRulesBtn'),
     pClassName: $('pClassName'), eClassName: $('eClassName'),
@@ -951,9 +1009,6 @@
     banner: $('banner'), bannerTitle: $('bannerTitle'), bannerSub: $('bannerSub'),
     draftModal: $('draftModal'), draftTitle: $('draftTitle'), draftSub: $('draftSub'), draftCards: $('draftCards'),
     battleLog: $('battleLog'), dmgSummary: $('dmgSummary'), logModal: $('logModal'), logBtn: $('logBtn'), closeLogBtn: $('closeLogBtn'),
-    shopBtn: $('shopBtn'), shopModal: $('shopModal'), closeShopBtn: $('closeShopBtn'), shopDrawBtn: $('shopDrawBtn'),
-    shopPool: $('shopPool'), shopCoin: $('shopCoin'), shopCostLabel: $('shopCostLabel'), shopHint: $('shopHint'),
-    shopResult: $('shopResult'), coinChip: $('coinChip'),
     asyncTag: $('asyncTag'),
     launchBtn: $('launchBtn'), aimOverlay: $('aimOverlay'),
     resultKicker: $('resultKicker'), resultTitle: $('resultTitle'), resultDesc: $('resultDesc'),
@@ -1003,110 +1058,187 @@
   };
 
   /* ---------------------------------------------------------
-     8. 职业选择界面
+     8. 首页 · 果实库 + 外观题材选择（v3：职业选择已移除）
      --------------------------------------------------------- */
-  function renderClassGrid() {
-    const max = {
-      hp: Math.max(1, ...CLASSES.map(c => c.hp)),
-      power: Math.max(0.01, ...CLASSES.map(c => c.power)),
-      mass: Math.max(0.01, ...CLASSES.map(c => c.mass)),
-      speed: Math.max(0.01, ...CLASSES.map(c => c.speed))
-    };
-    dom.classGrid.innerHTML = CLASSES.map(c => {
-      const owned = isOwned(c.id);
-      const picked = G.selectedClass && G.selectedClass.id === c.id && owned;
-      const bars = [
-        ['生命', c.hp / max.hp], ['力量', c.power / max.power],
-        ['质量', c.mass / max.mass], ['速度', c.speed / max.speed]
-      ].map(([label, v]) =>
-        '<div class="cc-stat"><label>' + label + '</label><div class="bar"><i style="width:' + Math.round(v * 100) + '%"></i></div></div>'
-      ).join('');
-      return '<button class="class-card' + (owned ? '' : ' locked') + (picked ? ' selected' : '') + '" type="button" data-id="' + c.id + '" style="--cls-color:' + c.color + '">' +
-        '<div class="cc-head"><canvas class="cc-orb" data-orb="' + c.id + '"></canvas><span class="cc-name">' + c.name + '</span>' +
-        (owned ? '' : '<span class="cc-lock">未解锁 · 商店抽取</span>') + '</div>' +
-        '<div class="cc-trait">' + c.trait + '</div>' +
-        '<div class="cc-stats">' + bars + '</div></button>';
-    }).join('');
-    dom.classGrid.querySelectorAll('.class-card').forEach(btn => {
-      btn.addEventListener('click', () => selectClass(btn.dataset.id));
-    });
-    paintClassOrbs();
-    // 抽卡解锁会重建整组职业卡，重建后重新贴上后台为每张卡单独配置的背景
+  function renderLibrary() {
+    renderFruitGrid();
+    renderSkins();
+    applySelectedSkin();
+  }
+
+  function renderFruitGrid() {
+    if (!dom.fruitGrid) return;
+    const counts = Object.create(null);
+    INV.owned.forEach(o => { counts[o.id] = (counts[o.id] || 0) + 1; });
+    const ids = Object.keys(counts);
+    dom.fruitGrid.innerHTML = ids.length ? ids.map(id => {
+      const x = fruitById(id);
+      if (!x) return '';
+      const icon = fruitIcon(x);
+      return '<div class="fruit-card" data-fruit="' + escHtml(id) + '" data-tier="' + escHtml(x.tier) + '" title="' + escHtml(x.intro || x.desc) + '">' +
+        (icon ? '<img class="fc-icon" alt="" src="' + escHtml(icon) + '">' :
+                '<span class="fc-icon fc-icon-empty">' + escHtml(x.name.charAt(0)) + '</span>') +
+        '<span class="fc-name">' + escHtml(x.name) + '</span>' +
+        '<span class="fc-tier">' + escHtml(TIER_NAME[x.tier] || x.tier) + '</span>' +
+        '<span class="fc-count">×' + counts[id] + '</span></div>';
+    }).join('') : '<div class="faint">果实库还是空的，孵化初始蛋就能获得果实</div>';
     if (window.WowPinballUI) window.WowPinballUI.apply();
   }
 
-  // 选人卡片上的弹珠缩略图，与实战共用同一套皮肤参数
-  function paintClassOrbs() {
+  function renderSkins() {
+    if (!dom.skinThemes || !dom.skinGrid) return;
+    const cur = INV.skinTheme || 'all';
+    dom.skinThemes.innerHTML = '<button class="skin-theme-btn' + (cur === 'all' ? ' active' : '') +
+      '" type="button" data-theme="all">全部</button>' +
+      THEMES.map(t => '<button class="skin-theme-btn' + (cur === t.id ? ' active' : '') +
+        '" type="button" data-theme="' + escHtml(t.id) + '">' + escHtml(t.name) + '</button>').join('');
+    dom.skinThemes.querySelectorAll('.skin-theme-btn').forEach(b => {
+      b.addEventListener('click', () => { INV.skinTheme = b.dataset.theme; saveInventory(); renderSkins(); });
+    });
+    const list = cur === 'all' ? SKINS : SKINS.filter(x => x.theme === cur);
+    dom.skinGrid.innerHTML = list.length ? list.map(x =>
+      '<button class="skin-card' + (x.id === INV.skinId ? ' selected' : '') +
+        '" type="button" data-skin="' + escHtml(x.id) + '">' +
+        '<canvas class="skin-orb" data-orb="' + escHtml(x.id) + '"></canvas>' +
+        '<span class="sk-name">' + escHtml(x.name) + '</span></button>'
+    ).join('') : '<div class="faint">这个题材还没有外观，可在后台「外观管理」上传</div>';
+    dom.skinGrid.querySelectorAll('.skin-card').forEach(b => {
+      b.addEventListener('click', () => pickSkin(b.dataset.skin));
+    });
+    paintSkinOrbs();
+  }
+
+  function paintSkinOrbs() {
     const SK = window.WowPinballSkin;
-    if (!SK) return;
-    dom.classGrid.querySelectorAll('canvas[data-orb]').forEach(cv => {
-      const c = CLASSES.find(x => x.id === cv.dataset.orb);
-      if (!c) return;
-      // 与 styles.css 里 .cc-orb 的 48px 保持一致（canvas 用 2 倍像素比绘制）
-      SK.paintThumb(cv, c.color, c.skin, c.name.charAt(0), 48);
-      if (SK.hasSkin(c.skin)) {
-        const rec = SK.image(c.skin.src);
-        if (rec && !rec.ready && !rec.failed) SK.ready(c.skin.src, paintClassOrbs);
+    if (!SK || !dom.skinGrid) return;
+    dom.skinGrid.querySelectorAll('canvas[data-orb]').forEach(cv => {
+      const x = SKINS.find(y => y.id === cv.dataset.orb);
+      if (!x) return;
+      SK.paintThumb(cv, x.color || MARBLE.color, x.src ? x : null, x.name.charAt(0), 48);
+      if (x.src && SK.hasSkin && SK.hasSkin(x)) {
+        const rec = SK.image(x.src);
+        if (rec && !rec.ready && !rec.failed) SK.ready(x.src, paintSkinOrbs);
       }
     });
   }
 
-  function selectClass(id) {
-    const cls = CLASSES.find(c => c.id === id);
-    if (!cls) return;
-    if (!isOwned(id)) { openShop(); return; }   // 未解锁 → 引导去商店
-    G.selectedClass = cls;
-    dom.classGrid.querySelectorAll('.class-card').forEach(b => b.classList.toggle('selected', b.dataset.id === id));
-    dom.selectedClassName.textContent = G.selectedClass.name;
-    dom.selectedClassName.style.color = G.selectedClass.color;
-    dom.selectedClassTrait.textContent = G.selectedClass.trait;
-    dom.startBtn.disabled = false;
+  function pickSkin(id) {
+    const x = SKINS.find(y => y.id === id);
+    if (!x) return;
+    INV.skinId = id;
+    saveInventory();
+    renderSkins();
+    applySelectedSkin();
+  }
+
+  function applySelectedSkin() {
+    const x = currentSkin();
+    if (dom.selectedSkinName) dom.selectedSkinName.textContent = x ? x.name : '默认弹珠';
+    if (dom.selectedSkinTheme) {
+      const t = THEMES.find(y => y.id === (x && x.theme));
+      dom.selectedSkinTheme.textContent = t ? t.name : '';
+    }
+    // 兼容垫片：旧绘制代码读 f.cls.skin，这里把当前外观挂到双方视图上
+    CLASSES[0].skin = x || null;
+    CLASSES[1].skin = SKINS.find(y => y.id !== (x && x.id)) || null;
+    CLASSES[0].name = '我方队伍';
+    CLASSES[1].name = '对手队伍';
   }
 
   /* ---------------------------------------------------------
-     8.5 商店：渲染卡池、抽卡、金币展示
+     8.5 初始蛋孵化：新玩家 5 枚蛋 -> Egg hatch 像素动画 -> 从果实池随机入库
+     动画由 pixelfx 的 spawn/egg-hatch 提供（3.1s 一次性，播完自动回收）。
      --------------------------------------------------------- */
-  function updateCoinChips() {
-    const text = SHOP.currency + ' ' + WALLET.coins;
-    if (dom.coinChip) dom.coinChip.textContent = text;
-    if (dom.shopCoin) dom.shopCoin.textContent = text;
+  let HATCH_RUNNING = false, HATCH_INSTS = [], HATCH_RAF = 0;
+
+  function openHatchModal() {
+    if (!dom.hatchModal || HATCH_RUNNING) return;
+    dom.hatchModal.hidden = false;
+    if (dom.hatchResult) dom.hatchResult.innerHTML = '';
+    if (dom.hatchConfirmBtn) dom.hatchConfirmBtn.disabled = true;
+    if (dom.hatchCloseBtn) dom.hatchCloseBtn.hidden = true;
+    if (dom.hatchSub) dom.hatchSub.textContent = CONFIG.HATCH_EGGS + ' 枚蛋正在孵化…';
+    startHatch();
   }
 
-  function renderShop() {
-    if (!dom.shopPool) return;
-    if (dom.shopCostLabel) dom.shopCostLabel.textContent = '单抽 ' + SHOP.drawCost + ' ' + SHOP.currency;
-    if (dom.shopDrawBtn) dom.shopDrawBtn.disabled = !SHOP.enabled;
-    const pool = shopPool();
-    dom.shopPool.innerHTML = pool.length ? pool.map(e => {
-      const owned = isOwned(e.cls.id);
-      return '<div class="shop-item' + (owned ? ' owned' : '') + '" style="--si-color:' + e.cls.color + '">' +
-        '<span class="si-orb"></span>' +
-        '<div class="si-body"><span class="si-name">' + e.cls.name + '</span>' +
-        '<span class="si-meta">' + (SHOP_RARITY[e.rarity] || e.rarity) + ' · 权重 ' + e.weight + '</span></div>' +
-        '<span class="si-tag' + (owned ? ' owned' : '') + '">' + (owned ? '已拥有' : '未解锁') + '</span></div>';
-    }).join('') : '<div class="faint">卡池为空，请在后台「商店」页上架弹珠</div>';
-    if (dom.shopHint) {
-      const unowned = pool.filter(e => !isOwned(e.cls.id)).length;
-      dom.shopHint.textContent = !SHOP.enabled ? '商店已在后台关闭'
-        : (unowned ? '卡池中还有 ' + unowned + ' 颗弹珠未解锁' : '全部已拥有 · 后续新增弹珠会进入卡池');
+  function startHatch() {
+    HATCH_RUNNING = true;
+    HATCH_INSTS = [];
+    const PFX = window.PixelFX;
+    const jobs = [];
+    for (let i = 0; i < CONFIG.HATCH_EGGS; i++) {
+      jobs.push(PFX && PFX.spawn
+        ? PFX.spawn('spawn/egg-hatch', { seed: 31 + i * 17 })
+        : Promise.resolve(null));
     }
-    updateCoinChips();
+    Promise.all(jobs).then(list => {
+      HATCH_INSTS = (list || []).filter(Boolean);
+      if (!HATCH_INSTS.length) { setTimeout(finishHatch, 900); return; }  // 特效运行时缺失时兜底开奖
+      const cv = dom.hatchCanvas, cx = cv && cv.getContext ? cv.getContext('2d') : null;
+      let last = 0;
+      const tick = ts => {
+        if (!HATCH_RUNNING) return;
+        const dt = last ? Math.min(0.05, (ts - last) / 1000) : 0.016;
+        last = ts;
+        if (cx) {
+          cx.clearRect(0, 0, cv.width, cv.height);
+          HATCH_INSTS.forEach((inst, i) => {
+            try { inst.update(dt); inst.render(cx, 90 + i * 145, 150, { scale: 1.05 }); } catch (e) { /* 单个特效异常不影响开奖 */ }
+          });
+        }
+        const done = HATCH_INSTS.every(inst => {
+          try { return inst.done ? inst.done() : inst.t >= (inst.cycle || 3.1); } catch (e) { return true; }
+        });
+        if (done) { finishHatch(); return; }
+        HATCH_RAF = requestAnimationFrame(tick);
+      };
+      HATCH_RAF = requestAnimationFrame(tick);
+    }).catch(() => setTimeout(finishHatch, 900));
   }
 
-  function showShopResult(html, kind) {
-    if (!dom.shopResult) return;
-    dom.shopResult.hidden = false;
-    dom.shopResult.className = 'shop-result' + (kind ? ' ' + kind : '');
-    dom.shopResult.innerHTML = html;
+  function finishHatch() {
+    if (!HATCH_RUNNING) return;
+    HATCH_RUNNING = false;
+    if (HATCH_RAF) cancelAnimationFrame(HATCH_RAF);
+    HATCH_INSTS.forEach(inst => { try { inst.kill && inst.kill(); } catch (e) {} });
+    HATCH_INSTS = [];
+    const pool = SKILLS.filter(x => EFFECTS.skillBan.indexOf(x.id) < 0);
+    const got = [];
+    for (let i = 0; i < CONFIG.HATCH_EGGS && pool.length; i++) got.push(weightedPick(pool));
+    got.forEach((x, i) => {
+      INV.owned.push({
+        uid: 'f' + Date.now().toString(36) + '_' + i + '_' + Math.random().toString(36).slice(2, 6),
+        id: x.id
+      });
+    });
+    saveInventory();
+    if (dom.hatchResult) {
+      dom.hatchResult.innerHTML = got.map(x => {
+        const icon = fruitIcon(x);
+        return '<div class="hatch-fruit" data-tier="' + escHtml(x.tier) + '">' +
+          (icon ? '<img class="hf-icon" alt="" src="' + escHtml(icon) + '">' :
+                  '<span class="hf-icon">' + escHtml(x.name.charAt(0)) + '</span>') +
+          '<span class="hf-name">' + escHtml(x.name) + '</span></div>';
+      }).join('');
+    }
+    if (dom.hatchSub) dom.hatchSub.textContent = '孵化完成 · 获得 ' + got.length + ' 枚果实';
+    if (dom.hatchConfirmBtn) dom.hatchConfirmBtn.disabled = false;
+    if (dom.hatchCloseBtn) dom.hatchCloseBtn.hidden = false;
+    sfx.pick();
+    renderLibrary();
   }
 
-  function openShop() {
-    if (!dom.shopModal) return;
-    dom.shopModal.hidden = false;
-    renderShop();
+  function closeHatch() {
+    if (HATCH_RUNNING) return;   // 动画没播完不许跳过，保证新玩家一定拿到初始果实
+    if (dom.hatchModal) dom.hatchModal.hidden = true;
+    renderLibrary();
   }
 
-  function closeShop() { if (dom.shopModal) dom.shopModal.hidden = true; }
+  function updateCoinChips() {}
+  function renderShop() {}
+  function showShopResult() {}
+  function openShop() {}
+  function closeShop() {}
 
   function escHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
@@ -1147,6 +1279,8 @@
     if (dom.nameModal) dom.nameModal.hidden = true;
     setNameMsg('');
     syncSideNames();
+    // 新玩家填完昵称 -> 立刻孵化初始蛋，果实入库
+    if (!INV.owned.length && !UI_EDITOR) setTimeout(openHatchModal, 120);
   }
   // 把昵称同步到 HUD 两侧（改名 / 开新局都会调）
   function syncSideNames() {
@@ -1165,36 +1299,8 @@
     syncSideNames();
   }
 
-  function drawMarble() {
-    if (!SHOP.enabled) { showShopResult('商店暂未开放', 'bad'); return; }
-    const pool = shopPool();
-    if (!pool.length) { showShopResult('卡池为空，等待后台新增弹珠', 'bad'); return; }
-    if (WALLET.coins < SHOP.drawCost) {
-      showShopResult('金币不足：还差 ' + (SHOP.drawCost - WALLET.coins) + ' ' + SHOP.currency + '，多打几局再来', 'bad');
-      return;
-    }
-    WALLET.coins -= SHOP.drawCost;
-    const total = pool.reduce((a, e) => a + e.weight, 0);
-    let roll = Math.random() * total, pick = pool[pool.length - 1];
-    for (let i = 0; i < pool.length; i++) {
-      roll -= pool[i].weight;
-      if (roll <= 0) { pick = pool[i]; break; }
-    }
-    if (isOwned(pick.cls.id)) {
-      WALLET.coins += SHOP.duplicateRefund;
-      showShopResult('<span class="sr-name" style="color:' + pick.cls.color + '">' + pick.cls.name +
-        '</span> · 重复获得，返还 ' + SHOP.duplicateRefund + ' ' + SHOP.currency, 'dup');
-    } else {
-      WALLET.owned.push(pick.cls.id);
-      showShopResult('<span class="sr-name" style="color:' + pick.cls.color + '">' + pick.cls.name +
-        '</span> · 已解锁！现在可以在职业选择中选用', 'new');
-      sfx.pick();
-    }
-    saveWallet();
-    renderShop();
-    renderClassGrid();   // 解锁后立即刷新职业卡（保留已选中的高亮）
-    updateCoinChips();
-  }
+  /* 商店抽弹珠已移除：初始果实由孵化弹层发放，重复果实保留为多枚库存。 */
+  function drawMarble() {}
 
   /* ---------------------------------------------------------
      9. 战斗体
@@ -1205,11 +1311,13 @@
     return m;
   }
 
-  function makeFighter(side, cls) {
+  function makeFighter(side, cls, seat) {
+    const st = (seat == null ? (side === 'player' ? 0 : 1) : seat);
+    const sp = spawnPoint(st);
     return {
       side: side, cls: cls, color: cls.color,
-      x: spawnPoint(side === 'player' ? 0 : 1).x,
-      y: spawnPoint(side === 'player' ? 0 : 1).y, vx: 0, vy: 0,
+      seat: st, team: side === 'player' ? 0 : 1,
+      x: sp.x, y: sp.y, vx: 0, vy: 0,
       r: cls.radius, mods: emptyMods(),
       maxHp: cls.hp, hp: cls.hp, shield: 0,
       power: cls.power, mass: cls.mass, speed: cls.speed,
@@ -1245,16 +1353,21 @@
   }
 
   function resetForRound() {
-    [G.player, G.enemy].forEach((f, i) => {
+    (G.actors).forEach(f => {
+      if (!f) return;
       recompute(f);
       f.hp = f.maxHp;
       f.shield = f.maxHp * f.mods.shield;
-      const sp = spawnPoint(i);
+      const sp = spawnPoint(f.seat != null ? f.seat : (f.side === 'player' ? 0 : 1));
       const jitter = MAP && MAP.spawnJitter != null ? MAP.spawnJitter : 55;
       f.x = clamp(sp.x, f.r, CONFIG.ARENA_W - f.r);
       f.y = clamp(sp.y + rand(-jitter, jitter), f.r, CONFIG.ARENA_H - f.r);
       // 初始发射：玩家用选定方向，敌方用指向玩家的朝向（联机时用房主转发的客机瞄准角）
-      const aim = i === 0 ? G.playerAim : (P2P.active ? (P2P.guestAim || enemyAimAngle()) : enemyAimAngle());
+      // 2V2：每个座位可有自己的发射角（由 launch 消息按 seat 上报）；缺的回落到本队默认角
+      const seatAim = P2P.launchBySeat && P2P.launchBySeat[f.seat] != null ? P2P.launchBySeat[f.seat] : null;
+      const aim = seatAim != null ? seatAim
+        : (f.side === 'player' ? G.playerAim
+          : (P2P.active ? (P2P.guestAim || enemyAimAngle()) : enemyAimAngle()));
       f.vx = Math.cos(aim) * CONFIG.LAUNCH_SPEED * f.speed;
       f.vy = Math.sin(aim) * CONFIG.LAUNCH_SPEED * f.speed;
       f.combo = 0;
@@ -1278,53 +1391,57 @@
      10. 技能选择（每颗弹珠各自获得技能）
      --------------------------------------------------------- */
   function openDraft(title, sub) {
-    // 超过「拥有的技能最大数量」时，不再弹出技能随机选项，直接进入瞄准阶段；
-    // 玩家与对手同步受限（每回合双方各获得 1 个技能，封顶即同时停止）。
-    const maxSkills = CONFIG.MAX_SKILLS != null ? CONFIG.MAX_SKILLS : 9;
-    if (G.playerSkills.length >= maxSkills) {
-      addLog('已达『拥有的技能最大数量』上限（' + maxSkills + '），本回合不再弹出技能选项', 'hl');
-      setTimeout(startAimPhase, 60);
-      return;
-    }
     G.phase = 'draft';
     const draftCount = CONFIG.DRAFT_OPTIONS + EFFECTS.extraDraft;
-    G.draftOptions = drawSkills(G.playerClass, G.playerSkills, draftCount);
-    const enemyOptions = drawSkills(G.enemyClass, G.enemySkills, draftCount);
+    // 我方候选来自「我的果实库」；联机时对手候选来自对端 ready 上报的库存
+    G.draftOptions = drawSkills(G.playerClass, G.playerSkills, draftCount, ownFruitIds());
+    const enemyOptions = drawSkills(G.enemyClass, G.enemySkills, draftCount,
+      P2P.active ? (P2P.peerFruits || null) : null);
     G.enemyDraftPick = P2P.active ? null : enemyOptions[randInt(enemyOptions.length)];
 
-    // 联机（房主）：为客机抽好技能牌发过去，客机只挑不发牌
     if (P2P.active && P2P.role === 'host') {
       P2P.guestOpts = enemyOptions;
       P2P.guestPick = false; P2P.myPickDone = false;
-      p2pSend({ k: 'draft', r: G.round, opts: enemyOptions.map(s => s.id) });
+      // 队伍 B 的队长（seat1）负责选该队果实
+      p2pSend({ k: 'draft', r: G.round, opts: enemyOptions.map(x => x.id) }, 1);
     }
 
-    dom.draftTitle.textContent = title;
-    dom.draftSub.textContent = sub;
+    dom.draftTitle.textContent = title || '本回合 · 果实三选一';
+    dom.draftSub.textContent = sub || '从你的果实库抽取，选中的果实只在这一回合生效';
     dom.draftModal.hidden = false;
-    // 卡牌正文：介绍优先，留空的技能仍显示自动生成的机制摘要；介绍由后台自由编辑，必须转义
-    dom.draftCards.innerHTML = G.draftOptions.map((s, i) =>
-      '<button class="skill-card" type="button" data-i="' + i + '" data-tier="' + escHtml(s.tier) + '"' +
-      ' title="' + escHtml(s.intro ? s.intro + '\n【机制】' + s.desc : s.desc) + '">' +
-      '<div class="sc-top"><span class="sc-name">' + escHtml(s.name) + '</span><span class="sc-tier">' + escHtml(TIER_NAME[s.tier]) + '</span></div>' +
-      '<div class="sc-origin">' + escHtml(s.origin) + '</div>' +
-      '<div class="sc-effect">' + escHtml(s.intro || s.desc) + '</div>' +
-      '<div class="sc-hotkey">' + (i < 3 ? '按 ' + (i + 1) + ' 选择' : '点击选择') + '</div></button>'
-    ).join('');
+    dom.draftCards.innerHTML = G.draftOptions.map((x, i) => fruitCardHtml(x, i)).join('');
     dom.draftCards.querySelectorAll('.skill-card').forEach(btn => {
       btn.addEventListener('click', () => chooseSkill(Number(btn.dataset.i)));
     });
-    dom.phaseLabel.textContent = '休整 · 选择技能';
-    addLog('出现 ' + G.draftOptions.length + ' 个随机技能，对手也已选定技能', 'hl');
+    dom.phaseLabel.textContent = '休整 · 选择果实';
+    addLog('本回合从果实库抽出 ' + G.draftOptions.length + ' 枚果实', 'hl');
     updateScoreboard();
+  }
+
+  /* 果实卡：有后台上传的图标就显示，没有则保持纯文字卡（向后兼容） */
+  function fruitCardHtml(x, i) {
+    const icon = fruitIcon(x);
+    return '<button class="skill-card" type="button" data-i="' + i + '" data-tier="' + escHtml(x.tier) + '"' +
+      ' title="' + escHtml(x.intro ? x.intro + '\n【机制】' + x.desc : x.desc) + '">' +
+      (icon ? '<img class="sc-icon" alt="" src="' + escHtml(icon) + '">' : '') +
+      '<div class="sc-top"><span class="sc-name">' + escHtml(x.name) + '</span><span class="sc-tier">' + escHtml(TIER_NAME[x.tier]) + '</span></div>' +
+      '<div class="sc-origin">' + escHtml(x.origin) + '</div>' +
+      '<div class="sc-effect">' + escHtml(x.intro || x.desc) + '</div>' +
+      '<div class="sc-hotkey">' + (i < 3 ? '按 ' + (i + 1) + ' 选择' : '点击选择') + '</div></button>';
   }
 
   function chooseSkill(i) {
     if (G.phase !== 'draft' || !G.draftOptions[i]) return;
-    G.phase = 'transition';   // 立即锁住，防止 260ms 内连点导致重复开回合
-    const s = G.draftOptions[i];
-    G.playerSkills.push(s);
-    G.myPicks[G.round] = { skill: s.id, aim: null };   // 录制：这一回合我选的技能
+    G.phase = 'transition';
+    const x = G.draftOptions[i];
+    // 果实只在本回合生效：覆盖而不是叠加；2V2 时同队两颗弹珠共享这枚果实
+    G.playerSkills = [x];
+    G.roundFruit = x;
+    G.actorFruits = {};
+    (G.actors).forEach(f => {
+      if (f && f.side === 'player') G.actorFruits[f.seat] = x;
+    });
+    G.myPicks[G.round] = { skill: x.id, aim: null };
     sfx.pick();
     G.draftOptions = [];
     dom.draftModal.hidden = true;
@@ -1333,24 +1450,27 @@
     if (P2P.active) {
       recompute(G.player); recompute(G.enemy);
       if (P2P.role === 'guest') {
-        // 客机：技能自己先记上，选择上报给房主，然后等房主开瞄准阶段
-        p2pSend({ k: 'draft_pick', r: G.round, i: i });
-        addLog('我方获得「' + s.name + '」，等待房主进入瞄准阶段', 'good');
+        p2pSend({ k: 'draft_pick', r: G.round, i: i, seat: P2P.mySeat });
+        addLog('本回合果实「' + x.name + '」，等待房主进入瞄准阶段', 'good');
         showBanner('已选择', '等待其他玩家…', 0);
       } else {
-        // 房主：等客机的 draft_pick 一起进瞄准
         P2P.myPickDone = true;
-        addLog('我方获得「' + s.name + '」，等待对手选择技能', 'good');
-        showBanner('已选择', '等待对手选择技能…', 0);
+        addLog('本回合果实「' + x.name + '」，等待对手选择', 'good');
+        showBanner('已选择', '等待对手选择果实…', 0);
         if (P2P.guestPick) setTimeout(startAimPhase, 260);
       }
       return;
     }
 
-    if (G.enemyDraftPick) G.enemySkills.push(G.enemyDraftPick);
+    if (G.enemyDraftPick) {
+      G.enemySkills = [G.enemyDraftPick];
+      (G.actors).forEach(f => {
+        if (f && f.side === 'enemy') G.actorFruits[f.seat] = G.enemyDraftPick;
+      });
+    }
     recompute(G.player);
     recompute(G.enemy);
-    addLog('我方获得「' + s.name + '」，对手获得「' + (G.enemyDraftPick ? G.enemyDraftPick.name : '—') + '」', 'good');
+    addLog('本回合我方果实「' + x.name + '」，对手「' + (G.enemyDraftPick ? G.enemyDraftPick.name : '—') + '」', 'good');
     G.enemyDraftPick = null;
     setTimeout(startAimPhase, 260);
   }
@@ -1427,15 +1547,28 @@
     updateScoreboard();
   }
 
+  function teamWiped() {
+    const list = G.actors.filter(Boolean);
+    if (!list.length) return false;
+    return !list.some(f => f.side === 'player' && f.hp > 0) ||
+           !list.some(f => f.side === 'enemy' && f.hp > 0);
+  }
+
   function endRound(reason) {
     if (G.phase !== 'fighting') return;
     G.phase = 'rest';
-    const p = G.player, e = G.enemy;
-    const pp = clamp(p.hp / p.maxHp, 0, 1);
-    const ep = clamp(e.hp / e.maxHp, 0, 1);
+    // 2V2：胜负按队伍合计剩余生命百分比；1V1 时等价于单颗弹珠血量
+    const teamHp = side => {
+      const list = (G.actors).filter(f => f && f.side === side);
+      const hp = list.reduce((a, f) => a + Math.max(0, f.hp), 0);
+      const mx = list.reduce((a, f) => a + f.maxHp, 0) || 1;
+      return { hp: hp, ratio: clamp(hp / mx, 0, 1) };
+    };
+    const P = teamHp('player'), E = teamHp('enemy');
+    const pp = P.ratio, ep = E.ratio;
     let winner;
     if (reason === 'ko') {
-      winner = p.hp <= 0 && e.hp <= 0 ? 'draw' : (p.hp <= 0 ? 'enemy' : 'player');
+      winner = P.hp <= 0 && E.hp <= 0 ? 'draw' : (P.hp <= 0 ? 'enemy' : 'player');
     } else if (Math.abs(pp - ep) < CONFIG.DRAW_WINDOW) {
       winner = 'draw';
     } else {
@@ -1469,7 +1602,7 @@
       if (G.round >= CONFIG.TOTAL_ROUNDS) {
         showResult();
       } else {
-        openDraft('第 ' + G.round + ' 回合休整 · 随机三选一', '再选一个技能，与已有技能叠加生效');
+        openDraft('第 ' + G.round + ' 回合休整 · 果实三选一', '从你的果实库再抽一枚，只在本回合生效');
       }
     }, 1400);
   }
@@ -1647,7 +1780,7 @@
      没有接锁定模块时按旧行为打对手。 */
   function castTargetsOf(C, att, opp) {
     const SM = SKILL_RT && SKILL_RT.SM;
-    const ents = [G.player, G.enemy].concat(G.enemies || []);
+    const ents = G.actors.concat(G.enemies || []);
     if (SM && SM.selectTargets && C && C.present && C.present.select) {
       const ts = SM.selectTargets(C, att, ents);
       if (ts.length) return ts;
@@ -1688,13 +1821,14 @@
     const targets = hasEnemy ? castTargetsOf(C, att, opp) : [];
     const ctx = {
       caster: att, opponent: opp || null,
-      entities: [G.player, G.enemy].concat(G.enemies || []),
+      entities: G.actors.concat(G.enemies || []),
       angle: 0, point: { x: att.x, y: att.y }, targets: targets, kind: 'cast'
     };
     applyGroupDamage(grp, C, att, targets, 'cast', ctx, '施放');
   }
 
   function resolveHit(p, e, nx, ny, vn) {
+    if (p.side === e.side) return;   // 2V2 队友互撞只做物理分离，不互相扣血
     // 各自朝法线正/反方向的冲击速度，决定本次撞击的攻守占比
     const pv = Math.max(0, p.vx * nx + p.vy * ny);
     const ev = Math.max(0, -(e.vx * nx + e.vy * ny));
@@ -1830,10 +1964,12 @@
 
   function initSkillCasters() {
     if (!SKILL_RT) return;
-    ['player', 'enemy'].forEach(side => {
-      const f = side === 'player' ? G.player : G.enemy;
+    (G.actors.length ? G.actors : [G.player, G.enemy]).forEach(f => {
       if (!f) return;
-      const list = (side === 'player' ? G.playerSkills : G.enemySkills) || [];
+      // 2V2：每颗弹珠按座位取本回合果实；队伍共享时两颗指向同一枚
+      const list = (G.actorFruits && G.actorFruits[f.seat])
+        ? [G.actorFruits[f.seat]]
+        : ((f.side === 'player' ? G.playerSkills : G.enemySkills) || []);
       f._skillCasters = [];
       list.forEach(s => {
         const C = s.compiled;
@@ -2014,7 +2150,7 @@
            现在：先算出判定区域 → 只挑区域内的敌方 → 命中表现也画在判定点，不再画到对手身上。 */
         const ctx = {
           caster: f, opponent: opp,
-          entities: [G.player, G.enemy].concat(G.enemies || []),
+          entities: G.actors.concat(G.enemies || []),
           angle: baseAngle, point: null, targets: []
         };
         const desc = SM.rangeDescriptor(VC, ctx);
@@ -2534,7 +2670,7 @@
     if (dmg > 0) {
       applyDamage(target, dmg, owner, false, false, lbl);
       if (R > 0) {
-        [G.player, G.enemy].forEach(t => {
+        G.actors.forEach(t => {
           // 溅射只波及「被引爆者的同阵营」其他单位，绝不会误伤施法者自己
           if (!t || t === target || t.hp <= 0 || t.side !== target.side) return;
           if (Math.hypot(t.x - target.x, t.y - target.y) > R + t.r) return;
@@ -2580,7 +2716,7 @@
 
   // 印记逐帧结算：到期引爆、撕裂按 0.5 秒结算（迟滞移到物理积分处派生）
   function stepMarks(dt) {
-    [G.player, G.enemy].forEach(t => {
+    G.actors.forEach(t => {
       if (!t || !(t._markStacks > 0)) return;
       if (t.hp <= 0) { clearMark(t, false); return; }
       if (G.clock >= (t._markUntil || 0)) { clearMark(t, true); return; }
@@ -2644,13 +2780,13 @@
     if (!rctx && SM && SM.rangeDescriptor) {
       rctx = {
         caster: caster, opponent: caster.side === 'player' ? G.enemy : G.player,
-        entities: [G.player, G.enemy].concat(G.enemies || []),
+        entities: G.actors.concat(G.enemies || []),
         angle: 0, point: { x: x, y: y }, targets: []
       };
       rctx.desc = SM.rangeDescriptor(C, rctx);
     }
     const nodes = (grp.impactList && grp.impactList.length) ? grp.impactList : [imp];
-    [G.player, G.enemy].concat(G.enemies || []).forEach(t => {
+    G.actors.concat(G.enemies || []).forEach(t => {
       if (!t || t.side === caster.side) return;
       const ok = (rctx && rctx.desc && SM && SM.moduleInRange)
         ? nodes.filter(m => SM.moduleInRange(m, rctx.desc, t, rctx)) : nodes;
@@ -2671,7 +2807,7 @@
        没有 ctx 时（旧调用 / 施放事件）按编译视图补一份，口径与即时形态完全一致。 */
     let rctx = ctx || (SM && SM.rangeDescriptor ? {
       caster: att, opponent: (targets && targets[0]) || null,
-      entities: [G.player, G.enemy].concat(G.enemies || []),
+      entities: G.actors.concat(G.enemies || []),
       angle: rot, point: { x: x, y: y }, targets: targets || []
     } : null);
     // 只带命中来源调用时也要有上下文容器，否则伤害节点拿不到 kind
@@ -2711,7 +2847,7 @@
        不再让一个默认爆炸半径把全图敌人一起卷进来。 */
     const impNodes = (grp.impactList && grp.impactList.length) ? grp.impactList : [imp];
     if (imp.aoeRadius > 0) {
-      [G.player, G.enemy].concat(G.enemies || []).forEach(t => {
+      G.actors.concat(G.enemies || []).forEach(t => {
         if (!t || hitList.indexOf(t) >= 0 || t.side === att.side) return;
         const ok = (rctx && rctx.desc && SM && SM.moduleInRange)
           ? impNodes.filter(m => SM.moduleInRange(m, rctx.desc, t, rctx)) : impNodes;
@@ -2743,7 +2879,7 @@
        选多个敌人 = 逐个结算。没接模块时保持旧行为（必中单体打对手）。 */
     let targets = [opp];
     if (SM && SM.selectTargets && C.present && C.present.select) {
-      const ts = SM.selectTargets(C, att, [G.player, G.enemy].concat(G.enemies || []));
+      const ts = SM.selectTargets(C, att, G.actors.concat(G.enemies || []));
       targets = ts.filter(t => t && t !== att);
       if (!targets.length) return;
     }
@@ -2765,7 +2901,7 @@
     }
     const ctx = {
       caster: att, opponent: opp,
-      entities: [G.player, G.enemy].concat(G.enemies || []),
+      entities: G.actors.concat(G.enemies || []),
       angle: angle, point: null, targets: []
     };
     const d = SM.rangeDescriptor(C, ctx);
@@ -2776,7 +2912,7 @@
     if (!SM || !SM.rangeDescriptor) return (opp && opp.side !== att.side) ? [opp] : [];
     const ctx = {
       caster: att, opponent: opp,
-      entities: [G.player, G.enemy].concat(G.enemies || []),
+      entities: G.actors.concat(G.enemies || []),
       angle: Math.atan2(pt.y - att.y, pt.x - att.x), point: pt, targets: []
     };
     const d = SM.rangeDescriptor(C, ctx);
@@ -2790,7 +2926,7 @@
     // 碰撞型载体：命中目标由物理给出，但模块级「自定义作用范围」仍要逐条筛
     const ctx = {
       caster: caster, opponent: target,
-      entities: [G.player, G.enemy].concat(G.enemies || []),
+      entities: G.actors.concat(G.enemies || []),
       angle: ang, point: { x: q.x, y: q.y },
       targets: (target && target.side !== caster.side) ? [target] : []
     };
@@ -2842,7 +2978,7 @@
   function stepSkillRuntime(dt) {
     if (!SKILL_RT) return;
     // 技能护盾到期：回落到施放前的护盾基线
-    [G.player, G.enemy].forEach(f => {
+    G.actors.forEach(f => {
       if (!f || !f._shieldUntil) return;
       if (G.clock >= f._shieldUntil) {
         f.shield = Math.min(f.shield || 0, f._shieldBase || 0);
@@ -2850,7 +2986,7 @@
       }
     });
     // 充能推进：开局从 0 起步，未满的按各自充能时间回充；放完清零进入下一轮充能
-    [G.player, G.enemy].forEach(f => {
+    G.actors.forEach(f => {
       if (!f || !f._skillCasters) return;
       f._skillCasters.forEach(c => {
         if (c.charge >= 1) return;
@@ -2860,7 +2996,7 @@
     // 计时/充能型 source（回合开始 / 定时循环 / 充能完成时）
     // 「回合开始」是事件型触发：回合开始即放，不要求充能条已满 —— 它才是一开局唯一能释放的类型；
     // 「定时循环」「充能完成时」以及 onHit/onWall/onLowHp/onCast 都必须先充满才能放第一发。
-    [G.player, G.enemy].forEach(f => {
+    G.actors.forEach(f => {
       if (!f._skillCasters) return;
       f._skillCasters.forEach(caster => {
         caster.sources.forEach(s => {
@@ -2881,12 +3017,12 @@
       });
     });
     // 生命过低触发
-    [G.player, G.enemy].forEach(f => { if (f && f.hp > 0 && f.hp / f.maxHp < 0.4) triggerSkillEvent(f, 'onLowHp'); });
+    G.actors.forEach(f => { if (f && f.hp > 0 && f.hp / f.maxHp < 0.4) triggerSkillEvent(f, 'onLowHp'); });
     // 推进投射物（命中 / 撞墙 / 消失回调）
     if (G.skillShots && G.skillShots.length) {
       SKILL_RT.SE.advance(G.skillShots, dt, {
         w: CONFIG.ARENA_W, h: CONFIG.ARENA_H,
-        targets: [G.player, G.enemy],
+        targets: G.actors,
         onHit: skillShotHit, onWall: skillShotWall, onExpire: skillShotExpire
       });
     }
@@ -2901,7 +3037,7 @@
         if (z.tick <= 0) {
           z.tick = 0.5;
           const R = z.cfg.radius || 70;
-          [G.player, G.enemy].forEach(t => {
+          G.actors.forEach(t => {
             if (!t || t.hp <= 0 || t.side === z.side) return;
             if (Math.hypot(t.x - z.x, t.y - z.y) > R + t.r) return;
             const grp = z.C && z.C._tickGrp;
@@ -2932,7 +3068,7 @@
         const grp = a.C && a.C._tickGrp;
         if (a.cfg.auraType === 'buff') {
           // 增益型：对半径内同阵营（含自身）持续施加增益；治疗/护盾按 applyOneStatus 的规则作用于目标自身
-          [G.player, G.enemy].forEach(t => {
+          G.actors.forEach(t => {
             if (!t || t.hp <= 0 || t.side !== a.side) return;
             if (Math.hypot(t.x - a.x, t.y - a.y) > R + t.r) return;
             if (a.cfg.buff && a.cfg.buff !== 'none') {
@@ -2942,7 +3078,7 @@
           });
         } else {
           // 伤害型：光环自身 dps ＋ 连到它的伤害 / 元素模块，按结算间隔缩放
-          [G.player, G.enemy].forEach(t => {
+          G.actors.forEach(t => {
             if (!t || t.hp <= 0 || t.side === a.side) return;
             if (Math.hypot(t.x - a.x, t.y - a.y) > R + t.r) return;
             const dmg = ((a.cfg.dps || 0) + boundTickDamage(grp)) * gap * EFFECTS.dmgScale;
@@ -2964,7 +3100,7 @@
       G.skillWallHazards = G.skillWallHazards.filter(h => {
         if (G.clock - h.born > h.life) return false;
         const w = h.cfg, R = w.wallRadius || 60;
-        const foes = [G.player, G.enemy].filter(t => t && t.hp > 0 && t.side !== h.side);
+        const foes = G.actors.filter(t => t && t.hp > 0 && t.side !== h.side);
         // 触碰伤害：进入区域立刻结算一次；停留在区域内时按「触碰间隔」重复结算（间隔 0 = 只结算进入那一次）
         if (w.wallTouchDamage > 0) {
           foes.forEach(t => {
@@ -3002,7 +3138,7 @@
         const SM = SKILL_RT.SM;
         const ectx = {
           caster: e.att, opponent: t,
-          entities: [G.player, G.enemy].concat(G.enemies || []),
+          entities: G.actors.concat(G.enemies || []),
           angle: 0, point: { x: t ? t.x : e.x, y: t ? t.y : e.y },
           targets: (t && t.side !== e.att.side) ? [t] : []
         };
@@ -3029,7 +3165,7 @@
        与试放沙盘共用 skill-effects 里的同一份结算口径（stepDotZones）。伤害数值统一由本模块结算。 */
     if (G.skillDotZones && G.skillDotZones.length) {
       G.skillDotZones = SKILL_RT.SE.stepDotZones(G.skillDotZones, dt, {
-        targets: [G.player, G.enemy], scale: EFFECTS.dmgScale,
+        targets: G.actors, scale: EFFECTS.dmgScale,
         onTick: (t, dmg, z) => {
           // 飘字显示每秒伤害(= dotDps × 倍率)，而非把每 tick 的 0.6 取整成 1；实际扣血仍按 tick 真实结算
           const perSec = dmg / Math.max(0.1, Number(z.cfg.dotInterval) || 0.5);
@@ -3130,7 +3266,7 @@
     });
     SKILL_RT.SE.drawFx(ctx, G.skillFx || [], null);
     // 印记：目标头顶按层数画点（颜色取印记配置），最多显示 10 个
-    [G.player, G.enemy].forEach(t => {
+    G.actors.forEach(t => {
       if (!t || !(t._markStacks > 0) || G.clock >= (t._markUntil || 0)) return;
       const col = (t._markCfg && t._markCfg.color) || '#e8c85a';
       const n = Math.min(10, t._markStacks);
@@ -3145,7 +3281,7 @@
   function step(dt) {
     G.clock += dt;
     const p = G.player, e = G.enemy;
-    const list = [p, e];
+    const list = G.actors.length ? G.actors : [p, e];
     const slip = weatherSlip();   // 下雨湿滑：反弹系数整体放大
 
     // 运动器：先于物理积分统一算出被接管弹珠本帧的速度。
@@ -3235,42 +3371,40 @@
       f.squash = Math.max(0, f.squash - dt * 2.6);
     });
 
-    // 圆-圆碰撞
-    let dx = e.x - p.x, dy = e.y - p.y;
-    let dist = Math.hypot(dx, dy);
-    const minDist = p.r + e.r;
-    if (dist < minDist) {
-      if (dist < 0.001) { dx = 1; dy = 0; dist = 1; }
-      const nx = dx / dist, ny = dy / dist;
-      const overlap = minDist - dist;
-      const tm = p.mass + e.mass;
-      p.x -= nx * overlap * (e.mass / tm);
-      p.y -= ny * overlap * (e.mass / tm);
-      e.x += nx * overlap * (p.mass / tm);
-      e.y += ny * overlap * (p.mass / tm);
-
-      const rvx = p.vx - e.vx, rvy = p.vy - e.vy;
-      const vn = rvx * nx + rvy * ny;   // >0 表示正在接近
-      if (vn > 0) {
-        const j = (1 + CONFIG.RESTITUTION * slip) * vn / (1 / p.mass + 1 / e.mass);
-        p.vx -= j / p.mass * nx; p.vy -= j / p.mass * ny;
-        e.vx += j / e.mass * nx; e.vy += j / e.mass * ny;
-
-        // 击退强化
-        if (p.mods.knock > 0) { e.vx += nx * vn * p.mods.knock * 0.35; e.vy += ny * vn * p.mods.knock * 0.35; }
-        if (e.mods.knock > 0) { p.vx -= nx * vn * e.mods.knock * 0.35; p.vy -= ny * vn * e.mods.knock * 0.35; }
-
-        // 加速反弹：双方碰撞后整体提速一小段，制造「撞一下更带劲」的手感
-        p.vx *= CONFIG.COLLISION_BOOST; p.vy *= CONFIG.COLLISION_BOOST;
-        e.vx *= CONFIG.COLLISION_BOOST; e.vy *= CONFIG.COLLISION_BOOST;
-
+    // 圆-圆碰撞：1V1 一对；2V2 四颗弹珠两两判定
+    const bodies = G.actors.length ? G.actors : [p, e];
+    for (let ai = 0; ai < bodies.length; ai++) {
+      for (let bi = ai + 1; bi < bodies.length; bi++) {
+        const a = bodies[ai], b = bodies[bi];
+        if (!a || !b || a.hp <= 0 || b.hp <= 0) continue;
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let dist = Math.hypot(dx, dy);
+        const minDist = a.r + b.r;
+        if (dist >= minDist) continue;
+        if (dist < 0.001) { dx = 1; dy = 0; dist = 1; }
+        const nx = dx / dist, ny = dy / dist;
+        const overlap = minDist - dist;
+        const tm = a.mass + b.mass;
+        a.x -= nx * overlap * (b.mass / tm);
+        a.y -= ny * overlap * (b.mass / tm);
+        b.x += nx * overlap * (a.mass / tm);
+        b.y += ny * overlap * (a.mass / tm);
+        const rvx = a.vx - b.vx, rvy = a.vy - b.vy;
+        const vn = rvx * nx + rvy * ny;
+        if (vn <= 0) continue;
+        const j = (1 + CONFIG.RESTITUTION * slip) * vn / (1 / a.mass + 1 / b.mass);
+        a.vx -= j / a.mass * nx; a.vy -= j / a.mass * ny;
+        b.vx += j / b.mass * nx; b.vy += j / b.mass * ny;
+        if (a.mods.knock > 0) { b.vx += nx * vn * a.mods.knock * 0.35; b.vy += ny * vn * a.mods.knock * 0.35; }
+        if (b.mods.knock > 0) { a.vx -= nx * vn * b.mods.knock * 0.35; a.vy -= ny * vn * b.mods.knock * 0.35; }
+        a.vx *= CONFIG.COLLISION_BOOST; a.vy *= CONFIG.COLLISION_BOOST;
+        b.vx *= CONFIG.COLLISION_BOOST; b.vy *= CONFIG.COLLISION_BOOST;
         if (vn > CONFIG.MIN_IMPACT && G.clock - G.lastImpact > CONFIG.IMPACT_CD) {
           G.lastImpact = G.clock;
-          resolveHit(p, e, nx, ny, vn);
-          /* 本体物理碰撞：这是唯一合法的「弹珠碰撞」命中来源。
-             同时把 meta 传下去——触发事件=命中时 且 命中判定=弹珠碰撞 的技能只认这一次。 */
-          triggerSkillEvent(p, 'onHit', null, { kind: 'body' });
-          triggerSkillEvent(e, 'onHit', null, { kind: 'body' });
+          resolveHit(a, b, nx, ny, vn);
+          /* 本体物理碰撞：唯一合法的「弹珠碰撞」命中来源 */
+          triggerSkillEvent(a, 'onHit', null, { kind: 'body' });
+          triggerSkillEvent(b, 'onHit', null, { kind: 'body' });
         }
       }
     }
@@ -3474,7 +3608,7 @@
     ctx.save();
     ctx.translate(shake * 11 * Math.sin(t * 37), shake * 8 * Math.sin(t * 29));
 
-    [G.player, G.enemy].forEach(drawFighter);
+    G.actors.forEach(drawFighter);
     if (G.phase === 'aim' && G.player) drawAimArrow();
     drawParticles();
     drawFloaters();
@@ -3741,18 +3875,43 @@
 
   function updateHud() {
     if (!G.player || !G.enemy) return;
-    const p = G.player, e = G.enemy;
-    dom.pHpBar.style.width = (clamp(p.hp / p.maxHp, 0, 1) * 100) + '%';
-    dom.eHpBar.style.width = (clamp(e.hp / e.maxHp, 0, 1) * 100) + '%';
-    dom.pShieldBar.style.width = (clamp(p.shield / p.maxHp, 0, 1) * 100) + '%';
-    dom.eShieldBar.style.width = (clamp(e.shield / e.maxHp, 0, 1) * 100) + '%';
-    dom.pHpText.textContent = Math.ceil(p.hp) + ' / ' + p.maxHp + (p.shield > 0.5 ? '  +' + Math.ceil(p.shield) + '盾' : '');
-    dom.eHpText.textContent = Math.ceil(e.hp) + ' / ' + e.maxHp + (e.shield > 0.5 ? '  +' + Math.ceil(e.shield) + '盾' : '');
+    const team = side => {
+      const list = (G.actors).filter(f => f && f.side === side);
+      return {
+        hp: list.reduce((a, f) => a + Math.max(0, f.hp), 0),
+        mx: list.reduce((a, f) => a + f.maxHp, 0) || 1,
+        sh: list.reduce((a, f) => a + Math.max(0, f.shield), 0)
+      };
+    };
+    const A = team('player'), B = team('enemy');
+    dom.pHpBar.style.width = (clamp(A.hp / A.mx, 0, 1) * 100) + '%';
+    dom.eHpBar.style.width = (clamp(B.hp / B.mx, 0, 1) * 100) + '%';
+    dom.pShieldBar.style.width = (clamp(A.sh / A.mx, 0, 1) * 100) + '%';
+    dom.eShieldBar.style.width = (clamp(B.sh / B.mx, 0, 1) * 100) + '%';
+    dom.pHpText.textContent = Math.ceil(A.hp) + ' / ' + A.mx + (A.sh > 0.5 ? '  +' + Math.ceil(A.sh) + '盾' : '');
+    dom.eHpText.textContent = Math.ceil(B.hp) + ' / ' + B.mx + (B.sh > 0.5 ? '  +' + Math.ceil(B.sh) + '盾' : '');
     dom.pScore.textContent = '回合胜 ' + G.scores.player;
     dom.eScore.textContent = '回合胜 ' + G.scores.enemy;
+    renderSeatHud();
     syncSkillCharge(false);
-    renderBuffBar('player', p);
-    renderBuffBar('enemy', e);
+    renderBuffBar('player', G.player);
+    renderBuffBar('enemy', G.enemy);
+  }
+
+  function renderSeatHud() {
+    if (!dom.seatHud) return;
+    dom.seatHud.querySelectorAll('.seat-hp').forEach(el => {
+      const i = Number(el.dataset.seat);
+      el.hidden = i >= G.seats;
+      const f = G.actors[i];
+      const name = el.querySelector('.sh-name'), bar = el.querySelector('.sh-bar'), txt = el.querySelector('.sh-text');
+      if (name) name.textContent = f
+        ? ((f.team === 0 ? 'A' : 'B') + (i + 1) + (P2P.active && i === P2P.mySeat ? ' · 我' : ''))
+        : '—';
+      if (bar) bar.style.width = f ? (clamp(f.hp / (f.maxHp || 1), 0, 1) * 100) + '%' : '0%';
+      if (txt) txt.textContent = f ? Math.ceil(Math.max(0, f.hp)) : '0';
+      el.classList.toggle('enemy', !!f && f.side === 'enemy');
+    });
   }
 
   function updateMeta() {
@@ -3881,7 +4040,7 @@
     dom.resultTitle.textContent = title;
     dom.resultTitle.className = cls;
     dom.resultDesc.textContent = '回合比分  ' + ps + ' : ' + es + '（平局 ' + G.scores.draw + '）  ·  ' +
-      nickName() + '（' + G.playerClass.name + '） 对阵 ' + enemyNick() + '（' + G.enemyClass.name + '）';
+      nickName() + ' 对阵 ' + enemyNick() + (G.mode === '2v2' ? '  ·  2V2' : '');
     if (SHOP.enabled) {
       const rw = SHOP.rewards;
       const gain = cls === 'win' ? rw.win : (cls === 'lose' ? rw.lose : rw.draw);
@@ -3907,8 +4066,8 @@
     }).join('');
 
     dom.buildReview.innerHTML =
-      buildCol('我方 · ' + nickName() + ' · ' + G.playerClass.name, G.playerClass.color, G.playerSkills) +
-      buildCol('对手 · ' + enemyNick() + ' · ' + G.enemyClass.name, G.enemyClass.color, G.enemySkills);
+      buildCol('我方 · ' + nickName() + ' · 本局最后一枚果实', SIDE.player.color, G.playerSkills) +
+      buildCol('对手 · ' + enemyNick() + ' · 本局最后一枚果实', SIDE.enemy.color, G.enemySkills);
   }
 
   function buildCol(title, color, skills) {
@@ -3929,49 +4088,62 @@
     if (name !== 'battle') dom.logModal.hidden = true;
   }
 
-  function startMatch(cls, opts) {
+  function startMatch(opts) {
     opts = opts || {};
     ensureAudio();
-    G.playerClass = cls;
-    G.enemyClass = opts.enemyClass ? (CLASSES.find(c => c.id === opts.enemyClass) || CLASSES[randInt(CLASSES.length)]) : CLASSES[randInt(CLASSES.length)];
-    G.player = makeFighter('player', cls);
-    G.enemy = makeFighter('enemy', G.enemyClass);
+    G.playerClass = CLASSES[0];
+    G.enemyClass = CLASSES[1];
+    G.selectedClass = CLASSES[0];
+    applySelectedSkin();
+    // seat0/2 = 队伍 A，seat1/3 = 队伍 B；1V1 只建前两颗
+    const seats = G.mode === '2v2' ? 4 : 2;
+    G.seats = seats;
+    G.actors = [];
+    for (let i = 0; i < seats; i++) {
+      const side = (i % 2 === 0) ? 'player' : 'enemy';
+      G.actors.push(makeFighter(side, side === 'player' ? CLASSES[0] : CLASSES[1], i));
+    }
+    G.player = G.actors[0];
+    G.enemy = G.actors[1];
+    G.enemies = [];   // 兼容旧的多敌人扩展位：额外弹珠已在 G.actors 里，避免重复
     G.round = 0;
     G.roundTime = 0;
     G.scores = { player: 0, enemy: 0, draw: 0 };
     G.roundResults = [];
     G.playerSkills = [];
     G.enemySkills = [];
+    G.actorFruits = {};
+    G.roundFruit = null;
     G.myPicks = [];
     G.logLines = [];
     G.particles = [];
     G.floaters = [];
     G.trauma = 0;
+    P2P.launchBySeat = {};
     resetDmgStats();
     dom.battleLog.innerHTML = '';
 
-    syncMatchNames(cls.name, G.enemyClass.name, cls.color, G.enemyClass.color);
+    syncMatchNames('我方队伍', '对手队伍', CLASSES[0].color, CLASSES[1].color);
 
     switchScreen('battle');
-    resizeCanvas();   // 必须在面板可见后取尺寸，否则 clientWidth 为 0
+    resizeCanvas();
     if (dom.asyncTag) {
       if (P2P.active) {
         dom.asyncTag.hidden = false;
-        dom.asyncTag.textContent = '联机对战 · ' + enemyNick();
+        dom.asyncTag.textContent = '联机对战 · ' + (G.mode === '2v2' ? '2V2' : enemyNick());
       } else {
         dom.asyncTag.hidden = true;
         dom.asyncTag.textContent = '';
       }
     }
-    addLog('对战开始：' + nickName() + '（' + cls.name + '） 对阵 ' + enemyNick() + '（' + G.enemyClass.name + '）', 'hl');
+    addLog('对战开始：' + nickName() + ' 对阵 ' + enemyNick() + (G.mode === '2v2' ? '（2V2 · 每队两颗弹珠）' : ''), 'hl');
     if (P2P.active) addLog('联机对战 · ' + (P2P.role === 'host' ? '本端为房主，判定在本端进行' : '本端为客机，画面由房主同步'), 'hl');
     if (P2P.active && P2P.role === 'guest') {
-      // 联机客机：不自己发牌，等房主的 draft / aim 事件
       G.phase = 'wait-draft';
-      showBanner('等待房主发牌', '双方技能与出生位由房主同步', 0);
+      showBanner('等待房主发牌', '本回合果实与出生位由房主同步', 0);
       return;
     }
-    openDraft('战前准备 · 随机三选一', '选择一个技能，本局全程生效');
+    openDraft('本回合 · 果实三选一', '从你的果实库抽取，选中的果实只在这一回合生效');
   }
 
   /* ---------------------------------------------------------
@@ -4003,8 +4175,10 @@
     const ec = list.find(c => c.id === ecId && c.id !== pc.id) || list.find(c => c.id !== pc.id) || list[0];
     G.playerClass = pc; G.enemyClass = ec;
     G.playerAim = 0;   // 预览模式无玩家操作，默认朝敌方发射
-    G.player = makeFighter('player', pc);
-    G.enemy = makeFighter('enemy', ec);
+    G.player = makeFighter('player', pc, 0);
+    G.enemy = makeFighter('enemy', ec, 1);
+    G.actors = G.actors;
+    G.seats = 2; G.mode = '1v1';
     G.round = 0; G.roundTime = 0; G.scores = { player: 0, enemy: 0, draw: 0 };
     G.roundResults = []; G.playerSkills = []; G.enemySkills = [];
     G.logLines = []; G.particles = []; G.floaters = []; G.trauma = 0;
@@ -4058,11 +4232,11 @@
         const steps = Math.max(1, Math.ceil(dt / (1 / 120)));
         for (let i = 0; i < steps; i++) {
           step(dt / steps);
-          if (G.player.hp <= 0 || G.enemy.hp <= 0) break;
+          if (teamWiped()) break;
         }
         G.roundTime -= dt;
         dom.timerText.textContent = Math.max(0, G.roundTime).toFixed(1);
-        if (G.player.hp <= 0 || G.enemy.hp <= 0) {
+        if (teamWiped()) {
           endRound('ko');
         } else if (G.roundTime <= 0) {
           endRound('time');
@@ -4089,22 +4263,23 @@
      20. 事件绑定
      --------------------------------------------------------- */
   dom.startBtn.addEventListener('click', () => {
-    if (!G.selectedClass) return;
+    if (!INV.owned.length) { openHatchModal(); return; }
     if (P2P.active) {
       ensureAudio();
-      p2pRoomShow();             // 联机：回房间页选职业并准备
+      p2pRoomShow();
       return;
     }
-    startMatch(G.selectedClass);
+    startMatch();
   });
   if (dom.launchBtn) dom.launchBtn.addEventListener('click', () => launchRound());
   dom.rematchBtn.addEventListener('click', () => {
     if (P2P.active) { p2pBackToRoom(true); return; }   // 任一方点再战，双方一起回房间重新准备
-    ensureAudio(); startMatch(G.playerClass);
+    ensureAudio(); startMatch();
   });
   dom.changeBtn.addEventListener('click', () => {
     if (P2P.active) p2pTeardown('你退出了对局');   // 通知对方后断开
     switchScreen('start');
+    renderLibrary();
   });
 
   // 联机大厅
@@ -4167,11 +4342,11 @@
   dom.closeLogBtn.addEventListener('click', () => { dom.logModal.hidden = true; });
   dom.logModal.addEventListener('click', ev => { if (ev.target === dom.logModal) dom.logModal.hidden = true; });
 
-  // 商店弹层
-  if (dom.shopBtn) dom.shopBtn.addEventListener('click', openShop);
-  if (dom.closeShopBtn) dom.closeShopBtn.addEventListener('click', closeShop);
-  if (dom.shopModal) dom.shopModal.addEventListener('click', ev => { if (ev.target === dom.shopModal) closeShop(); });
-  if (dom.shopDrawBtn) dom.shopDrawBtn.addEventListener('click', drawMarble);
+  // 初始蛋孵化弹层 + 联机模式选择
+  if (dom.hatchConfirmBtn) dom.hatchConfirmBtn.addEventListener('click', closeHatch);
+  if (dom.hatchCloseBtn) dom.hatchCloseBtn.addEventListener('click', closeHatch);
+  if (dom.hatchModal) dom.hatchModal.addEventListener('click', ev => { if (ev.target === dom.hatchModal) closeHatch(); });
+  bindP2PMode();
 
   // 昵称弹层：首次进入强制输入，之后可从顶栏修改
   if (dom.nickBtn) dom.nickBtn.addEventListener('click', () => openNameModal(true));
@@ -4188,7 +4363,7 @@
     if (ev.key === 'Escape') {
       if (dom.nameModal && !dom.nameModal.hidden) { closeNameModal(); return; }
       dom.rulesModal.hidden = true; dom.logModal.hidden = true;
-      closeShop();
+      if (dom.hatchModal && !dom.hatchModal.hidden) { closeHatch(); return; }
       return;
     }
     // 昵称弹窗打开时屏蔽所有对局快捷键，避免在输入框里打字误选技能 / 误发射
@@ -4212,17 +4387,15 @@
     const rules = $('rulesList');
     if (rules) {
       const lines = [
-        '选择一个职业，对手职业随机。双方各有一颗弹珠。',
-        '<strong>战前准备</strong>：从随机出现的 ' + (CONFIG.DRAFT_OPTIONS + EFFECTS.extraDraft) + ' 个技能中选 1 个，对手也会随机获得 1 个。',
-        '<strong>回合对撞</strong>：每回合开战前，在地图里拖动你弹珠上的箭头自由设定发射方向，点「发射弹珠」后弹珠以该方向出击；全程依靠墙壁与彼此反弹推进（力量不衰减），每次碰撞还会获得一段加速反弹；撞击按相对速度造成伤害。每回合 ' + CONFIG.ROUND_SECONDS + ' 秒，血量先归零者立即输掉该回合。',
-        '<strong>回合判定</strong>：时间到时比较剩余血量百分比，高者赢下该回合；差距小于 ' + (CONFIG.DRAW_WINDOW * 100).toFixed(1) + '% 记为平局。',
-        '<strong>休整</strong>：每回合结束后血量重置，再次随机选技能。已获得的技能会累积生效。',
+        '所有玩家的弹珠数值完全相同，只有外观不同；外观在首页按题材选择，可在后台「外观管理」上传。',
+        '<strong>初次进入</strong>：填好昵称后获得 ' + CONFIG.HATCH_EGGS + ' 枚初始蛋，孵化出的果实永久进入你的果实库；重复果实算多枚，被抽到的几率更高。',
+        '<strong>战前准备</strong>：每回合从你的果实库随机抽出 ' + (CONFIG.DRAFT_OPTIONS + EFFECTS.extraDraft) + ' 枚，选 1 枚；这枚果实只在本回合生效，下回合重新抽。',
+        '<strong>回合对撞</strong>：每回合开战前拖动弹珠上的箭头设定发射方向，点「发射弹珠」出击；全程靠墙壁与彼此反弹推进（力量不衰减），碰撞还会加速反弹；撞击按相对速度造成伤害。每回合 ' + CONFIG.ROUND_SECONDS + ' 秒。',
+        '<strong>回合判定</strong>：一方队伍全员被击碎立即输掉该回合；时间到则比较队伍合计剩余生命百分比，高者获胜；差距小于 ' + (CONFIG.DRAW_WINDOW * 100).toFixed(1) + '% 记为平局。',
+        '<strong>联机</strong>：好友房间支持 1V1（2 人）与 2V2（4 人各控 1 颗弹珠），全员准备后开战；2V2 每队共享本回合选中的果实。',
         '<strong>胜负</strong>：' + CONFIG.TOTAL_ROUNDS + ' 回合后按赢下的回合数判定；数目相同则比较总剩余血量百分比。'
       ];
-      if (SHOP.enabled) {
-        lines.push('<strong>商店</strong>：每局结束后按胜负获得' + SHOP.currency + '，在首页「商店」里抽取弹珠；重复弹珠会返还部分' + SHOP.currency + '。');
-      }
-      rules.innerHTML = lines.map(t => '<li>' + t + '</li>').join('');
+      rules.innerHTML = lines.map(t => '<li>' + t + '</li>').join('');      rules.innerHTML = lines.map(t => '<li>' + t + '</li>').join('');
     }
   }
   window.addEventListener('storage', ev => {
@@ -4243,9 +4416,10 @@
   // 瞄准阶段：选完技能后，弹球停在出生点，玩家在地图上拖动箭头设定发射方向
   function startAimPhase() {
     if (!G.player || !G.enemy) return;
+    P2P.launchBySeat = {};
     resetForRound();                 // 复位血量 / 出生位 / 速度
-    G.player.vx = 0; G.player.vy = 0;
-    G.enemy.vx = 0; G.enemy.vy = 0;  // 瞄准阶段弹珠静止
+    // 瞄准阶段所有弹珠静止（2V2 含第 3 / 4 颗）
+    (G.actors).forEach(f => { if (f) { f.vx = 0; f.vy = 0; } });
     G.aimPos = { p: { x: G.player.x, y: G.player.y }, e: { x: G.enemy.x, y: G.enemy.y } };
     G.phase = 'aim';
     // 联机（房主）：把双方出生位发给客机，客机进入同样的瞄准阶段
@@ -4270,19 +4444,13 @@
     if (dom.banner) dom.banner.hidden = true;
 
     if (P2P.active) {
-      if (P2P.role === 'guest') {
-        // 客机：把瞄准角报给房主，等房主的 round_start 开打
-        p2pSend({ k: 'launch', r: G.round + 1, aim: G.playerAim });
-        G.phase = 'wait-launch';
-        showBanner('已发射', '等待对方完成瞄准…', 0);
-        return;
-      }
-      // 房主：上报自己的发射，双方都就位才开回合
+      // 每个座位各报自己的发射角；房主收齐 seats 个才开回合
+      P2P.launchBySeat[P2P.mySeat] = G.playerAim;
       P2P.myLaunched = true;
-      p2pSend({ k: 'launch', r: G.round + 1, aim: G.playerAim });
-      if (!P2P.guestLaunched) {
+      p2pSend({ k: 'launch', r: G.round + 1, seat: P2P.mySeat, aim: G.playerAim });
+      if (!allLaunched()) {
         G.phase = 'wait-launch';
-        showBanner('已发射', '等待对手完成瞄准…', 0);
+        showBanner('已发射', '等待其他玩家完成瞄准…', 0);
         return;
       }
     }
@@ -4290,6 +4458,12 @@
   }
 
   // 把指针坐标换算到竞技场世界坐标，并取相对玩家弹珠的角度
+  /* 当前玩家实际操控的弹珠：单机 / 房主是 seat0；2V2 客机是自己座位那颗 */
+  function myActor() {
+    if (P2P.active && P2P.mySeat > 0 && G.actors && G.actors[P2P.mySeat]) return G.actors[P2P.mySeat];
+    return G.player;
+  }
+
   function aimFromPointer(ev) {
     if (G.phase !== 'aim' || !G.player) return;
     const cv = dom.canvas;
@@ -4298,7 +4472,8 @@
     const py = (ev.clientY - rect.top) * (cv.height / rect.height);
     const wx = (px - viewOffsetX) / viewScale;
     const wy = (py - viewOffsetY) / viewScale;
-    G.playerAim = Math.atan2(wy - G.player.y, wx - G.player.x);
+    const f = myActor() || G.player;
+    G.playerAim = Math.atan2(wy - f.y, wx - f.x);
   }
 
   function setupArenaAim() {
@@ -4323,7 +4498,7 @@
   /* 瞄准箭头：外观由界面编辑器「瞄准箭头（画布）」图层决定。
      绘制实现放在 ui-layout.js（后台预览与游戏共用同一份），这里只负责取位置与角度。 */
   function drawAimArrow() {
-    const f = G.player;
+    const f = myActor() || G.player;
     if (!f) return;
     const UI2 = window.WowPinballUI;
     if (!UI2 || !UI2.drawAim) return;
@@ -4371,16 +4546,17 @@
     startPreviewMatch(mm[0].id, mm[1].id);
     requestAnimationFrame(loop);
   } else {
-    loadWallet();
-    renderClassGrid();
-    p2pRoomBuildClasses();   // 房间页职业网格预建好，后台界面编辑器也能选到「首个职业按钮」
+    loadInventory();
+    renderLibrary();
+    p2pRoomBuildClasses();   // 兼容旧调用：职业网格已移除
+    bindP2PMode();
     renderConfigStatus();
-    renderShop();
     resizeCanvas();
     setupArenaAim();
     switchScreen('start');
     requestAnimationFrame(loop);
-    // 第一次打开游戏必须手动输入昵称，写进之后的每一份分享码
+    // 新玩家：先填昵称（confirmName 里接着触发孵化）；老玩家没有果实也补一次孵化
     if (!PROFILE.name && !UI_EDITOR) openNameModal(false);
+    else if (!INV.owned.length && !UI_EDITOR) openHatchModal();
   }
 })();

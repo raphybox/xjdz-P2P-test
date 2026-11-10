@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>选技弹珠 · 三回合对撞</title>
+<title>果实弹珠 · 每回合选一枚果实</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -21,8 +21,8 @@
     <div class="brand">
       <div class="brand-mark"><span></span><span></span></div>
       <div class="brand-text">
-        <h1>选技弹珠</h1>
-        <p>九职业 · 三回合 · 随机技能构筑</p>
+        <h1>果实弹珠</h1>
+        <p>果实构筑 · 每回合选一枚果实</p>
       </div>
     </div>
     <div class="top-actions">
@@ -33,39 +33,43 @@
     </div>
   </header>
 
-  <!-- ============ 选职业 ============ -->
+  <!-- ============ 首页 · 果实库 + 外观题材 ============ -->
   <section id="startScreen" class="screen">
     <div class="section-head">
       <div>
-        <h2>选择你的职业</h2>
-        <p>每个职业的弹珠拥有不同的生命、力量、质量与速度。对手职业随机。</p>
+        <h2>我的果实库</h2>
+        <p>所有玩家的弹珠数值相同；选择不同的果实，对战时弹珠技能不同。</p>
       </div>
     </div>
 
-    <div id="classGrid" class="class-grid"></div>
+    <div id="fruitGrid" class="fruit-grid"></div>
+
+    <div class="skin-section">
+      <div class="skin-section-title">弹珠外观 · 选择题材</div>
+      <div id="skinThemes" class="skin-themes"></div>
+      <div id="skinGrid" class="skin-grid"></div>
+    </div>
 
     <div class="start-footer">
       <div class="selected-line">
-        <span class="muted">已选择</span>
-        <strong id="selectedClassName">—</strong>
-        <span id="selectedClassTrait" class="muted"></span>
+        <span class="muted">当前外观</span>
+        <strong id="selectedSkinName">—</strong>
+        <span id="selectedSkinTheme" class="muted"></span>
       </div>
       <div class="start-actions">
-        <span id="coinChip" class="coin-chip">金币 0</span>
         <button id="p2pBtn" class="ghost-btn" type="button">联机对战</button>
-        <button id="shopBtn" class="ghost-btn" type="button">商店</button>
-        <button id="startBtn" class="primary-btn" type="button" disabled>开始对战</button>
+        <button id="startBtn" class="primary-btn" type="button">开始对战</button>
       </div>
     </div>
   </section>
 
-  <!-- ============ 联机房间 ============ -->
+  <!-- ============ 联机房间（1V1 两座 / 2V2 四座） ============ -->
   <section id="roomScreen" class="screen" hidden>
     <div class="room-shell">
       <div class="room-head">
         <div>
           <h2>联机房间</h2>
-          <p>双方选好职业并都点「准备」后自动开战，状态实时共享。</p>
+          <p>全员点「准备」后自动开战，状态实时共享。</p>
         </div>
         <button id="roomLeaveBtn" class="ghost-btn" type="button">退出房间</button>
       </div>
@@ -82,27 +86,17 @@
 
       <div id="roomStatus" class="room-status">等待好友加入…</div>
 
-      <div class="room-players">
-        <div class="room-player-card" id="roomMyCard">
-          <div class="rp-title">我方 <span id="roomMyRole" class="rp-role">房主</span></div>
-          <div class="rp-nick" id="roomMyNick">—</div>
-          <div class="rp-class" id="roomMyClass">未选择职业</div>
-          <div class="rp-ready" id="roomMyReady">未准备</div>
-        </div>
-        <div class="room-vs">VS</div>
-        <div class="room-player-card" id="roomPeerCard">
-          <div class="rp-title">对手 <span id="roomPeerRole" class="rp-role">好友</span></div>
-          <div class="rp-nick" id="roomPeerNick">等待加入…</div>
-          <div class="rp-class" id="roomPeerClass">未选择职业</div>
-          <div class="rp-ready" id="roomPeerReady">未准备</div>
-        </div>
+      <div id="roomSeats" class="room-seats">
+        <div class="room-seat" data-seat="0"><span class="rs-role">房主 · 队伍 A</span><span class="rs-nick">—</span><span class="rs-team">队伍 A</span><span class="rs-fruit">—</span><span class="rs-ready">未准备</span></div>
+        <div class="room-seat" data-seat="1"><span class="rs-role">队伍 B 队长</span><span class="rs-nick">等待加入…</span><span class="rs-team">队伍 B</span><span class="rs-fruit">—</span><span class="rs-ready">未准备</span></div>
+        <div class="room-seat" data-seat="2"><span class="rs-role">队伍 A 队员</span><span class="rs-nick">等待加入…</span><span class="rs-team">队伍 A</span><span class="rs-fruit">—</span><span class="rs-ready">未准备</span></div>
+        <div class="room-seat" data-seat="3"><span class="rs-role">队伍 B 队员</span><span class="rs-nick">等待加入…</span><span class="rs-team">队伍 B</span><span class="rs-fruit">—</span><span class="rs-ready">未准备</span></div>
       </div>
 
-      <div class="room-class-head">选择本局职业</div>
-      <div id="roomClassGrid" class="room-class-grid"></div>
+      <div id="roomFruitHint" class="room-fruit-hint">每回合从你的果实库抽取一枚果实，本回合生效</div>
 
       <div class="room-footer">
-        <div id="roomSharedHint" class="room-shared">双方状态实时共享 · 两边都准备后才开始</div>
+        <div id="roomSharedHint" class="room-shared">全员状态实时共享 · 都准备后才开始</div>
         <button id="roomReadyBtn" class="primary-btn" type="button" disabled>准备</button>
       </div>
     </div>
@@ -112,7 +106,7 @@
   <section id="battleScreen" class="screen" hidden>
     <div class="scoreboard">
       <div class="fighter-panel player-panel">
-        <div class="fp-top"><div class="fp-ident"><span id="pClassName" class="fp-name">—</span><span id="pNick" class="fp-nick">—</span></div><span class="fp-side">我方</span></div>
+        <div class="fp-top"><div class="fp-ident"><span id="pClassName" class="fp-name">我方队伍</span><span id="pNick" class="fp-nick">—</span></div><span class="fp-side">我方</span></div>
         <div class="hp-track"><div id="pShieldBar" class="shield-bar"></div><div id="pHpBar" class="hp-bar"></div></div>
         <div class="fp-bottom"><span id="pHpText" class="hp-text">0 / 0</span><span id="pScore" class="score-text">回合胜 0</span></div>
         <div id="pBuffs" class="buff-bar" aria-label="我方状态"></div>
@@ -127,12 +121,19 @@
       </div>
 
       <div class="fighter-panel enemy-panel">
-        <div class="fp-top"><span class="fp-side">对手</span><div class="fp-ident"><span id="eClassName" class="fp-name">—</span><span id="eNick" class="fp-nick">—</span></div></div>
+        <div class="fp-top"><span class="fp-side">对手</span><div class="fp-ident"><span id="eClassName" class="fp-name">对手队伍</span><span id="eNick" class="fp-nick">—</span></div></div>
         <div class="hp-track"><div id="eShieldBar" class="shield-bar"></div><div id="eHpBar" class="hp-bar"></div></div>
         <div class="fp-bottom"><span id="eScore" class="score-text">回合胜 0</span><span id="eHpText" class="hp-text">0 / 0</span></div>
         <div id="eBuffs" class="buff-bar" aria-label="对手状态"></div>
         <div id="eSkills" class="mini-skills"></div>
       </div>
+    </div>
+
+    <div id="seatHud" class="seat-hud">
+      <div class="seat-hp" data-seat="0"><span class="sh-name">—</span><span class="sh-track"><i class="sh-bar"></i></span><span class="sh-text">0</span></div>
+      <div class="seat-hp" data-seat="1"><span class="sh-name">—</span><span class="sh-track"><i class="sh-bar"></i></span><span class="sh-text">0</span></div>
+      <div class="seat-hp" data-seat="2"><span class="sh-name">—</span><span class="sh-track"><i class="sh-bar"></i></span><span class="sh-text">0</span></div>
+      <div class="seat-hp" data-seat="3"><span class="sh-name">—</span><span class="sh-track"><i class="sh-bar"></i></span><span class="sh-text">0</span></div>
     </div>
 
     <div class="arena-wrap" id="arenaWrap">
@@ -156,9 +157,9 @@
       <div id="roundReview" class="round-review"></div>
       <div id="buildReview" class="build-review"></div>
       <div class="result-actions">
-        <button id="rematchBtn" class="primary-btn" type="button">再战一局（同职业）</button>
+        <button id="rematchBtn" class="primary-btn" type="button">再战一局</button>
         <button id="logResultBtn" class="ghost-btn" type="button">战斗记录</button>
-        <button id="changeBtn" class="ghost-btn" type="button">更换职业</button>
+        <button id="changeBtn" class="ghost-btn" type="button">返回果实库</button>
       </div>
     </div>
   </section>
@@ -172,7 +173,7 @@
       <h3 id="nameTitle">给自己起个名字</h3>
       <button id="closeNameBtn" class="icon-btn" type="button">关闭</button>
     </div>
-    <p class="name-tip">这个昵称会写进你的对局分享码，好友导入后能看到是谁的挑战；同职业对战时也会标在弹珠上，方便分清敌我。</p>
+    <p class="name-tip">昵称会显示在对战与联机房间里，方便好友认出你。</p>
     <label class="name-label" for="nameInput">昵称</label>
     <input id="nameInput" class="name-input" type="text" maxlength="12" autocomplete="off" placeholder="例如：联盟小分队" />
     <div id="nameMsg" class="ghost-msg" hidden></div>
@@ -183,12 +184,29 @@
   </div>
 </div>
 
+<!-- 初始果实孵化弹层：5 枚蛋 + Egg hatch 像素特效 -->
+<div id="hatchModal" class="modal" hidden>
+  <div class="modal-card hatch-modal-card">
+    <div class="modal-head">
+      <h3 id="hatchTitle">初始果实 · 孵化</h3>
+      <span id="hatchSub" class="modal-sub">5 枚蛋正在孵化…</span>
+    </div>
+    <p class="hatch-tip">每枚蛋都会随机开出一种果实，存入你的果实库</p>
+    <canvas id="hatchCanvas" class="hatch-canvas" width="760" height="230"></canvas>
+    <div id="hatchResult" class="hatch-result"></div>
+    <div class="hatch-actions">
+      <button id="hatchCloseBtn" class="ghost-btn" type="button" hidden>关闭</button>
+      <button id="hatchConfirmBtn" class="primary-btn" type="button" disabled>收下果实</button>
+    </div>
+  </div>
+</div>
+
 <!-- 规则弹层 -->
 <div id="rulesModal" class="modal" hidden>
   <div class="modal-card">
     <div class="modal-head"><h3>规则</h3><button id="closeRulesBtn" class="icon-btn" type="button">关闭</button></div>
     <ol class="rules-list" id="rulesList"></ol>
-    <p class="modal-foot">技能中的百分比为相对目标最大生命的比例伤害加成，暴击、减伤、护盾、吸血等按公式叠加。本规则随后台配置自动生成。</p>
+    <p class="modal-foot">每回合从你的果实库抽取一枚果实，只在这一回合生效。技能中的百分比为相对目标最大生命的比例伤害加成。本规则随后台配置自动生成。</p>
   </div>
 </div>
 
@@ -201,34 +219,11 @@
   </div>
 </div>
 
-<!-- 技能选择弹层 -->
+<!-- 每回合果实选择弹层 -->
 <div id="draftModal" class="modal" hidden>
   <div class="modal-card draft-modal-card">
-    <div class="modal-head"><h3 id="draftTitle">战前准备 · 随机三选一</h3><span id="draftSub" class="modal-sub">选择一个技能，本局全程生效</span></div>
+    <div class="modal-head"><h3 id="draftTitle">本回合 · 果实三选一</h3><span id="draftSub" class="modal-sub">从你的果实库抽取，选中的果实只在这一回合生效</span></div>
     <div id="draftCards" class="draft-cards"></div>
-  </div>
-</div>
-
-<!-- 商店弹层 -->
-<div id="shopModal" class="modal" hidden>
-  <div class="modal-card shop-modal-card">
-    <div class="modal-head">
-      <h3>商店 · 抽取弹珠</h3>
-      <div class="shop-head-right">
-        <span id="shopCoin" class="coin-chip">金币 0</span>
-        <button id="closeShopBtn" class="icon-btn" type="button">关闭</button>
-      </div>
-    </div>
-    <div class="shop-draw-row">
-      <div class="shop-draw-info">
-        <span id="shopCostLabel" class="shop-cost">单抽 80 金币</span>
-        <span id="shopHint" class="faint">每次随机获得一颗卡池中的弹珠，重复获得会返还金币</span>
-      </div>
-      <button id="shopDrawBtn" class="primary-btn" type="button">抽取一次</button>
-    </div>
-    <div id="shopResult" class="shop-result" hidden></div>
-    <div class="shop-section-title">卡池</div>
-    <div id="shopPool" class="shop-pool"></div>
   </div>
 </div>
 
@@ -244,6 +239,10 @@
     </div>
 
     <div id="p2pStageSel" class="p2p-stage">
+      <div id="p2pModeSel" class="p2p-modes">
+        <button id="p2pMode1v1" class="p2p-mode-btn active" type="button" data-mode="1v1">1V1 · 双人</button>
+        <button id="p2pMode2v2" class="p2p-mode-btn" type="button" data-mode="2v2">2V2 · 四人</button>
+      </div>
       <div class="p2p-tip">房主创建房间后得到 8 位邀请码；好友输入这串码即可加入，不需要回传任何东西。</div>
       <div class="p2p-choice">
         <button id="p2pCreateBtn" class="primary-btn" type="button">创建房间</button>

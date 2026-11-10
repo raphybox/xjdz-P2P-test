@@ -133,7 +133,6 @@
         n('maxCasts', '每回合最多施放', 0, 0, 30, 1, '0 = 不限次数'),
         sel('aim', '发射方向', 'atEnemy', [['atEnemy', '瞄准对手'], ['forward', '沿当前速度'], ['random', '随机方向'], ['mouse', '固定角度']]),
         n('angle', '固定角度(度)', 0, -180, 180, 1, 'aim=固定角度 时生效'),
-        sel('classId', '职业限制', '', [['', '全职业通用']], '留空表示任何职业都能抽到'),
         b('enabled', '启用', true)
       ]
     },
@@ -1520,10 +1519,8 @@
     inRangeShape: inRangeShape, targetsInRange: targetsInRange,
     moduleInRange: moduleInRange, moduleTargets: moduleTargets,
     normWall: normWall, wallHazardOf: wallHazardOf, wallDamageOf: wallDamageOf,
-    setClasses: function (list) {
-      var f = MODULES.source.fields.find(function (x) { return x.key === 'classId'; });
-      f.options = [['', '全职业通用']].concat((list || []).map(function (c) { return [c.id, c.name]; }));
-    }
+    // 职业系统已移除：保留空实现以兼容可能的残留调用，不再引用任何字段
+    setClasses: function () {}
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.SkillModules = api;

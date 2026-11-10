@@ -4,6 +4,8 @@
    - 手动信令：offer/answer 压缩成邀请码 / 应答码（deflate-raw + base64url）
    - 双 DataChannel：ctrl（可靠有序，走对局事件）/ game（不可靠，走 20Hz 快照）
    - TURN 凭证：优先同域 /api/turn（wrangler Worker 签发），回落到 xjdz.de5.net
+   - 2V2 星形拓扑：房主 seat0 与 seat1..N-1 各一条 PeerConnection，
+     每条都带 ctrl + game 双通道；客机只有一条到房主的 PeerConnection
    ============================================================= */
 (function () {
   'use strict';
@@ -169,21 +171,42 @@
 
   /* ---------- 会话 ---------- */
 
-  /* opts: { onReady(), onCtrl(obj), onGame(obj|string), onClose(), onState(text), onFail(text) } */
+  /* 模式归一化：不传 / 非法值一律按 1v1（seats=2），与旧版等价 */
+  function normalizeMode(v) {
+    return (v === '2v2' || v === 4 || v === '4') ? '2v2' : '1v1';
+  }
+  function seatsFromMode(v) {
+    return normalizeMode(v) === '2v2' ? 4 : 2;
+  }
+
+  /* opts: { onReady(), onCtrl(msg,seat), onGame(data,seat), onClose(), onState(text),
+            onFail(text), onRoom(ev), onSeats(members), mode, nick, roomMode } */
   function Session(opts) {
     this.opts = opts || {};
-    this.pc = null;
-    this.ctrl = null;
-    this.game = null;
+    /* peers: Map(远端 seat -> { pc, ctrl, game })；
+       房主持有 seat1..N-1，客机只持有房主 seat0 */
+    this.peers = new Map();
     this.ready = false;
     this.closed = false;
     this.stats = { host: 0, srflx: 0, relay: 0 };
     this._remoteSdp = null;
     this._watchdog = null;
-    this.roomCode = null;         // 8 位房间码（短码模式）
-    this.roomRole = null;         // 'host' | 'guest'
+    this._finishedSeats = new Set();   // 已应用应答的座位（房主用）
+
+    this.roomCode = null;              // 8 位房间码（短码模式）
+    this.roomRole = null;              // 'host' | 'guest'
     this.roomMode = !!(opts && opts.roomMode);
     this._roomClosed = false;
+
+    /* 新协议字段 */
+    this.mode = normalizeMode(opts && opts.mode);
+    this.seats = seatsFromMode(this.mode);
+    this.mySeat = 0;
+
+    /* 兼容旧字段：指向第一条 peer，旧代码若访问 .pc/.ctrl/.game 仍可用 */
+    this.pc = null;
+    this.ctrl = null;
+    this.game = null;
   }
 
   Session.prototype._state = function (text) {
@@ -194,18 +217,37 @@
     if (typeof this.opts.onFail === 'function') this.opts.onFail(text);
   };
 
+  /* 预期要建连的远端座位：房主为 seat1..seats-1，客机只有房主 seat0 */
+  Session.prototype._expectedSeats = function () {
+    if (this.roomRole === 'host') {
+      var arr = [];
+      for (var i = 1; i < this.seats; i++) arr.push(i);
+      return arr;
+    }
+    return [0];
+  };
+
+  /* 取第一条 peer 的 pc，供超时诊断 getStats 用 */
+  Session.prototype._firstPc = function () {
+    var first = this.peers.values().next().value;
+    return first ? first.pc : null;
+  };
+
   /* 没有候选可配时 Chrome 会一直停在 connecting、不触发 failed，
-     所以必须有超时兜底。
-     房主在「应用应答码后」上 20s 看门狗，时机正确；
-     客机在「生成应答码时」就只能上表——但此刻连接能否建立取决于房主何时点
-     「完成连接」，20s 判死会大量误报，所以客机用两段式：20s 只提醒，45s 才判死。 */
+     所以必须有超时兜底。房主在「应用应答码后」上 20s 看门狗；
+     客机两段式：20s 只提醒，45s 才判死，避免房主尚未完成连接就误报。 */
   Session.prototype._armWatchdog = function (isGuest) {
     var self = this;
     this._cancelWatchdog();
     var alive = function () {
-      if (self.closed || self.ready || !self.pc) return true;
-      var cs = self.pc.connectionState, is = self.pc.iceConnectionState;
-      return cs === 'connected' || is === 'connected' || is === 'completed';
+      if (self.closed || self.ready) return true;
+      var connected = false;
+      self.peers.forEach(function (peer) {
+        if (!peer.pc) return;
+        var cs = peer.pc.connectionState, is = peer.pc.iceConnectionState;
+        if (cs === 'connected' || is === 'connected' || is === 'completed') connected = true;
+      });
+      return connected;
     };
     var hard = function () {
       self._watchdog = null;
@@ -225,10 +267,9 @@
     }
   };
 
-  /* 判死前先取真实链路数据：连接检查（connectivity check）的收发计数
-     能区分「对方根本没应答」和「双方在互发但都通不过」两种完全不同的故障 */
+  /* 判死前先取真实链路数据：连接检查收发计数能区分「对方根本没应答」
+     和「双方在互发但都通不过」两种完全不同的故障 */
   Session.prototype._hardFail = async function () {
-    var self = this;
     var L = this.stats, R = countCand(this._remoteSdp);
     var candText = '本端 host ' + L.host + ' / srflx ' + L.srflx + ' / relay ' + L.relay +
       '；对端 host ' + R.host + ' / srflx ' + R.srflx + ' / relay ' + R.relay;
@@ -238,9 +279,10 @@
     } else {
       var d = null;
       try {
-        var rep = await this.pc.getStats();
+        var pc = this._firstPc();
+        var rep = pc ? await pc.getStats() : null;
         var sent = 0, recv = 0;
-        rep.forEach(function (r) {
+        if (rep) rep.forEach(function (r) {
           if (r.type === 'candidate-pair' && r.state && r.state !== 'succeeded') {
             sent += r.requestsSent || 0;
             recv += r.requestsReceived || 0;
@@ -266,78 +308,8 @@
     if (this._watchdog) { clearTimeout(this._watchdog); this._watchdog = null; }
   };
 
-  Session.prototype._bind = function (ch, kind) {
-    var self = this;
-    if (kind === 'ctrl') this.ctrl = ch; else this.game = ch;
-    ch.onopen = function () { self._checkReady(); };
-    ch.onclose = function () { self._teardown('通道关闭'); };
-    ch.onerror = function () { /* 交给 connectionState 处理 */ };
-    ch.onmessage = function (e) {
-      if (kind !== 'ctrl' && typeof e.data === 'string' && e.data.charAt(0) === '{') {
-        try { self.opts.onGame(JSON.parse(e.data)); return; } catch (err) {}
-      }
-      if (kind === 'ctrl') {
-        try { self.opts.onCtrl(JSON.parse(e.data)); } catch (err) {}
-      } else if (typeof self.opts.onGame === 'function') {
-        self.opts.onGame(e.data);
-      }
-    };
-  };
-
-  Session.prototype._checkReady = function () {
-    if (this.ctrl && this.game && this.ctrl.readyState === 'open' && this.game.readyState === 'open') {
-      if (this.ready) return;
-      this.ready = true;
-      this._cancelWatchdog();
-      this._roomClose();               // 建连完成即销毁服务端房间信令
-      this._state('已连接 · 双向通道就绪');
-      if (typeof this.opts.onReady === 'function') this.opts.onReady();
-    }
-  };
-
-  Session.prototype._teardown = function (why) {
-    if (this.closed) return;
-    this.closed = true;
-    this.ready = false;
-    this._cancelWatchdog();
-    this._roomClose();
-    if (typeof this.opts.onClose === 'function') this.opts.onClose(why);
-  };
-
-  /* 关闭服务端房间（只删信令，不影响已建立的 P2P 连接） */
-  Session.prototype._roomClose = function () {
-    if (!this.roomCode || this._roomClosed) return;
-    this._roomClosed = true;
-    try {
-      roomCall('close', { method: 'POST', body: { code: this.roomCode } }).catch(function () {});
-    } catch (e) {}
-  };
-
-  Session.prototype.sendCtrl = function (obj) {
-    if (this.ctrl && this.ctrl.readyState === 'open') {
-      try { this.ctrl.send(JSON.stringify(obj)); } catch (e) {}
-    }
-  };
-
-  Session.prototype.sendGame = function (str) {
-    if (this.game && this.game.readyState === 'open') {
-      try { this.game.send(str); } catch (e) {}
-    }
-  };
-
-  Session.prototype.close = function () {
-    this.sendCtrl({ k: 'bye' });
-    this._roomClose();
-    var self = this;
-    setTimeout(function () {
-      self.closed = true;
-      try { if (self.ctrl) self.ctrl.close(); } catch (e) {}
-      try { if (self.game) self.game.close(); } catch (e) {}
-      try { if (self.pc) self.pc.close(); } catch (e) {}
-    }, 120);
-  };
-
-  Session.prototype._newPeer = function () {
+  /* 建一条 RTCPeerConnection（每条 peer 各自独立收集 ICE 候选） */
+  Session.prototype._newPc = function () {
     var self = this;
     var p = new RTCPeerConnection(peerOptions());
     p.onicecandidate = function (e) {
@@ -358,27 +330,180 @@
     return p;
   };
 
-  /* ---------- 房主：生成邀请码 ---------- */
+  /* 把一条 DataChannel 绑定到某个 seat 的 peer，并挂好带来源 seat 的回调 */
+  Session.prototype._bind = function (ch, kind, seat) {
+    var self = this;
+    var peer = this.peers.get(seat);
+    if (!peer) {
+      peer = { pc: null, ctrl: null, game: null };
+      this.peers.set(seat, peer);
+    }
+    if (kind === 'ctrl') peer.ctrl = ch; else peer.game = ch;
+    // 兼容旧字段：始终指向最近绑定的通道（旧 1v1 代码可能直接访问）
+    if (kind === 'ctrl') this.ctrl = ch; else this.game = ch;
+    ch.onopen = function () { self._checkReady(); };
+    ch.onclose = function () { self._teardown('通道关闭'); };
+    ch.onerror = function () { /* 交给 connectionState 处理 */ };
+    ch.onmessage = function (e) {
+      if (kind === 'ctrl') {
+        var msg;
+        try { msg = JSON.parse(e.data); } catch (err) { return; }
+        if (typeof self.opts.onCtrl === 'function') self.opts.onCtrl(msg, seat);
+        return;
+      }
+      var data = e.data;
+      if (typeof data === 'string' && data.charCodeAt(0) === 123) {   // 123 = JSON 起始的左花括号
+        try { data = JSON.parse(data); } catch (err) {}
+      }
+      if (typeof self.opts.onGame === 'function') self.opts.onGame(data, seat);
+    };
+  };
+
+  /* 房主侧：为某个客机座位创建一条 PC 与 ctrl/game 双通道 */
+  Session.prototype._makeHostPeer = function (seat) {
+    var pc = this._newPc();
+    var peer = { pc: pc, ctrl: null, game: null };
+    this.peers.set(seat, peer);
+    this._bind(pc.createDataChannel('ctrl', { ordered: true }), 'ctrl', seat);
+    try {
+      this._bind(pc.createDataChannel('game', { ordered: false, maxRetransmits: 0 }), 'game', seat);
+    } catch (e) {
+      this._bind(pc.createDataChannel('game'), 'game', seat);   // 老浏览器兜底：可靠通道
+    }
+    this.pc = pc;                 // 兼容旧字段
+    this.ctrl = peer.ctrl;
+    this.game = peer.game;
+    return peer;
+  };
+
+  /* 所有预期 seat 的 ctrl+game 都 open 才算就绪（房主=全部客机，客机=到房主那条） */
+  Session.prototype._checkReady = function () {
+    var self = this;
+    var expected = this._expectedSeats();
+    var allOpen = expected.length > 0;
+    expected.forEach(function (seat) {
+      var peer = self.peers.get(seat);
+      if (!peer || !peer.ctrl || !peer.game ||
+          peer.ctrl.readyState !== 'open' || peer.game.readyState !== 'open') {
+        allOpen = false;
+      }
+    });
+    if (!allOpen || this.ready) return;
+    this.ready = true;
+    this._cancelWatchdog();
+    this._roomClose();               // 房主全部就绪后销毁房间信令（客机内部会跳过）
+    this._state('已连接 · 双向通道就绪');
+    if (typeof this.opts.onReady === 'function') this.opts.onReady();
+  };
+
+  Session.prototype._teardown = function (why) {
+    if (this.closed) return;
+    this.closed = true;
+    this.ready = false;
+    this._cancelWatchdog();
+    this._roomClose();
+    if (typeof this.opts.onClose === 'function') this.opts.onClose(why);
+  };
+
+  /* 关闭服务端房间（只删信令，不影响已建立的 P2P 连接）。
+     只有房主能销毁房间：2V2 里客机若抢先删会连累其它还没加入的座位。 */
+  Session.prototype._roomClose = function () {
+    if (this.roomRole !== 'host') return;
+    if (!this.roomCode || this._roomClosed) return;
+    this._roomClosed = true;
+    try {
+      roomCall('close', { method: 'POST', body: { code: this.roomCode } }).catch(function () {});
+    } catch (e) {}
+  };
+
+  /* 按 seat 发送：seat 省略 = 广播给全部 peer；客机只有一条到房主的连接，
+     因此无论目标 seat 都走那条。payload 已是序列化后的字符串。 */
+  Session.prototype._sendTo = function (kind, payload, seat) {
+    var targets = [];
+    if (seat == null) {
+      this.peers.forEach(function (peer) { targets.push(peer); });
+    } else {
+      var peer = this.peers.get(seat);
+      if (!peer && this.roomRole === 'guest' && this.peers.size === 1) {
+        peer = this.peers.values().next().value;
+      }
+      if (peer) targets.push(peer);
+    }
+    targets.forEach(function (p) {
+      var ch = kind === 'ctrl' ? p.ctrl : p.game;
+      if (ch && ch.readyState === 'open') {
+        try { ch.send(payload); } catch (e) {}
+      }
+    });
+  };
+
+  /* 保持 sendCtrl(obj) / sendGame(str) 单参可用：不传 seat 即广播 */
+  Session.prototype.sendCtrl = function (obj, seat) {
+    this._sendTo('ctrl', JSON.stringify(obj), seat);
+  };
+  Session.prototype.broadcastCtrl = function (obj) { this.sendCtrl(obj); };
+  Session.prototype.sendGame = function (str, seat) {
+    this._sendTo('game', str, seat);
+  };
+  Session.prototype.broadcastGame = function (str) { this.sendGame(str); };
+
+  Session.prototype.close = function () {
+    this.broadcastCtrl({ k: 'bye' });
+    this._roomClose();
+    var self = this;
+    setTimeout(function () {
+      self.closed = true;
+      self.peers.forEach(function (peer) {
+        try { if (peer.ctrl) peer.ctrl.close(); } catch (e) {}
+        try { if (peer.game) peer.game.close(); } catch (e) {}
+        try { if (peer.pc) peer.pc.close(); } catch (e) {}
+      });
+    }, 120);
+  };
+
+  /* 房主：把某个客机座位的应答码应用到对应 PC（核心，供静态 hostFinish 复用） */
+  Session.prototype._applyAnswer = async function (seat, answerCode) {
+    var peer = this.peers.get(seat);
+    if (!peer || !peer.pc) throw new Error('会话已失效，请点「重新生成」重新创建房间');
+    var pc = peer.pc;
+    // 信令状态校验：stable = 应答码已应用过（双击 / 旧码重复粘贴），再设会直接抛
+    var st = pc.signalingState;
+    if (st !== 'have-local-offer') {
+      if (this.ready) throw new Error('已经连接成功了，不需要再应用应答码');
+      if (st === 'stable') throw new Error('这份应答码之前已经应用过了。若仍未连上，请点「重新生成」换新邀请码，让好友重新走一遍流程');
+      throw new Error('当前连接状态不匹配（' + st + '），请点「重新生成」重试');
+    }
+    var ans = await unpack(answerCode);
+    if (ans.t !== 'answer') throw new Error('这不是应答码，请确认复制的是好友回传的那段');
+    this._remoteSdp = ans.sdp;
+    await pc.setRemoteDescription({ type: 'answer', sdp: ans.sdp });
+    this._finishedSeats.add(seat);
+    this._state('应答码已应用（座位 ' + seat + '），等待连接建立…');
+    this._armWatchdog(false);
+    return this;
+  };
+
+  /* 实例形式：hostFinish(seat, answer)，供 createHostRoom 逐个座位调用 */
+  Session.prototype.hostFinish = function (seat, answer) {
+    return this._applyAnswer(seat, answer);
+  };
+
+  /* ---------- 手动信令（1V1 单 PC，保留旧 API 语义） ---------- */
 
   Session.createHost = async function (opts) {
     var s = new Session(opts);
+    s.roomRole = 'host';
+    s.mode = '1v1'; s.seats = 2; s.mySeat = 0;
     s._state('正在获取中继凭证…');
     await fetchTurn();
     s._state('正在收集网络候选地址，请稍候…');
-    var pc = s._newPeer();
-    s.pc = pc;
-    s._bind(pc.createDataChannel('ctrl', { ordered: true }), 'ctrl');
+    var peer = s._makeHostPeer(1);
     try {
-      s._bind(pc.createDataChannel('game', { ordered: false, maxRetransmits: 0 }), 'game');
-    } catch (e) {
-      s._bind(pc.createDataChannel('game'), 'game');   // 老浏览器兜底：可靠通道
-    }
-    try {
-      var offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+      var offer = await peer.pc.createOffer();
+      await peer.pc.setLocalDescription(offer);
       // 配了 TURN 就放宽收集窗口：中继分配在慢网络下可能超过 3.5s
-      await waitIce(pc, effectiveTurn() ? 10000 : 3500);
-      var code = await pack({ t: 'offer', sdp: pc.localDescription.sdp, ty: pc.localDescription.type });
+      await waitIce(peer.pc, effectiveTurn() ? 10000 : 3500);
+      var code = await pack({ t: 'offer', sdp: peer.pc.localDescription.sdp, ty: peer.pc.localDescription.type });
       s._state(s.roomMode ? '正在创建房间…' : '邀请码已生成 · 中继候选 ' + s.stats.relay + ' 个');
       return { session: s, code: code };
     } catch (e) {
@@ -387,42 +512,32 @@
     }
   };
 
-  /* ---------- 房主：应用好友回传的应答码 ---------- */
-
+  /* 静态形式（兼容旧 net-test.html）：应用到第一个尚未完成的房主座位 */
   Session.hostFinish = async function (session, answerCode) {
-    var pc = session.pc;
-    if (!pc) throw new Error('会话已失效，请点「重新生成」重新创建房间');
-    // 信令状态校验：stable = 应答码已应用过（双击 / 旧码重复粘贴），再设会直接抛
-    // "Called in wrong state"，必须前置拦截给出人话提示
-    var st = pc.signalingState;
-    if (st !== 'have-local-offer') {
-      if (session.ready) throw new Error('已经连接成功了，不需要再应用应答码');
-      if (st === 'stable') throw new Error('这份应答码之前已经应用过了。若仍未连上，请点「重新生成」换新邀请码，让好友重新走一遍流程');
-      throw new Error('当前连接状态不匹配（' + st + '），请点「重新生成」重试');
+    var expected = session._expectedSeats();
+    var seat = -1;
+    for (var i = 0; i < expected.length; i++) {
+      if (!session._finishedSeats.has(expected[i])) { seat = expected[i]; break; }
     }
-    var ans = await unpack(answerCode);
-    if (ans.t !== 'answer') throw new Error('这不是应答码，请确认复制的是好友回传的那段');
-    session._remoteSdp = ans.sdp;
-    await pc.setRemoteDescription({ type: 'answer', sdp: ans.sdp });
-    var L = session.stats;
-    session._state('应答码已应用，等待连接建立…（本端候选 host ' + L.host + ' · srflx ' + L.srflx + ' · relay ' + L.relay + '）');
-    session._armWatchdog(false);
-    return session;
+    if (seat < 0) seat = expected[0];
+    return session._applyAnswer(seat, answerCode);
   };
-
-  /* ---------- 好友：解析邀请码，生成应答码 ---------- */
 
   Session.createGuest = async function (offerCode, opts) {
     var off = await unpack(offerCode);
     if (off.t !== 'offer') throw new Error('这不是邀请码，请确认复制的是房主发来的那段');
     var s = new Session(opts);
+    s.roomRole = 'guest';
+    s.mode = '1v1'; s.seats = 2; s.mySeat = 1;
     s._state('正在获取中继凭证…');
     await fetchTurn();
     s._state('正在生成应答码…');
-    var pc = s._newPeer();
+    var pc = s._newPc();
+    var peer = { pc: pc, ctrl: null, game: null };
+    s.peers.set(0, peer);            // 客机唯一 peer = 房主 seat0
     s.pc = pc;
     pc.ondatachannel = function (e) {
-      s._bind(e.channel, e.channel.label === 'ctrl' ? 'ctrl' : 'game');
+      s._bind(e.channel, e.channel.label === 'ctrl' ? 'ctrl' : 'game', 0);
     };
     await pc.setRemoteDescription({ type: 'offer', sdp: off.sdp });
     var answer = await pc.createAnswer();
@@ -463,70 +578,140 @@
     throw new Error('房间服务连接失败：' + ((lastErr && lastErr.message) || '网络异常'));
   }
 
-  /* 房主：创建房间 → 拿到 8 位码 → 后台自动轮询好友的应答并应用，无需手动复制 */
-  Session.createHostRoom = async function (opts) {
-    opts = opts || {};
-    var made = await Session.createHost(Object.assign({}, opts, { roomMode: true }));
+  /* 房主：按 seats-1 各生成一条 offer → create → 轮询 poll 收齐全部 answers →
+     逐个 hostFinish(seat, answer)。兼容两种调用：
+       createHostRoom(opts)              → 默认 1v1（旧 game.js 单参不回归）
+       createHostRoom(mode, opts)       → '1v1' | '2v2' */
+  Session.createHostRoom = async function (a, b) {
+    var mode, opts;
+    if (typeof a === 'string') { mode = a; opts = b || {}; }
+    else { opts = a || {}; mode = opts.mode || '1v1'; }
+    mode = normalizeMode(mode);
+    var seats = seatsFromMode(mode);
+
+    var s = new Session(opts);
+    s.mode = mode; s.seats = seats; s.mySeat = 0;
+    s.roomRole = 'host'; s.roomMode = true;
+    s._state('正在获取中继凭证…');
+    await fetchTurn();
+    s._state('正在收集网络候选地址，请稍候…');
+
+    var offers = [null];             // offers[0] 恒为 null（房主自己不需要）
+    for (var seat = 1; seat < seats; seat++) {
+      var peer = s._makeHostPeer(seat);
+      var offer = await peer.pc.createOffer();
+      await peer.pc.setLocalDescription(offer);
+      await waitIce(peer.pc, effectiveTurn() ? 10000 : 3500);
+      var code = await pack({ t: 'offer', sdp: peer.pc.localDescription.sdp, ty: peer.pc.localDescription.type });
+      offers.push(code);
+    }
+
     var res = await roomCall('create', {
       method: 'POST',
-      body: { offer: made.code, nick: opts.nick || '' },
+      body: { mode: mode, offers: offers, nick: opts.nick || '' },
     });
     if (!res || res.error || !res.code) throw new Error((res && res.error) || '创建房间失败');
-    var code = res.code;
-    made.session.roomCode = code;
-    made.session.roomRole = 'host';
+    var roomCode = res.code;
+    s.roomCode = roomCode;
+
+    /* 后台轮询：全部座位的应答收齐后逐个应用；同时把成员状态回调出去 */
     (async function () {
-      var notified = false;
+      var notified = {};
       try {
         for (var i = 0; i < 500; i++) {
-          if (made.session.closed || made.session.ready) return;
-          var st = await roomCall('poll', { query: '?code=' + encodeURIComponent(code) });
+          if (s.closed || s.ready) return;
+          var st = await roomCall('poll', { query: '?code=' + encodeURIComponent(roomCode) });
           // 轮询返回时可能刚好已建连、房间已被销毁，此时不能把 404 当故障报出去
-          if (made.session.closed || made.session.ready) return;
-          if (st.error) { made.session._fail('房间已失效：' + st.error); return; }
-          if (st.joined && !notified) {
-            notified = true;
-            if (typeof opts.onRoom === 'function') opts.onRoom({ k: 'joined', nick: st.guest });
+          if (s.closed || s.ready) return;
+          if (st.error) { s._fail('房间已失效：' + st.error); return; }
+          if (typeof opts.onSeats === 'function' && Array.isArray(st.members)) opts.onSeats(st.members);
+          // joined 事件：兼容旧 onRoom({k:'joined', nick})
+          if (Array.isArray(st.members)) {
+            for (var m = 0; m < st.members.length; m++) {
+              var mem = st.members[m];
+              if (mem && mem.seat >= 1 && mem.joined && !notified[mem.seat]) {
+                notified[mem.seat] = true;
+                if (typeof opts.onRoom === 'function') opts.onRoom({ k: 'joined', nick: mem.nick, seat: mem.seat });
+              }
+            }
           }
-          if (st.answer) {
-            await Session.hostFinish(made.session, st.answer);
-            return;
+          var answers = Array.isArray(st.answers) ? st.answers : null;
+          // 兼容尚未升级的旧房间服务（单 answer 字段）
+          if (!answers && st.answer) { answers = []; answers[1] = st.answer; }
+          var allDone = true;
+          for (var st2 = 1; st2 < seats; st2++) {
+            if (s._finishedSeats.has(st2)) continue;
+            var ans = answers ? answers[st2] : null;
+            if (ans) {
+              await s.hostFinish(st2, ans);
+            } else {
+              allDone = false;
+            }
           }
+          if (allDone) return;       // 全部应答已应用，交给 _checkReady
           await delay(1200);
         }
-        made.session._fail('等待好友加入超时（10 分钟），请重新创建房间');
+        s._fail('等待好友加入超时（10 分钟），请重新创建房间');
       } catch (e) {
-        if (!made.session.closed && !made.session.ready) made.session._fail('房间服务异常：' + e.message);
+        if (!s.closed && !s.ready) s._fail('房间服务异常：' + e.message);
       }
     })();
-    return { session: made.session, code: code };
+
+    return { session: s, code: roomCode };
   };
 
-  /* 客机：输入 8 位码 → 查房间 → 生成应答并自动回传服务端，全程无需复制任何码 */
+  /* 客机：输入 8 位码 → lookup 拿 seat+offer → 建到房主的 PC → answer。
+     全程无需复制任何码；额外轮询 poll 把成员状态通过 onSeats 回调出去。 */
   Session.joinRoom = async function (rawCode, opts) {
     opts = opts || {};
     var code = normalizeRoomCode(rawCode);
     if (!/^[A-HJ-NP-Z2-9]{8}$/.test(code)) throw new Error('请输入 8 位房间邀请码（字母和数字）');
     var look = await roomCall('lookup', { query: '?code=' + encodeURIComponent(code) });
     if (look.error) throw new Error(look.error);
+    var mode = normalizeMode(look.mode);
+    var seats = typeof look.seats === 'number' ? look.seats : seatsFromMode(mode);
+    var mySeat = (typeof look.seat === 'number' && look.seat >= 1) ? look.seat : 1;
     var made = await Session.createGuest(look.offer, Object.assign({}, opts, { roomMode: true }));
-    made.session.roomCode = code;
-    made.session.roomRole = 'guest';
+    var s = made.session;
+    s.roomCode = code;
+    s.roomRole = 'guest';
+    s.mode = mode; s.seats = seats; s.mySeat = mySeat;
     var ans = await roomCall('answer', {
       method: 'POST',
-      body: { code: code, answer: made.code, nick: opts.nick || '' },
+      body: { code: code, seat: mySeat, answer: made.code, nick: opts.nick || '' },
     });
     if (ans.error) {
-      made.session.close();
+      s.close();
       throw new Error(ans.error);
     }
+    // 客机轮询成员状态：房间被房主销毁或过期后静默停止，不当故障
+    (async function () {
+      try {
+        for (var i = 0; i < 500; i++) {
+          if (s.closed) return;
+          var st = await roomCall('poll', { query: '?code=' + encodeURIComponent(code) });
+          if (s.closed) return;
+          if (st.error) return;
+          if (typeof opts.onSeats === 'function' && Array.isArray(st.members)) opts.onSeats(st.members);
+          await delay(1200);
+        }
+      } catch (e) { /* 网络抖动静默 */ }
+    })();
     return made;
   };
 
-  window.WowPinballNet = {
+  var API = {
     Session: Session,
     pack: pack,
     unpack: unpack,
-    normalizeRoomCode: normalizeRoomCode
+    normalizeRoomCode: normalizeRoomCode,
+    // 顶层便捷引用：契约列出的导出名
+    createHostRoom: Session.createHostRoom,
+    joinRoom: Session.joinRoom,
+    createHost: Session.createHost,
+    createGuest: Session.createGuest
   };
+  window.WowPinballNet = API;
+  // 契约里提到的 window.NET 别名，指向同一对象
+  window.NET = API;
 })();

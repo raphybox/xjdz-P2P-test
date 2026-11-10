@@ -9,11 +9,12 @@
     if (raw) data = JSON.parse(raw);
   } catch (e) { data = null; }
 
+  /* v3 核心玩法：职业表 classes 不再是必需结构（旧存档会在 migrate 中移除）。
+     这里只校验真正参与运行的最小集合，其余字段由 migrate 补齐。 */
   function valid(d) {
     return d && d.config && d.meta && d.meta.schema === DEF.meta.schema &&
-      Array.isArray(d.classes) && Array.isArray(d.skills) &&
-      Array.isArray(d.maps) && Array.isArray(d.events) &&
-      d.classes.length > 0 && d.skills.length > 0;
+      Array.isArray(d.skills) && d.skills.length > 0 &&
+      Array.isArray(d.maps) && Array.isArray(d.events);
   }
 
   /* 纯静态托管（GitHub Pages）没有 /api/config、访问者也没有本地存档：
@@ -33,6 +34,53 @@
   function migrate(d) {
     if (!d || !d.config) return d;
     var c = d.config;
+    /* ---- v3 核心玩法迁移：职业系统 -> 统一弹珠 + 果实池 + 外观库 ----
+       幂等。旧存档里的职业贴图会被转成「魔兽主题」外观保留下来，不会丢素材。 */
+    delete c.classSkillWeight;
+    delete c.maxSkills;
+    if (c.hatchEggs == null) c.hatchEggs = DEF.config.hatchEggs || 5;
+    var OLD_CLASSES = Array.isArray(d.classes) ? d.classes : null;
+    if (!d.marble || typeof d.marble !== 'object') {
+      d.marble = JSON.parse(JSON.stringify(DEF.marble || {}));
+    }
+    if (!Array.isArray(d.themes) || !d.themes.length) {
+      d.themes = JSON.parse(JSON.stringify(DEF.themes || []));
+    }
+    if (!Array.isArray(d.skins) || !d.skins.length) {
+      var moved = (OLD_CLASSES || []).filter(function (x) { return x && x.enabled !== false; }).map(function (cl) {
+        var s = cl.skin || {};
+        return {
+          id: 'skin_' + cl.id, name: cl.name + ' · 弹珠', theme: 'wow',
+          src: typeof s.src === 'string' ? s.src : '', scale: s.scale == null ? 1.05 : s.scale,
+          offsetX: s.offsetX || 0, offsetY: s.offsetY || 0, rotation: s.rotation || 0,
+          opacity: s.opacity == null ? 1 : s.opacity, gloss: !!s.gloss, label: !!s.label,
+          w: s.w || 0, h: s.h || 0, color: cl.color || '#88aacc', enabled: true
+        };
+      });
+      d.skins = moved.length ? moved : JSON.parse(JSON.stringify(DEF.skins || []));
+    }
+    delete d.classes;
+    delete d.shop;
+    // skills 即果实池：去职业归属、补图标字段、清掉节点里的「职业限制」
+    (d.skills || []).forEach(function (sk) {
+      if (!sk) return;
+      delete sk.cls;
+      if (sk.icon == null) sk.icon = '';
+      var ns = sk.graph && Array.isArray(sk.graph.nodes) ? sk.graph.nodes : [];
+      ns.forEach(function (n) { if (n && n.type === 'source' && n.params) delete n.params.classId; });
+    });
+    // 出生点扩到 4 个：1V1 用前两个，2V2 用全部
+    (d.maps || []).forEach(function (m) {
+      if (!m || !Array.isArray(m.spawns)) return;
+      while (m.spawns.length < 4) {
+        var base = m.spawns[m.spawns.length % 2] || { x: 216, y: 200 };
+        var i = m.spawns.length;
+        m.spawns.push({
+          x: base.x,
+          y: Math.max(40, Math.min((m.height || 400) - 40, base.y + (i % 2 ? 110 : -110)))
+        });
+      }
+    });
     if (c.accel != null && c.launchSpeed == null) {
       delete c.accel;
       c.launchSpeed = DEF.config.launchSpeed;
@@ -44,22 +92,7 @@
     if (c.collisionBoost == null) c.collisionBoost = DEF.config.collisionBoost;
     if (c.restitution == null) c.restitution = 1.0;
     if (c.wallRestitution == null) c.wallRestitution = 1.0;
-    // 拥有的技能最大数量：旧存档缺该字段时回填默认（等于总回合数上限，等效不封顶）
-    if (c.maxSkills == null) c.maxSkills = DEF.config.maxSkills;
-
-    // 商店迁移：旧配置没有 shop 时补齐默认商店与卡池
-    var ds = DEF.shop || {};
-    var s = d.shop || (d.shop = {});
-    if (s.enabled == null) s.enabled = ds.enabled !== false;
-    if (!s.currency) s.currency = ds.currency;
-    if (s.initialCoins == null) s.initialCoins = ds.initialCoins;
-    if (s.drawCost == null) s.drawCost = ds.drawCost;
-    if (s.duplicateRefund == null) s.duplicateRefund = ds.duplicateRefund;
-    s.rewards = Object.assign({}, ds.rewards || {}, s.rewards || {});
-    if (!Array.isArray(s.starter)) s.starter = (ds.starter || []).slice();
-    if (!Array.isArray(s.pool)) s.pool = (ds.pool || []).map(function (p) { return Object.assign({}, p); });
-
-    // 技能充能迁移：旧存档没有 charge 时补默认值（秒），保证对局内充能条有统一基准
+    // 果实充能迁移：旧存档没有 charge 时补默认值（秒），保证对局内充能条有统一基准
     var dCharge = (DEF.skills && DEF.skills[0] && DEF.skills[0].charge) || 3;
     (d.skills || []).forEach(function (sk) {
       if (sk && !(typeof sk.charge === 'number' && sk.charge > 0)) sk.charge = dCharge;
@@ -145,6 +178,30 @@
     if (!d.ui.screens || typeof d.ui.screens !== 'object') d.ui.screens = {};
     // 文案迁移：旧存档没有 texts 时补齐默认文案（深拷贝，避免与内置默认互相引用）
     if (!Array.isArray(d.texts)) d.texts = (DEF.texts || []).map(function (t) { return Object.assign({}, t); });
+    /* 职业 / 商店文案随玩法移除，必须强制覆盖（用户曾改过的旧文案语义已失效）；
+       同时补上孵化弹层的四条新文案。按 id 定位，缺哪条补哪条，幂等。 */
+    (function () {
+      var DROP = { shopTitle: 1, shopCost: 1, shopHint: 1, shopSection: 1, shopBtn: 1 };
+      var REPLACE = {
+        brandSub: '果实构筑 · 每回合选一枚果实',
+        startTitle: '我的果实库',
+        startDesc: '所有玩家的弹珠数值相同；选择不同的果实，对战时弹珠技能不同。',
+        nameTip: '昵称会显示在对战与联机房间里，方便好友认出你。',
+        draftTitle: '本回合 · 果实三选一',
+        draftSub: '从你的果实库抽取，选中的果实只在这一回合生效'
+      };
+      var ADD = [
+        { id: 'hatchTitle', label: '孵化弹层标题', group: '弹层文案', selector: '#hatchTitle', mode: 'text', value: '初始果实 · 孵化' },
+        { id: 'hatchSub', label: '孵化弹层副标题', group: '弹层文案', selector: '#hatchSub', mode: 'text', value: '5 枚蛋正在孵化…' },
+        { id: 'hatchHint', label: '孵化说明', group: '弹层文案', selector: '.hatch-tip', mode: 'text', value: '每枚蛋都会随机开出一种果实，存入你的果实库' },
+        { id: 'hatchConfirm', label: '孵化「收下果实」按钮', group: '按钮文字', selector: '#hatchConfirmBtn', mode: 'text', value: '收下果实' }
+      ];
+      d.texts = d.texts.filter(function (t) { return t && !DROP[t.id]; });
+      d.texts.forEach(function (t) { if (REPLACE[t.id] != null) t.value = REPLACE[t.id]; });
+      ADD.forEach(function (t) {
+        if (!d.texts.some(function (x) { return x.id === t.id; })) d.texts.push(t);
+      });
+    })();
     // 状态图标迁移：旧存档没有 statuses 时补内置默认（深拷贝，避免与 DEF 互相引用）
     if (!Array.isArray(d.statuses)) {
       d.statuses = (DEF.statuses || []).map(function (s) { return Object.assign({}, s); });

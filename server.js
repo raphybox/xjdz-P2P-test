@@ -103,11 +103,42 @@ function localCode() {
 function normCode(v) { return String(v == null ? '' : v).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8); }
 function validCode(v) { return /^[A-HJ-NP-Z2-9]{8}$/.test(String(v || '')); }
 function cleanRoomNick(v) { return String(v == null ? '' : v).replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 12); }
+function localMode(v) { return (v === '2v2' || v === 4 || v === '4') ? '2v2' : '1v1'; }
+function localSeats(v) { return localMode(v) === '2v2' ? 4 : 2; }
 function readRoom(code) {
   const r = LOCAL_ROOMS.get(code);
   if (!r) return null;
   if (Date.now() - r.ts > ROOM_TTL) { LOCAL_ROOMS.delete(code); return null; }
   return r;
+}
+/* 与 functions/api/room.js 的 buildOffers 完全一致：offers[0] 恒 null，
+   兼容旧版单 offer 字段（降级为 1v1 的 offers[1]）。 */
+function localBuildOffers(b, seats) {
+  const offers = new Array(seats).fill(null);
+  if (Array.isArray(b.offers)) {
+    for (let i = 1; i < seats; i++) {
+      const v = b.offers[i];
+      if (typeof v === 'string' && v.length >= 8 && v.length <= 200000) offers[i] = v;
+    }
+  } else if (typeof b.offer === 'string') {
+    if (b.offer.length >= 8 && b.offer.length <= 200000) offers[1] = b.offer;
+  }
+  let has = false;
+  for (let i = 1; i < seats; i++) if (offers[i]) { has = true; break; }
+  return has ? offers : null;
+}
+/* 与 room.js 的 pickSeat 一致：优先显式 seat，缺省回落到空座位 */
+function localPickSeat(b, r, needJoined) {
+  if (b && Number.isInteger(Number(b.seat))) {
+    const seat = Number(b.seat);
+    if (seat >= 1 && seat < r.seats) return seat;
+    return -1;
+  }
+  for (let i = 1; i < r.seats; i++) {
+    if ((!needJoined || r.joined[i]) && !r.answers[i]) return i;
+  }
+  for (let i = 1; i < r.seats; i++) if (!r.answers[i]) return i;
+  return -1;
 }
 async function handleLocalRoom(req, res, url) {
   const u = new URL(url, 'http://' + HOST + ':' + PORT);
@@ -119,22 +150,40 @@ async function handleLocalRoom(req, res, url) {
     catch (e) { return json(res, 400, { ok: false, error: 'JSON 解析失败' }); }
   }
   if (act === 'create' && req.method === 'POST') {
-    if (!body || typeof body.offer !== 'string' || body.offer.length < 8 || body.offer.length > 200000) {
-      return json(res, 400, { error: 'invalid_offer' });
-    }
+    if (!body) return json(res, 400, { error: 'invalid_offer' });
+    const mode = localMode(body.mode);
+    const seats = localSeats(mode);
+    const offers = localBuildOffers(body, seats);
+    if (!offers) return json(res, 400, { error: 'invalid_offer' });
     let code = null;
     for (let i = 0; i < 12; i++) { const c = localCode(); if (!readRoom(c)) { code = c; break; } }
     if (!code) return json(res, 503, { error: 'code_exhausted' });
-    LOCAL_ROOMS.set(code, { offer: body.offer, answer: null, host: cleanRoomNick(body.nick), guest: '', ts: Date.now() });
-    return json(res, 200, { code });
+    const nicks = new Array(seats).fill('');
+    const joined = new Array(seats).fill(false);
+    nicks[0] = cleanRoomNick(body.nick);
+    joined[0] = true;                 // 房主占 seat0
+    LOCAL_ROOMS.set(code, {
+      code, mode, seats,
+      offers,
+      answers: new Array(seats).fill(null),
+      nicks,
+      ready: new Array(seats).fill(false),
+      joined,
+      ts: Date.now(),
+    });
+    return json(res, 200, { code, mode, seats });
   }
   if (act === 'lookup' && req.method === 'GET') {
     const code = normCode(u.searchParams.get('code'));
     if (!validCode(code)) return json(res, 400, { error: '房间码格式不对，请输入 8 位字母和数字' });
     const r = readRoom(code);
     if (!r) return json(res, 404, { error: '房间不存在或已过期，请让房主重新创建' });
-    if (r.answer) return json(res, 409, { error: '这个房间已经有玩家加入了' });
-    return json(res, 200, { code, offer: r.offer, host: r.host });
+    let seat = -1;
+    for (let i = 1; i < r.seats; i++) if (!r.joined[i]) { seat = i; break; }
+    if (seat < 0) return json(res, 409, { error: '这个房间已经满员了' });
+    r.joined[seat] = true;           // 预占，避免并发 lookup 撞座
+    LOCAL_ROOMS.set(code, r);
+    return json(res, 200, { code, mode: r.mode, seats: r.seats, seat, offer: r.offers[seat], host: r.nicks[0] || '' });
   }
   if (act === 'answer' && req.method === 'POST') {
     const code = normCode(body && body.code);
@@ -144,8 +193,12 @@ async function handleLocalRoom(req, res, url) {
     }
     const r = readRoom(code);
     if (!r) return json(res, 404, { error: '房间不存在或已过期' });
-    if (r.answer) return json(res, 409, { error: '已经有其他玩家加入了这个房间' });
-    r.answer = body.answer; r.guest = cleanRoomNick(body.nick); r.joinedAt = Date.now();
+    const seat = localPickSeat(body, r, true);
+    if (seat < 1 || seat >= r.seats) return json(res, 409, { error: '座位号无效或房间已满' });
+    if (r.answers[seat]) return json(res, 409, { error: '这个座位已经提交过应答了' });
+    r.answers[seat] = body.answer;
+    r.nicks[seat] = cleanRoomNick(body.nick);
+    r.joined[seat] = true;
     LOCAL_ROOMS.set(code, r);
     return json(res, 200, { ok: true });
   }
@@ -154,7 +207,34 @@ async function handleLocalRoom(req, res, url) {
     if (!validCode(code)) return json(res, 400, { error: '房间码格式不对' });
     const r = readRoom(code);
     if (!r) return json(res, 404, { error: '房间已过期' });
-    return json(res, 200, { code, joined: !!r.answer, answer: r.answer || null, guest: r.guest || '', host: r.host || '' });
+    const members = [];
+    for (let i = 0; i < r.seats; i++) {
+      members.push({ seat: i, nick: r.nicks[i] || '', ready: !!r.ready[i], joined: !!r.joined[i] });
+    }
+    // 兼容旧版房主轮询字段（joined/answer/guest/host），新客户端读 members/answers
+    let firstAnswer = null, guest = '';
+    for (let i = 1; i < r.seats; i++) if (r.answers[i]) { firstAnswer = r.answers[i]; break; }
+    for (let i = 1; i < r.seats; i++) if (r.nicks[i]) { guest = r.nicks[i]; break; }
+    return json(res, 200, {
+      code, mode: r.mode, seats: r.seats,
+      members, answers: r.answers.slice(),
+      joined: !!firstAnswer, answer: firstAnswer, guest, host: r.nicks[0] || '',
+    });
+  }
+  if (act === 'ready' && req.method === 'POST') {
+    const code = normCode(body && body.code);
+    if (!validCode(code)) return json(res, 400, { error: '房间码格式不对' });
+    const r = readRoom(code);
+    if (!r) return json(res, 404, { error: '房间不存在或已过期' });
+    if (body && Number.isInteger(Number(body.seat))) {
+      const seat = Number(body.seat);
+      if (seat >= 0 && seat < r.seats) {
+        r.ready[seat] = !!body.ready;
+        if (body.nick != null) r.nicks[seat] = cleanRoomNick(body.nick);
+        LOCAL_ROOMS.set(code, r);
+      }
+    }
+    return json(res, 200, { ok: true });
   }
   if (act === 'close' && req.method === 'POST') {
     LOCAL_ROOMS.delete(normCode(body && body.code));
@@ -289,8 +369,9 @@ const server = http.createServer(async (req, res) => {
         const raw = await readBody(req);
         let data;
         try { data = JSON.parse(raw); } catch (e) { return json(res, 400, { ok: false, error: 'JSON 解析失败' }); }
-        if (!data || !data.config || !Array.isArray(data.classes) || !Array.isArray(data.skills)) {
-          return json(res, 400, { ok: false, error: '配置结构不完整' });
+        // v3 核心玩法：classes（职业表）已移除，果实池 skills 与外观库 skins 为必需结构
+        if (!data || !data.config || !Array.isArray(data.skills) || !Array.isArray(data.skins)) {
+          return json(res, 400, { ok: false, error: '配置结构不完整（需要 skills 果实池与 skins 外观库）' });
         }
         if (fs.existsSync(CONFIG_FILE)) {
           fs.writeFileSync(path.join(HISTORY_DIR, stamp() + '.json'), fs.readFileSync(CONFIG_FILE));

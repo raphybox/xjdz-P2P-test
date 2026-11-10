@@ -20,7 +20,10 @@ const OUT = path.join(ROOT, 'data', 'published-config.js');
 function exportStatic() {
   if (!fs.existsSync(SRC)) throw new Error('找不到 ' + SRC + '，请先在后台发布一次配置');
   const data = JSON.parse(fs.readFileSync(SRC, 'utf8'));
-  if (!data || !data.config || !Array.isArray(data.classes)) throw new Error('配置结构不完整');
+  // v3 核心玩法：classes（职业表）已移除，果实池 skills 与外观库 skins 成为必需结构
+  if (!data || !data.config || !Array.isArray(data.skills) || !Array.isArray(data.skins)) {
+    throw new Error('配置结构不完整（需要 skills 果实池与 skins 外观库）');
+  }
 
   // U+2028 / U+2029 在旧 JS 引擎里会截断字符串字面量，统一转义
   const json = JSON.stringify(data, null, 2)

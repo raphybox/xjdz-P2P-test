@@ -41,7 +41,9 @@ function initCase(skills) {
   const ctx = {
     SKILL_RT: { SE: {}, SM: {} }, MOTION: null,
     G: {
-      player: { hp: 100 }, enemy: { hp: 100 },
+      player: { hp: 100, side: 'player', seat: 0 },
+      enemy: { hp: 100, side: 'enemy', seat: 1 },
+      actors: [], actorFruits: {},
       playerSkills: skills, enemySkills: skills,
       clock: 0, movers: []
     },
@@ -75,10 +77,16 @@ function runLoop(charge, triggers, opts) {
   }));
   const caster = { C: { charge: 3 }, charge: charge, sources: sources };
   const ctx = {
-    G: { clock: opts.clock || 0, player: { _skillCasters: [caster] }, enemy: { _skillCasters: [] } },
+    G: {
+      clock: opts.clock || 0,
+      player: { _skillCasters: [caster], side: 'player', seat: 0 },
+      enemy: { _skillCasters: [], side: 'enemy', seat: 1 },
+      actors: null
+    },
     fireSkillCast: (f, C, src) => casts.push(src.trigger),
     console
   };
+  ctx.G.actors = [ctx.G.player, ctx.G.enemy];
   vm.createContext(ctx);
   vm.runInContext(loopSrc, ctx);
   if (opts.repeat) vm.runInContext(loopSrc, ctx);
