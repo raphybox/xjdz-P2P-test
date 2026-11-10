@@ -113,8 +113,8 @@ if (rush) {
 }
 
 console.log('5) 两端消费口径（源码断言）');
-ok('对局：无载体分支按 onHitNeedsContact 拦掉隔空结算',
-  /needsContact\s*=\s*\(SM && SM\.onHitNeedsContact\)\s*\?\s*SM\.onHitNeedsContact\(grp0\)/.test(gameSrc));
+ok('对局：无载体分支按 skillNeedsContact 拦掉隔空结算',
+  /needsContact\s*=\s*\(SM && SM\.skillNeedsContact\)/.test(gameSrc));
 ok('对局：只在真实碰撞时带 kind 结算', /if \(hitKind\) directHit\(PUB, f, opp, hitKind\)/.test(gameSrc));
 ok('对局：物理碰撞传 body 来源',
   /triggerSkillEvent\(p, 'onHit', null, \{ kind: 'body' \}\)/.test(gameSrc));
@@ -126,11 +126,75 @@ ok('对局：反噬走自身结算', /computeSkillDamage\(grp, att, att, sc, rct
 
 ok('试放：命中结算接收 kind 并按节点过滤', /function hitPreview\(gHit, x, y, parent, dmgScale, view, ctx, kind\)/.test(adminSrc)
   && /SM\.damageNodesFor\(g, kind, side\)/.test(adminSrc));
-ok('试放：无载体 + 需要接触时不结算', /SM\.onHitNeedsContact\(gHit\)\) return/.test(adminSrc));
+ok('试放：无载体 + 需要接触时不结算', /SM\.skillNeedsContact \? SM\.skillNeedsContact\(PUB\)/.test(adminSrc));
 ok('试放：两颗弹珠有本体碰撞', /function stepBalls\(\)/.test(adminSrc) && /function bodyHitPreview\(\)/.test(adminSrc));
 ok('试放：本体碰撞按 body 来源结算', /SM\.damageNodesFor\(gHit, 'body', 'enemy'\)/.test(adminSrc));
 ok('试放：反噬跳红字', /反噬 -/.test(adminSrc));
 ok('属性面板展示命中判定 / 伤害目标', /命中判定：/.test(adminSrc) && /伤害目标：/.test(adminSrc));
+
+console.log('6) 目标·锁定模块');
+const selDef = SM.MODULES.select;
+ok('模块已注册', !!selDef);
+ok('字段齐全（含通用绑定字段）', ['side', 'pick', 'count'].every(k => selDef.fields.some(f => f.key === k)), JSON.stringify(selDef.fields.map(f => f.key)));
+eq('默认选择自身', SM.defaults('select').side, 'self');
+eq('默认挑选最近', SM.defaults('select').pick, 'nearest');
+const selSkill = (cfg, nodes) => {
+  const ns = [
+    SM.node('source', 40, 90, { trigger: 'onCharge' }),
+    SM.node('select', 220, 90, cfg || {}),
+    SM.node('damage', 420, 90, { triggerEvent: 'onCast', base: 12 })
+  ].concat(nodes || []);
+  return compileGraph(ns, [
+    { from: ns[0].id, to: ns[1].id },
+    { from: ns[1].id, to: ns[2].id }
+  ]);
+};
+const cSel = selSkill({ side: 'enemyOne', pick: 'nearest' });
+ok('编译结果带 select 配置', !!cSel.select && cSel.select.side === 'enemyOne');
+ok('present.select = true', cSel.present.select === true);
+const hero = { x: 0, y: 0, hp: 100, side: 'player' };
+const e1 = { x: 100, y: 0, hp: 80, side: 'enemy' };
+const e2 = { x: 300, y: 0, hp: 50, side: 'enemy' };
+const e3 = { x: 200, y: 0, hp: 90, side: 'enemy', dead: true };
+const ally = { x: 50, y: 0, hp: 70, side: 'player' };
+const pool = [hero, e1, e2, e3, ally];
+eq('单个敌人（最近）', SM.selectTargets(cSel, hero, pool).map(e => e.x), [100]);
+eq('单个敌人（最远）', SM.selectTargets(selSkill({ side: 'enemyOne', pick: 'farthest' }), hero, pool).map(e => e.x), [300]);
+const cMany = selSkill({ side: 'enemyMany', pick: 'nearest', count: 2 });
+eq('多个敌人取最近 2 个（跳过死亡）', SM.selectTargets(cMany, hero, pool).map(e => e.x), [100, 300]);
+const cLow = selSkill({ side: 'enemyMany', pick: 'lowestHp', count: 2 });
+eq('多个敌人按血量升序', SM.selectTargets(cLow, hero, pool).map(e => e.x), [300, 100]);
+eq('自身目标', SM.selectTargets(selSkill({ side: 'self' }), hero, pool).map(e => e.x), [0]);
+eq('队友目标', SM.selectTargets(selSkill({ side: 'allyOne' }), hero, pool).map(e => e.x), [50]);
+eq('数量上限 4', SM.selectTargets(selSkill({ side: 'enemyMany', count: 9 }), hero, pool).length, 2);
+
+console.log('7) 触发事件与命中来源的对应');
+const castDmg = chain([
+  { type: 'source', params: { trigger: 'onCharge' } },
+  { type: 'damage', params: { triggerEvent: 'onCast', base: 10 } }
+]);
+eq('施放时伤害标记 cast', castDmg.events.onCast.damageList[0]._hitKind, 'cast');
+ok('cast 节点只被施放结算取用', SM.damageNodesFor(castDmg.events.onCast, 'cast', 'enemy').length === 1 &&
+  SM.damageNodesFor(castDmg.events.onCast, 'body', 'enemy').length === 0);
+const wallDmg = chain([
+  { type: 'source', params: { trigger: 'onCharge' } },
+  { type: 'damage', params: { triggerEvent: 'onWall', base: 15 } }
+]);
+eq('撞墙时伤害标记 wall', wallDmg.events.onWall.damageList[0]._hitKind, 'wall');
+ok('wall 节点只被撞墙结算取用', SM.damageNodesFor(wallDmg.events.onWall, 'wall', 'enemy').length === 1);
+
+console.log('8) 击退与击飞撞墙（两端源码断言）');
+ok('对局：伤害结果带击退', /return \{ amount: Math\.max\(0, amount\), crit: crit, knockback: knockback \}/.test(gameSrc));
+ok('对局：击退沿施法者方向给冲量并放宽速度上限', /function applyKnockback\(target, att, kb\)/.test(gameSrc) && /_motionCapUntil/.test(gameSrc));
+ok('对局：命中结算调用击退 + 撞墙标记', /applyKnockback\(t, att, Math\.max\(d\.knockback, \(SM && SM\.skillKnockback\)/.test(gameSrc));
+ok('对局：物理撞墙/障碍后结算击飞伤害', /if \(wb \|\| obHit\) resolveSlamDamage\(f, wallContact\)/.test(gameSrc));
+ok('对局：撞墙伤害只认 wall 来源', /damageNodesFor\(grp, 'wall', 'enemy'\)/.test(gameSrc));
+ok('对局：施放时伤害入口存在且按 cast 过滤', /function applyEventCastDamage/.test(gameSrc) && /damageNodesFor\(grp, 'cast', 'enemy'\)/.test(gameSrc));
+ok('对局：施放时目标走锁定模块', /function castTargetsOf/.test(gameSrc) && /SM\.selectTargets\(C, att, ents\)/.test(gameSrc));
+ok('试放：施放伤害 / 击退 / 撞墙三件套', /function groupDamagePreview/.test(adminSrc) &&
+  /function knockPreview/.test(adminSrc) && /function resolveSlamPreview/.test(adminSrc));
+ok('试放：弹珠撞沙盘墙体也结算击飞伤害', /resolveSlamPreview\(b\)/.test(adminSrc) && /circleHitsWall\(b, wl\)/.test(adminSrc));
+ok('属性面板：施放/撞墙显示对应结算时机', /结算时机：<strong>施放瞬间/.test(adminSrc) && /受击者被本技能击退撞墙/.test(adminSrc));
 
 console.log('\n' + (fail ? 'FAILED ' + fail + ' 项' : 'ALL PASS ' + pass + ' 项'));
 process.exit(fail ? 1 : 0);

@@ -399,8 +399,8 @@ window.WOWPINBALL_PUBLISHED = {
           {
             "id": "motion_4xyggcz",
             "type": "motion",
-            "x": 367,
-            "y": 49,
+            "x": 602,
+            "y": 44,
             "params": {
               "triggerEvent": "onCast",
               "mode": "dash",
@@ -417,10 +417,10 @@ window.WOWPINBALL_PUBLISHED = {
           {
             "id": "damage_oaphrg6",
             "type": "damage",
-            "x": 666,
-            "y": 88,
+            "x": 851,
+            "y": 60,
             "params": {
-              "triggerEvent": "onHit",
+              "triggerEvent": "onWall",
               "base": 20,
               "pctMaxHp": 0,
               "critChance": 0,
@@ -438,16 +438,32 @@ window.WOWPINBALL_PUBLISHED = {
               "wallDuration": 3,
               "wallRadius": 60
             }
+          },
+          {
+            "id": "select_jy95u0h",
+            "type": "select",
+            "x": 321,
+            "y": 51,
+            "params": {
+              "bindTo": "auto",
+              "side": "enemyOne",
+              "pick": "nearest",
+              "count": 1
+            }
           }
         ],
         "edges": [
           {
-            "from": "source_rryjid0",
-            "to": "motion_4xyggcz"
-          },
-          {
             "from": "motion_4xyggcz",
             "to": "damage_oaphrg6"
+          },
+          {
+            "from": "source_rryjid0",
+            "to": "select_jy95u0h"
+          },
+          {
+            "from": "select_jy95u0h",
+            "to": "motion_4xyggcz"
           }
         ]
       },
@@ -482,8 +498,8 @@ window.WOWPINBALL_PUBLISHED = {
           {
             "id": "mark_5dwjkf7",
             "type": "mark",
-            "x": 347,
-            "y": 81,
+            "x": 623,
+            "y": 3,
             "params": {
               "triggerEvent": "onHit",
               "stacks": 1,
@@ -500,8 +516,8 @@ window.WOWPINBALL_PUBLISHED = {
           {
             "id": "fx_2uccuwg",
             "type": "fx",
-            "x": 640,
-            "y": 47,
+            "x": 620,
+            "y": 145,
             "params": {
               "triggerEvent": "onHit",
               "name": "",
@@ -535,15 +551,31 @@ window.WOWPINBALL_PUBLISHED = {
                 "seed": 7
               }
             }
+          },
+          {
+            "id": "select_h73ctzz",
+            "type": "select",
+            "x": 333,
+            "y": 61,
+            "params": {
+              "bindTo": "auto",
+              "side": "self",
+              "pick": "nearest",
+              "count": 1
+            }
           }
         ],
         "edges": [
           {
             "from": "source_in41dp6",
+            "to": "select_h73ctzz"
+          },
+          {
+            "from": "select_h73ctzz",
             "to": "mark_5dwjkf7"
           },
           {
-            "from": "mark_5dwjkf7",
+            "from": "select_h73ctzz",
             "to": "fx_2uccuwg"
           }
         ]
@@ -1626,8 +1658,8 @@ window.WOWPINBALL_PUBLISHED = {
       }
     ]
   },
-  "version": "WJ-MEXG-Y3J5-AAAAAL-BQ9N-NDUB-Z2K4-CP6R-PCVA",
-  "versionSeq": 10,
+  "version": "WJ-5EXG-Y3J5-AAAAAM-BQ9N-NDUB-Z6K4-CP6R-PCVA",
+  "versionSeq": 11,
   "statuses": [
     {
       "kind": "buff",

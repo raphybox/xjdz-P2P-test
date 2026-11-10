@@ -1592,6 +1592,108 @@
     updateHud();
   }
 
+  /* ---------- 击退与击飞撞墙 ----------
+     伤害模块里的「击退力度」在这里真正落地：沿「施法者 → 受击者」方向给一个冲量。
+     同时给受击者打上「刚被技能击飞」的标记，短时间内撞墙就结算该技能的「撞墙时」组，
+     这就是「被技能命中后撞到墙造成伤害」的实现（旧版 onWall 只认施法者自己撞墙）。 */
+  function applyKnockback(target, att, kb) {
+    if (!(kb > 0) || !target || !att || target.dead || target.hp <= 0) return;
+    const ang = Math.atan2(target.y - att.y, target.x - att.x) || 0;
+    const imp = kb * 2.4;   // 数值口径：400 上限约等于一次强力弹开
+    target.vx += Math.cos(ang) * imp;
+    target.vy += Math.sin(ang) * imp;
+    /* 冲量当帧会被速度上限吃掉：与运动器一样临时放宽 cap，否则「调了数值没感觉」 */
+    const sp = Math.hypot(target.vx, target.vy);
+    target._motionCapUntil = Math.max(target._motionCapUntil || 0, G.clock + 0.4);
+    target._motionCap = Math.max(target._motionCap || 0, sp);
+  }
+  function tagSlam(target, att, C) {
+    if (!target || !att || !C || target === att) return;
+    target._slamUntil = G.clock + 1.6;
+    target._slamC = C;
+    target._slamOwner = att;
+  }
+  /* 被击飞的单位撞墙：结算该技能「触发事件 = 撞墙时」的伤害。
+     伤害节点按 wall 来源过滤——只有撞墙组的伤害会在这里生效，其它组不会误触发。 */
+  function resolveSlamDamage(f, contact) {
+    if (!f || !f._slamUntil) return;
+    if (G.clock > f._slamUntil) { f._slamUntil = 0; f._slamC = null; f._slamOwner = null; return; }
+    const C = f._slamC, owner = f._slamOwner;
+    f._slamUntil = 0; f._slamC = null; f._slamOwner = null;
+    if (!C || !owner) return;
+    const SM = SKILL_RT && SKILL_RT.SM;
+    const PUB = (SM && SM.publicView) ? SM.publicView(C) : C;
+    const grp = PUB.events && PUB.events.onWall;
+    if (!grp || !SM || !SM.damageNodesFor) return;
+    const hasEnemy = SM.damageNodesFor(grp, 'wall', 'enemy').length > 0;
+    const hasSelf = SM.damageNodesFor(grp, 'wall', 'self').length > 0;
+    if (!hasEnemy && !hasSelf) return;
+    const ctx = { caster: owner, opponent: f, point: { x: f.x, y: f.y }, targets: [f], kind: 'wall' };
+    if (hasEnemy) {
+      const d = computeSkillDamage(grp, owner, f, 1, ctx, 'enemy');
+      if (d.amount > 0) {
+        applyDamage(f, d.amount, owner, d.crit, false, skillLabel(C, '撞墙'));
+        spawnSkillBurst(PUB, f.x, f.y, contact ? Math.atan2(contact.ny, contact.nx) : 0, 'wall', owner, contact, ctx);
+      }
+    }
+    if (hasSelf) {
+      const sd = computeSkillDamage(grp, owner, owner, 1, ctx, 'self');
+      if (sd.amount > 0) applyDamage(owner, sd.amount, owner, sd.crit, false, skillLabel(C, '撞墙反噬'));
+    }
+  }
+
+  /* 施放时伤害：触发事件 = 施放时 的伤害节点在技能释放瞬间结算。
+     目标由「目标 · 锁定」模块决定（自身 / 单个敌人 / 多个敌人 / 队友），
+     没有接锁定模块时按旧行为打对手。 */
+  function castTargetsOf(C, att, opp) {
+    const SM = SKILL_RT && SKILL_RT.SM;
+    const ents = [G.player, G.enemy].concat(G.enemies || []);
+    if (SM && SM.selectTargets && C && C.present && C.present.select) {
+      const ts = SM.selectTargets(C, att, ents);
+      if (ts.length) return ts;
+    }
+    return opp ? [opp] : [];
+  }
+  /* 通用「按组结算伤害」：命中 / 施放 / 撞墙共用一套，保证击退与撞墙标记不漏。
+     targets 里包含施法者时按自伤口径结算，其余按敌伤口径。 */
+  function applyGroupDamage(grp, C, att, targets, kind, ctx, labelSuffix) {
+    if (!grp || !att) return 0;
+    let total = 0;
+    (targets || []).forEach(t => {
+      if (!t || t === att) return;
+      const d = computeSkillDamage(grp, att, t, 1, ctx, 'enemy');
+      if (d.amount > 0) {
+        applyDamage(t, d.amount, att, d.crit, false, skillLabel(C, labelSuffix));
+        applyKnockback(t, att, Math.max(d.knockback, (SM && SM.skillKnockback) ? SM.skillKnockback(C) : 0));
+        tagSlam(t, att, C);
+        total += d.amount;
+      }
+    });
+    // 反噬 / 自伤：无论目标列表里有没有自己，带 self 节点就结算一次
+    const selfD = computeSkillDamage(grp, att, att, 1, ctx, 'self');
+    if (selfD.amount > 0) {
+      applyDamage(att, selfD.amount, att, selfD.crit, false, skillLabel(C, labelSuffix || '反噬'));
+      total += selfD.amount;
+    }
+    return total;
+  }
+  function applyEventCastDamage(C, att, opp) {
+    const grp = C && C.events && C.events.onCast;
+    if (!grp) return;
+    const SM = SKILL_RT && SKILL_RT.SM;
+    if (!SM || !SM.damageNodesFor) return;
+    const hasEnemy = SM.damageNodesFor(grp, 'cast', 'enemy').length > 0;
+    const hasSelf = SM.damageNodesFor(grp, 'cast', 'self').length > 0;
+    if (!hasEnemy && !hasSelf) return;   // 施放时组没有伤害节点：纯表现 / 增益技能，不结算
+    const targets = hasEnemy ? castTargetsOf(C, att, opp) : [];
+    const ctx = {
+      caster: att, opponent: opp || null,
+      entities: [G.player, G.enemy].concat(G.enemies || []),
+      angle: 0, point: { x: att.x, y: att.y }, targets: targets, kind: 'cast'
+    };
+    applyGroupDamage(grp, C, att, targets, 'cast', ctx, '施放');
+  }
+
   function resolveHit(p, e, nx, ny, vn) {
     // 各自朝法线正/反方向的冲击速度，决定本次撞击的攻守占比
     const pv = Math.max(0, p.vx * nx + p.vy * ny);
@@ -1811,7 +1913,10 @@
       const hasBodyNode = !!SM.damageNodesFor &&
         (SM.damageNodesFor(onHitGrp, 'body', 'enemy').length > 0 ||
          SM.damageNodesFor(onHitGrp, 'body', 'self').length > 0);
-      if (!hasBodyNode) return;
+      // 只配了「撞墙时」伤害 + 自身位移：命中这一下不打伤害，但要负责击退并标记撞墙
+      const wallOnly = !hasBodyNode && SM.skillNeedsContact && SM.skillNeedsContact(PUB) &&
+        (SM.skillKnockback ? SM.skillKnockback(PUB) > 0 : false);
+      if (!hasBodyNode && !wallOnly) return;
       const castGrp = (PUB.events && PUB.events.onCast) || PUB;
       const moveDur = (castGrp.motion || []).reduce((a, m) => Math.max(a, Number(m.duration) || 0), 0);
       const win = Math.max(1.0, moveDur + 0.4);
@@ -1825,6 +1930,8 @@
     else if (src.aim === 'mouse' || src.aim === 'fixed') baseAngle = (src.angle || 0) * Math.PI / 180;
     // 施法时事件（onCast）：公共的特效 / 粒子 / 自身状态 / 位移 / 护盾 / 光环
     applyEventEffects(PUB, f, opp, 'onCast', f.x, f.y, 0);
+    /* 施放时伤害：伤害模块的触发事件选「施放时」时，释放瞬间就结算（目标由「目标·锁定」决定） */
+    applyEventCastDamage(PUB, f, opp);
     // 弹珠本体撞墙：把「撞墙时(onWall)」分组的特效 / 墙面残留伤害直接结算在接触面上
     // （source.trigger=弹珠撞墙时 时才有 contact；投射物撞墙走 skillShotWall）
     if (src.trigger === 'onWall' && contact) {
@@ -1856,8 +1963,8 @@
        · 其余情况保持旧行为：整组直接结算在对手身上（等价必中单体指向）。 */
     if (!projectiles.length) {
       G._pendingProjMovers = [];
-      const grp0 = (PUB.events && PUB.events.onHit) || PUB;
-      const needsContact = (SM && SM.onHitNeedsContact) ? SM.onHitNeedsContact(grp0) : false;
+      const needsContact = (SM && SM.skillNeedsContact)
+        ? SM.skillNeedsContact(PUB) : ((SM && SM.onHitNeedsContact) ? SM.onHitNeedsContact((PUB.events && PUB.events.onHit) || PUB) : false);
       const hitKind = (meta && meta.kind) ? meta.kind : null;
       if (hitKind) directHit(PUB, f, opp, hitKind);          // 真实碰撞 / 投射物触发的命中
       else if (!needsContact) directHit(PUB, f, opp, 'direct');
@@ -2005,11 +2112,12 @@
     const dmg = grp.damage || {};
     const nodes = (SM && SM.damageNodesFor) ? SM.damageNodesFor(grp, kind, side)
       : ((grp.damageList && grp.damageList.length) ? grp.damageList : [dmg]);
-    let pct = 0, base = 0;
+    let pct = 0, base = 0, knockback = 0;
     // 逐节点求和：只有「作用范围 + 命中来源 + 伤害对象」都匹配的伤害节点才计入本次结算
     nodes.filter(inRange).forEach(dd => {
       base += Number(dd.base) || 0;
       pct += Number(dd.pctMaxHp) || 0;
+      knockback = Math.max(knockback, Number(dd.knockback) || 0);
     });
     // 元素是敌方伤害，自伤结算不叠加
     const els = side === 'enemy' ? (grp.elements || []).filter(inRange) : [];
@@ -2032,7 +2140,7 @@
     if (pctScale != null) amount *= pctScale;
     const ls = (dmg.lifesteal || 0) + els.reduce((a, e) => a + (e.lifesteal || 0), 0);
     if (ls > 0) att.hp = Math.min(att.maxHp, att.hp + amount * ls);
-    return { amount: Math.max(0, amount), crit: crit };
+    return { amount: Math.max(0, amount), crit: crit, knockback: knockback };
   }
 
   function applyOneStatus(ent, st, power, dur, att, srcName) {
@@ -2579,6 +2687,10 @@
     hitList.forEach(t => {
       const d = computeSkillDamage(grp, att, t, sc, rctx, 'enemy');
       applyDamage(t, d.amount, att, d.crit, false, skillLabel(C));
+      /* 击退：伤害模块的「击退力度」沿施法者→受击者方向给冲量，并打上「刚被击飞」标记。
+         取整技能最大值——伤害节点配在「撞墙时」时，命中这一下也要先把人推开。 */
+      applyKnockback(t, att, Math.max(d.knockback, (SM && SM.skillKnockback) ? SM.skillKnockback(C) : 0));
+      tagSlam(t, att, C);
       // 「印记」设定为命中即消耗时，本次结算后清空（不触发结束引爆）
       if (t._markConsume) clearMark(t, false);
     });
@@ -2606,8 +2718,10 @@
         const R = ok.reduce((a, m) => Math.max(a, Number(m.aoeRadius) || 0), 0);
         const pct = ok.reduce((a, m) => Math.max(a, Number(m.aoePct) || 0), 0);
         if (R <= 0 || Math.hypot(t.x - x, t.y - y) > R + t.r) return;
-        const d2 = computeSkillDamage(grp, att, t, pct * sc, rctx);
+        const d2 = computeSkillDamage(grp, att, t, pct * sc, rctx, 'enemy');
         applyDamage(t, d2.amount, att, d2.crit, false, skillLabel(C, '溅射'));
+        applyKnockback(t, att, d2.knockback * 0.6);   // 溅射只带六成击退
+        tagSlam(t, att, C);
         applyStatusFromGroup(grp, att, t, rctx, 'enemyOnly', C && C.name);
         spawnSkillBurst(C, t.x, t.y, 0, evToAttach(ev), att, null, rctx);
       });
@@ -2621,11 +2735,21 @@
     if (!C || !att || !opp || opp === att) return;
     if (opp.hp != null && opp.hp <= 0) return;
     const grp = (C.events && C.events.onHit) || C;
-    const has = (SKILL_RT && SKILL_RT.SM && SKILL_RT.SM.hitHasContent)
-      ? SKILL_RT.SM.hitHasContent(grp) : true;
-    if (!has) return;   // 「命中时」组为空：纯施放型技能，不凭空产生一次命中
-    const rot = Math.atan2(opp.y - att.y, opp.x - att.x);
-    resolveAt(C, att, opp.x, opp.y, rot, 'onHit', [opp], undefined, undefined, kind || 'direct');
+    const SM = SKILL_RT && SKILL_RT.SM;
+    const has = (SM && SM.hitHasContent) ? SM.hitHasContent(grp) : true;
+    const kb = (SM && SM.skillKnockback) ? SM.skillKnockback(C) : 0;
+    if (!has && !(kb > 0)) return;   // 既没有命中内容、也没有击退：纯施放型技能，不凭空产生一次命中
+    /* 接了「目标 · 锁定」时以它选出的单位为准：选自身 = 只走自伤 / 增益，不会再打对手；
+       选多个敌人 = 逐个结算。没接模块时保持旧行为（必中单体打对手）。 */
+    let targets = [opp];
+    if (SM && SM.selectTargets && C.present && C.present.select) {
+      const ts = SM.selectTargets(C, att, [G.player, G.enemy].concat(G.enemies || []));
+      targets = ts.filter(t => t && t !== att);
+      if (!targets.length) return;
+    }
+    const t0 = targets[0];
+    const rot = Math.atan2(t0.y - att.y, t0.x - att.x);
+    resolveAt(C, att, t0.x, t0.y, rot, 'onHit', targets, undefined, undefined, kind || 'direct');
   }
 
   /* 旧入口保留为兼容包装：全部委托给编译层范围判定，杜绝两套口径漂移。
@@ -3076,6 +3200,9 @@
       }
       // onWall 事件放在物理处理之后：旧运动器已收尾，该事件分组可以再挂新的运动器
       if (wb) triggerSkillEvent(f, 'onWall', wallContact);
+      /* 被技能击飞后撞墙：结算该技能「撞墙时」组的伤害（击飞撞墙），
+         与上面「弹珠自己撞墙触发技能」是两回事，互不影响 */
+      if (wb || obHit) resolveSlamDamage(f, wallContact);
 
       // 持续回复
       if (f.mods.regen > 0 && f.hp > 0) f.hp = Math.min(f.maxHp, f.hp + f.maxHp * f.mods.regen * dt);

@@ -137,6 +137,24 @@
         b('enabled', '启用', true)
       ]
     },
+    /* 目标 · 锁定：决定「这个技能作用在谁身上」。
+       接在触发来源之后、其它模块之前；不接时保持旧行为（命中时打对手、施放时以对手为目标）。
+       多敌人 / 队友按「挑选规则」排序后取前 N 个（N=1~4）。 */
+    select: {
+      label: '目标 · 锁定', short: '锁定', color: '#c9a6ff',
+      desc: '决定技能作用于谁：自身 / 单个敌人 / 多个敌人 / 队友。接在「触发 · 来源」后面，下游的伤害、状态、印记、位移、撞墙伤害都以这里选出的单位为目标；不接时按旧行为以对手为目标',
+      fields: [
+        sel('side', '选择对象', 'self', [
+          ['self', '自身'], ['enemyOne', '单个敌人'], ['enemyMany', '多个敌人'],
+          ['allyOne', '单个队友'], ['allyMany', '多个队友']
+        ], '自身=只作用于施法者自己；敌人=对方阵营（当前 1v1 即对手，多敌人时按挑选规则取）；队友=同阵营其它单位'),
+        sel('pick', '挑选规则', 'nearest', [
+          ['nearest', '距离最近'], ['farthest', '距离最远'], ['random', '随机'],
+          ['lowestHp', '血量最低'], ['highestHp', '血量最高']
+        ], '单个对象按此规则挑选；多个对象按此规则排序后取前 N 个'),
+        n('count', '数量', 1, 1, 4, 1, '仅「多个敌人 / 多个队友」生效：最多同时作用于几个单位')
+      ]
+    },
     element: {
       label: '元素 · 属性', short: '元素', color: '#5ac8fa', desc: '可挂多个：火 + 冰 = 霜火，同时拥有两种伤害与状态',
       multi: true,
@@ -161,7 +179,7 @@
         sel('affect', '伤害目标', 'enemy', [['enemy', '敌方'], ['self', '自身（反噬 / 自伤）'], ['both', '敌方 + 自身']],
           '敌方=命中谁就伤害谁；自身=结算时反过来扣自己的血（反噬 / 献祭类技能）；双方=两边都吃这份伤害。自身的伤害不吃护盾以外的命中附加（印记 / 暴击按自身面板算）'),
         sel('triggerEvent', '触发事件', 'onHit', TRIGGERS,
-          '何时结算这份伤害：施放时=技能一放就结算（自身位移 / 护盾类常用）；命中时=要真的打中才结算；撞墙时=本体撞墙的接触面；消失时=投射物寿命结束'),
+          '何时结算这份伤害：施放时=技能一放就结算（目标由「目标 · 锁定」决定，没接锁定模块则默认对手）；命中时=要真的打中才结算；撞墙时=受击者被本技能击退后撞到墙面时结算（不是施法者自己撞墙）；消失时=投射物寿命结束'),
         sel('hitKind', '命中判定', 'auto', [
           ['auto', '自动（按技能形态）'], ['body', '弹珠碰撞'], ['projectile', '投射物命中'],
           ['area', '范围命中'], ['direct', '直接命中（必中）']
@@ -172,7 +190,7 @@
         n('critMult', '暴击倍率加成', 0, 0, 4, 0.1),
         n('lifesteal', '吸血比例', 0, 0, 1, 0.02),
         n('armorPen', '护甲穿透', 0, 0, 1, 0.02),
-        n('knockback', '击退力度', 0, 0, 400, 5),
+        n('knockback', '击退力度', 0, 0, 400, 5, '0 = 不击退；受击者沿「施法者→受击者」方向被推开，撞到墙 / 边界时结算「触发事件 = 撞墙时」的伤害'),
         b('ignoreShield', '无视护盾', false),
         b('ignoreDodge', '无视闪避', false),
         b('canCrit', '允许暴击', true),
@@ -515,7 +533,7 @@
 
   // 下拉分组（仅影响后台「添加模块」的归类展示）
   var GROUPS = {
-    source: '触发', projectile: '投递', targeted: '投递', motion: '投递', range: '投递',
+    source: '触发', select: '触发', projectile: '投递', targeted: '投递', motion: '投递', range: '投递',
     element: '效果', damage: '效果', impact: '效果', status: '效果', mark: '效果', shield: '效果', split: '效果', echo: '效果', aura: '效果',
     fx: '表现', particles: '表现', zone: '表现',
     stats: '属性'
@@ -689,7 +707,8 @@
 
   /* ---- 命中判定 / 伤害对象的共享口径（对局 game.js 与试放 admin.js 共用同一套判断）---- */
   var HIT_KIND_LABEL = {
-    body: '弹珠碰撞', projectile: '投射物命中', area: '范围命中', direct: '直接命中', auto: '自动'
+    body: '弹珠碰撞', projectile: '投射物命中', area: '范围命中', direct: '直接命中',
+    cast: '施放结算', wall: '击飞撞墙', auto: '自动'
   };
   /** 节点实际生效的命中来源：编译期已把 auto 落成具体值，这里兼容未编译的原始参数 */
   function damageKindOf(node) {
@@ -723,6 +742,83 @@
       var okAffect = affect === 'self' ? (af === 'self' || af === 'both') : (af !== 'self');
       return okAffect && damageAcceptsKind(d, kind);
     });
+  }
+
+  /** 整个技能里最大的击退力度（跨事件组）。
+      击退是「命中」这个动作的物理效果：伤害节点即使配在「撞墙时」，
+      技能打中目标时也要先把人推开，否则永远撞不到墙、撞墙伤害成了死配置。 */
+  function skillKnockback(C) {
+    var kb = 0;
+    EVENT_KEYS.forEach(function (ev) {
+      var g = C && C.events && C.events[ev];
+      var list = (g && g.damageList) ? g.damageList : [];
+      list.forEach(function (d) { kb = Math.max(kb, Number(d.knockback) || 0); });
+    });
+    // 未编译的原始技能：退化成扫节点参数
+    if (!C || !C.events) {
+      ((C && C.graph && C.graph.nodes) || []).forEach(function (n) {
+        if (n && n.type === 'damage') kb = Math.max(kb, Number((n.params || {}).knockback) || 0);
+      });
+    }
+    return kb;
+  }
+  /** 这个技能是否必须「真实接触」才能把命中组送到目标。
+      除了命中组里的弹珠碰撞 / 投射物伤害，还有一种特殊情况：
+      只配了「撞墙时」伤害 + 自身位移（冲锋类）——也得先撞上人再谈击飞撞墙。 */
+  function skillNeedsContact(C) {
+    var g = C && C.events && C.events.onHit;
+    if (onHitNeedsContact(g)) return true;
+    var wall = C && C.events && C.events.onWall;
+    var hasWall = !!(wall && (wall.damageList || []).some(function (d) {
+      return (Number(d.base) || 0) + (Number(d.pctMaxHp) || 0) > 0;
+    }));
+    var selfMotion = false;
+    var nodes = (C && C.graph && C.graph.nodes) || [];
+    nodes.forEach(function (n) {
+      if (n && n.type === 'motion' && ((n.params && n.params.scope) || 'self') === 'self') selfMotion = true;
+    });
+    return !!(hasWall && selfMotion);
+  }
+
+  /* ---- 目标 · 锁定：把「作用在谁身上」解析成实体列表 ----
+     C 可以是编译结果或任意视图（view 都带 select）；entities 缺省由调用方传入。
+     返回的数组一定存在（没有合法目标时为空数组），调用方据此决定是否结算。 */
+  function selectTargets(C, caster, entities) {
+    var cfg = (C && C.select) || {};
+    var mode = cfg.side || 'self';
+    var all = (entities || []).filter(function (e) {
+      return e && !e.dead && !(e.hp != null && e.hp <= 0);
+    });
+    // 自身：施法者本人（即使实体表里没有也补上）
+    if (mode === 'self') return caster ? [caster] : [];
+    var enemySide = caster && caster.side === 'player' ? 'enemy' : 'player';
+    var isEnemy = mode === 'enemyOne' || mode === 'enemyMany';
+    var pool = all.filter(function (e) {
+      if (e === caster) return false;
+      if (isEnemy) return e.side === enemySide || (caster && e.side !== caster.side);
+      return caster ? e.side === caster.side : true;
+    });
+    if (!pool.length) return [];
+    var ang = function (e) { return caster ? Math.hypot(e.x - caster.x, e.y - caster.y) : 0; };
+    var pick = cfg.pick || 'nearest';
+    if (pick === 'random') {
+      pool = pool.slice();
+      for (var i = pool.length - 1; i > 0; i--) {
+        var j = Math.floor(Math.random() * (i + 1));
+        var t = pool[i]; pool[i] = pool[j]; pool[j] = t;
+      }
+    } else if (pick === 'farthest') {
+      pool.sort(function (a, b) { return ang(b) - ang(a); });
+    } else if (pick === 'lowestHp') {
+      pool.sort(function (a, b) { return (a.hp || 0) - (b.hp || 0); });
+    } else if (pick === 'highestHp') {
+      pool.sort(function (a, b) { return (b.hp || 0) - (a.hp || 0); });
+    } else {
+      pool.sort(function (a, b) { return ang(a) - ang(b); });
+    }
+    var many = mode === 'enemyMany' || mode === 'allyMany';
+    var n = many ? Math.max(1, Math.min(4, Math.round(Number(cfg.count) || 1))) : 1;
+    return pool.slice(0, n);
   }
 
   /** 「命中时」组里是否有实际内容 —— 用于判定「没有投递模块」的技能要不要走「直接命中」。
@@ -1110,7 +1206,7 @@
     motion: 'onCast', shield: 'onCast', aura: 'onCast'
   };
   // 这些类型只存在于事件组里，不参与单例合并
-  var EVENT_ONLY = { status: 1, motion: 1, mark: 1, shield: 1, split: 1, zone: 1, echo: 1, aura: 1 };
+  var EVENT_ONLY = { status: 1, motion: 1, mark: 1, shield: 1, split: 1, zone: 1, echo: 1, aura: 1, select: 1 };
   var EVENT_SLOTS = ['element', 'fx', 'particles', 'status', 'damage', 'impact', 'motion', 'mark', 'shield', 'split', 'zone', 'echo', 'aura'];
 
   function compile(skill) {
@@ -1197,7 +1293,13 @@
       /* 伤害节点带上编译期定死的「命中判定」与「伤害对象」：
          运行时按这两个字段决定「这次命中算不算数」「打谁」，两端口径完全一致 */
       if (x.type === 'damage') {
-        normalized._hitKind = (params.hitKind && params.hitKind !== 'auto') ? params.hitKind : AUTO_HIT;
+        /* 命中判定只在「触发事件 = 命中时」时有意义：
+           施放时 / 撞墙时各自是独立的结算时机，用 cast / wall 标记，
+           避免「施放时的伤害」被 auto 解析成弹珠碰撞而永远打不出去。 */
+        var hk = (params.hitKind && params.hitKind !== 'auto') ? params.hitKind : AUTO_HIT;
+        if (evKey === 'onCast') hk = 'cast';
+        else if (evKey === 'onWall') hk = 'wall';
+        normalized._hitKind = hk;
         normalized._affect = params.affect || 'enemy';
       }
       all[evKey][x.type].push(normalized);
@@ -1224,6 +1326,8 @@
       if (MODULES[t].multi || t === 'source') multi[t] = p;
       else if (!EVENT_ONLY[t]) single[t] = merge(t, p);   // 事件型模块只在 events 中，不进 single
     });
+    // 目标·锁定是「作用于谁」的全局配置，不进事件组；多个节点时取第一份
+    single.select = merge('select', pick('select'));
     // 被动属性始终以技能原有 mods 为准（stats 节点只是它的可视化入口）
     single.stats = Object.assign(defaults('stats'), (skill && skill.mods) || {});
     /* 多个投射物不再 merge 成一份：旧逻辑把 speed / count / size 全部相加，
@@ -1261,6 +1365,7 @@
       sources: multi.source, elements: events.onHit.elements, fx: events.onHit.fx,
       particles: events.onHit.particles, damage: events.onHit.damage, impact: events.onHit.impact,
       stats: single.stats, projectile: single.projectile, targeted: single.targeted,
+      select: single.select,
       events: events, active: active,
       hosts: hosts, bindings: { byNode: ownerOf, publicBucket: scoped[''] },
       rangeByHost: rangeByHost,
@@ -1407,6 +1512,7 @@
     hitHasContent: hitHasContent,
     HIT_KIND_LABEL: HIT_KIND_LABEL, damageKindOf: damageKindOf, damageAcceptsKind: damageAcceptsKind,
     onHitNeedsContact: onHitNeedsContact, damageNodesFor: damageNodesFor,
+    selectTargets: selectTargets, skillKnockback: skillKnockback, skillNeedsContact: skillNeedsContact,
     HOST_TYPES: HOST_TYPES, HOST_LABELS: HOST_LABELS, setHosts: setHosts,
     publicView: publicView, viewFor: viewFor, hostsOf: hostsOf, describeBindings: describeBindings,
     exclusiveView: exclusiveView, viewOfNode: viewOfNode,
