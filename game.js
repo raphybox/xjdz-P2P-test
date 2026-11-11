@@ -274,7 +274,8 @@
     mode: '1v1',             // '1v1' | '2v2'
     seats: 2,                // 参战弹珠数：1V1=2，2V2=4
     actors: [],              // 全部弹珠；player / enemy 是 seat0 / seat1 的引用
-    actorFruits: {},         // seat -> 本回合果实（2V2 每队共享一枚）
+    actorFruits: {},         // seat -> 本回合果实（2V2 每座位各自一枚）
+    seatHud: [null, null, null, null],  // 2V2 客机收到的每座位展示模型（昵称/果实/状态）
     roundFruit: null,        // 我方本回合选中的果实
     selectedClass: null,     // 兼容垫片（统一弹珠视图）
     playerClass: null,
@@ -433,8 +434,16 @@
         if (P2P.role === 'guest') p2pStartMatch(msg.mode || '1v1');
         break;
       case 'draft':
-        // 只有队伍 B 队长（seat1）需要显示发牌；同队队员共享该队果实
-        if (P2P.role === 'guest' && P2P.mySeat === 1) p2pGuestOpenDraft(msg);
+        // 2V2：4 名玩家各自选果实，任意座位都开；1V1 仅 seat1（对手）开
+        if (P2P.role === 'guest') {
+          if (G.mode === '2v2' || P2P.mySeat === 1) p2pGuestOpenDraft(msg);
+        }
+        break;
+      case 'hud':
+        // 房主广播的每座位展示模型（昵称 / 果实 / BUFF·DEBUFF），客机据此渲染四卡
+        if (P2P.role === 'guest' && Array.isArray(msg.seats)) {
+          msg.seats.forEach(s => { if (s && s.seat != null) G.seatHud[s.seat] = s; });
+        }
         break;
       case 'draft_pick':
         if (P2P.role === 'host') p2pHostOnGuestPick(msg);
@@ -583,6 +592,20 @@
   /* ---------- 房主：客机输入落地 ---------- */
 
   function p2pHostOnGuestPick(msg) {
+    const seat = msg.seat;
+    if (G.mode === '2v2') {
+      if (P2P.pickBySeat[seat]) return;            // 同座位去重
+      const x = P2P.pendingOpts[seat] && P2P.pendingOpts[seat][msg.i];
+      if (x) {
+        G.actorFruits[seat] = x;
+        P2P.pickBySeat[seat] = x;
+        P2P.draftSeatsDone = (P2P.draftSeatsDone || 0) + 1;
+        addLog((seat % 2 === 0 ? '队伍 A ' : '队伍 B ') + '玩家本回合果实「' + x.name + '」', 'hl');
+        recompute(G.actors[seat]);
+      }
+      if ((P2P.draftSeatsDone || 0) >= 4 && G.phase === 'transition') setTimeout(startAimPhase, 260);
+      return;
+    }
     if (P2P.guestPick) return;
     P2P.guestPick = true;
     const x = P2P.guestOpts && P2P.guestOpts[msg.i];
@@ -651,6 +674,7 @@
           if (!a || !f) return;
           f.x = a.x; f.y = a.y; f.vx = a.vx; f.vy = a.vy;
           f.hp = a.hp; f.shield = a.shield;
+          f.maxHp = a.maxHp;   // 客机用房主权威的 maxHp，保证队友血条满值正确
         });
       }
       G.roundTime = sm.rt;
@@ -996,6 +1020,7 @@
     hatchModal: $('hatchModal'), hatchCanvas: $('hatchCanvas'), hatchSub: $('hatchSub'),
     hatchResult: $('hatchResult'), hatchConfirmBtn: $('hatchConfirmBtn'), hatchCloseBtn: $('hatchCloseBtn'),
     p2pModeSel: $('p2pModeSel'), roomSeats: $('roomSeats'), seatHud: $('seatHud'),
+    seatGrid: $('seatGrid'), teamScoreLine: $('teamScoreLine'), battleScreen: $('battleScreen'),
     startBtn: $('startBtn'), speedBtn: $('speedBtn'), soundBtn: $('soundBtn'),
     rulesBtn: $('rulesBtn'), rulesModal: $('rulesModal'), closeRulesBtn: $('closeRulesBtn'),
     pClassName: $('pClassName'), eClassName: $('eClassName'),
@@ -1328,7 +1353,9 @@
   }
 
   function recompute(f) {
-    const skills = f.side === 'player' ? G.playerSkills : G.enemySkills;
+    // 每座位各自生效本回合果实（1V1 也按座位取，等价于原先的 player/enemy 两方共享）
+    const fruit = (G.actorFruits && f.seat != null) ? G.actorFruits[f.seat] : null;
+    const skills = fruit ? [fruit] : [];
     const m = emptyMods();
     skills.forEach(s => Object.keys(s.mods).forEach(k => { m[k] += s.mods[k]; }));
     f.mods = m;
@@ -1400,10 +1427,22 @@
     G.enemyDraftPick = P2P.active ? null : enemyOptions[randInt(enemyOptions.length)];
 
     if (P2P.active && P2P.role === 'host') {
-      P2P.guestOpts = enemyOptions;
-      P2P.guestPick = false; P2P.myPickDone = false;
-      // 队伍 B 的队长（seat1）负责选该队果实
-      p2pSend({ k: 'draft', r: G.round, opts: enemyOptions.map(x => x.id) }, 1);
+      if (G.mode === '2v2') {
+        // 2V2：4 名玩家各自从自己的果实库选果实，房主为每座位按其库存抽候选并点对点发送
+        P2P.pickBySeat = {}; P2P.pendingOpts = {}; P2P.draftSeatsDone = 0;
+        for (let s = 1; s < 4; s++) {
+          const fruits = P2P.fruitsBySeat[s] || null;
+          const opts = drawSkills(G.playerClass, G.playerSkills, draftCount, fruits);
+          P2P.pendingOpts[s] = opts;
+          p2pSend({ k: 'draft', r: G.round, seat: s, opts: opts.map(x => x.id) }, s);
+        }
+        addLog('本回合：4 名玩家各自从自己的果实库选果实', 'hl');
+      } else {
+        P2P.guestOpts = enemyOptions;
+        P2P.guestPick = false; P2P.myPickDone = false;
+        // 1V1：对手（seat1）选该方果实
+        p2pSend({ k: 'draft', r: G.round, opts: enemyOptions.map(x => x.id) }, 1);
+      }
     }
 
     dom.draftTitle.textContent = title || '本回合 · 果实三选一';
@@ -1434,13 +1473,8 @@
     if (G.phase !== 'draft' || !G.draftOptions[i]) return;
     G.phase = 'transition';
     const x = G.draftOptions[i];
-    // 果实只在本回合生效：覆盖而不是叠加；2V2 时同队两颗弹珠共享这枚果实
-    G.playerSkills = [x];
+    // 果实只在本回合生效：覆盖而不是叠加；2V2 时每座位各自一枚，互不影响
     G.roundFruit = x;
-    G.actorFruits = {};
-    (G.actors).forEach(f => {
-      if (f && f.side === 'player') G.actorFruits[f.seat] = x;
-    });
     G.myPicks[G.round] = { skill: x.id, aim: null };
     sfx.pick();
     G.draftOptions = [];
@@ -1448,20 +1482,40 @@
     dom.draftCards.innerHTML = '';
 
     if (P2P.active) {
-      recompute(G.player); recompute(G.enemy);
       if (P2P.role === 'guest') {
+        // 客机：只写自己座位的果实，并上报房主
+        G.actorFruits = {}; G.actorFruits[P2P.mySeat] = x;
+        recompute(G.actors[P2P.mySeat]);
         p2pSend({ k: 'draft_pick', r: G.round, i: i, seat: P2P.mySeat });
         addLog('本回合果实「' + x.name + '」，等待房主进入瞄准阶段', 'good');
         showBanner('已选择', '等待其他玩家…', 0);
       } else {
-        P2P.myPickDone = true;
-        addLog('本回合果实「' + x.name + '」，等待对手选择', 'good');
-        showBanner('已选择', '等待对手选择果实…', 0);
-        if (P2P.guestPick) setTimeout(startAimPhase, 260);
+        G.actorFruits = {}; G.actorFruits[P2P.mySeat] = x;
+        recompute(G.actors[P2P.mySeat]);
+        if (G.mode === '2v2') {
+          // 房主（seat0）已选；等其余 3 个座位上报后集齐开局
+          P2P.pickBySeat[P2P.mySeat] = x;
+          P2P.draftSeatsDone = (P2P.draftSeatsDone || 0) + 1;
+          addLog('本回合我方果实「' + x.name + '」，等待其他 3 名玩家选择…', 'good');
+          showBanner('已选择', '等待其他玩家选择果实…', 0);
+          if ((P2P.draftSeatsDone || 0) >= 4) setTimeout(startAimPhase, 260);
+        } else {
+          G.playerSkills = [x];
+          P2P.myPickDone = true;
+          addLog('本回合果实「' + x.name + '」，等待对手选择', 'good');
+          showBanner('已选择', '等待对手选择果实…', 0);
+          if (P2P.guestPick) setTimeout(startAimPhase, 260);
+        }
       }
       return;
     }
 
+    // 单机 1V1：我方（seat0）与电脑陪练（seat1）各自一枚
+    G.playerSkills = [x];
+    G.actorFruits = {};
+    (G.actors).forEach(f => {
+      if (f && f.side === 'player') G.actorFruits[f.seat] = x;
+    });
     if (G.enemyDraftPick) {
       G.enemySkills = [G.enemyDraftPick];
       (G.actors).forEach(f => {
@@ -3860,33 +3914,54 @@
 
   /* 只在内容或整数秒变化时重排 DOM，避免每帧 innerHTML 造成抖动 */
   const buffSig = { player: null, enemy: null };
-  function renderBuffBar(side, f) {
-    const el = side === 'player' ? dom.pBuffs : dom.eBuffs;
-    if (!el) return;
-    const list = collectStatuses(f);
-    const sig = list.map(x => x.def.id + ':' + x.stacks + ':' + Math.ceil(x.remain)).join('|');
-    if (buffSig[side] === sig) return;
-    buffSig[side] = sig;
-    el.innerHTML = list.map(x => {
-      const d = x.def;
-      const color = /^#[0-9a-fA-F]{6}$/.test(d.color || '') ? d.color : '#8fa3c0';
-      const glyph = STATUS_GLYPHS[d.source] || STATUS_GLYPHS.custom;
-      const icon = d.icon
-        ? '<img class="st-icon" alt="" src="' + escHtml(d.icon) + '">'
+
+  /* 把 collectStatuses 的结果序列化成可跨网络传输的纯对象数组 */
+  function serializeStatuses(list) {
+    return (list || []).map(x => ({
+      id: x.def.id, kind: x.def.kind, stacks: x.stacks, remain: x.remain,
+      color: x.def.color, icon: x.def.icon || '',
+      glyph: STATUS_GLYPHS[x.def.source] || STATUS_GLYPHS.custom,
+      name: x.def.name
+    }));
+  }
+
+  /* 单一渲染入口：入参为序列化后的纯状态对象数组（房主本地 / 客机收到的一致） */
+  function buffChipsHtml(list) {
+    return (list || []).map(b => {
+      const color = /^#[0-9a-fA-F]{6}$/.test(b.color || '') ? b.color : '#8fa3c0';
+      const glyph = b.glyph || STATUS_GLYPHS.custom;
+      const icon = b.icon
+        ? '<img class="st-icon" alt="" src="' + escHtml(b.icon) + '">'
         : '<svg class="st-glyph" viewBox="0 0 24 24" aria-hidden="true">' + glyph + '</svg>';
-      const badge = x.stacks > 1 ? '×' + x.stacks : (x.remain > 0 ? Math.ceil(x.remain) + 's' : '');
-      const tip = (d.name || '状态') + (d.kind === 'buff' ? ' · 增益' : ' · 减益') +
-        (d.desc ? ' · ' + d.desc : '') +
-        (x.stacks > 1 ? ' · ' + x.stacks + ' 层' : '') +
-        (x.remain > 0 ? ' · 剩余 ' + Math.ceil(x.remain) + ' 秒' : '');
-      return '<span class="buff-chip" data-kind="' + (d.kind === 'buff' ? 'buff' : 'debuff') +
+      const badge = b.stacks > 1 ? '×' + b.stacks : (b.remain > 0 ? Math.ceil(b.remain) + 's' : '');
+      const tip = (b.name || '状态') + (b.kind === 'buff' ? ' · 增益' : ' · 减益') +
+        (b.stacks > 1 ? ' · ' + b.stacks + ' 层' : '') +
+        (b.remain > 0 ? ' · 剩余 ' + Math.ceil(b.remain) + ' 秒' : '');
+      return '<span class="buff-chip" data-kind="' + (b.kind === 'buff' ? 'buff' : 'debuff') +
         '" style="' + statusColorVars(color) + '" title="' + escHtml(tip) + '">' +
         icon + '<i class="st-kind"></i><i class="st-stack">' + escHtml(badge) + '</i></span>';
     }).join('');
   }
 
+  function renderBuffBar(side, f) {
+    const el = side === 'player' ? dom.pBuffs : dom.eBuffs;
+    if (!el) return;
+    const list = serializeStatuses(collectStatuses(f));
+    const sig = list.map(x => x.id + ':' + x.stacks + ':' + Math.ceil(x.remain)).join('|');
+    if (buffSig[side] === sig) return;
+    buffSig[side] = sig;
+    el.innerHTML = buffChipsHtml(list);
+  }
+
   function updateHud() {
     if (!G.player || !G.enemy) return;
+    if (G.mode === '2v2') {
+      // 2V2：四座位各自独立血条 + 各自 BUFF/DEBUFF，不再合并成队伍总血条
+      if (!P2P.active || P2P.role === 'host') G.seatHud = computeSeatHud();
+      renderSeatCards();
+      if (P2P.active && P2P.role === 'host') p2pSendSeatHud(false);
+      return;
+    }
     const team = side => {
       const list = (G.actors).filter(f => f && f.side === side);
       return {
@@ -3910,6 +3985,110 @@
     renderBuffBar('enemy', G.enemy);
   }
 
+  /* ---------- 2V2：四座位独立状态卡 ---------- */
+
+  function seatNick(i) {
+    if (i === P2P.mySeat) return nickName();
+    const m = P2P.members && P2P.members[i];
+    return m || ('好友 ' + (i + 1));
+  }
+
+  function computeSeatHud() {
+    const arr = [];
+    for (let i = 0; i < G.actors.length; i++) {
+      const f = G.actors[i];
+      if (!f) { arr.push(null); continue; }
+      const fruit = G.actorFruits[i];
+      arr.push({
+        seat: i, team: f.team, side: f.side, nick: seatNick(i),
+        fruitId: fruit ? fruit.id : null,
+        buffs: serializeStatuses(collectStatuses(f))
+      });
+    }
+    return arr;
+  }
+
+  function buildSeatGrid() {
+    if (!dom.seatGrid) return;
+    dom.seatGrid.hidden = false;   // 去掉 [hidden] !important，改由 .seat-grid / mode-2v2 显隐控制
+    dom.seatGrid.innerHTML = '';
+    for (let i = 0; i < 4; i++) {
+      const team = (i < 2) ? 'a' : 'b';
+      const card = document.createElement('div');
+      card.className = 'seat-card team-' + team;
+      card.dataset.seat = i;
+      card.innerHTML =
+        '<div class="sc-head"><span class="sc-team">' + (team === 'a' ? 'A' : 'B') + '</span>' +
+        '<span class="sc-nick">—</span>' +
+        '<span class="sc-me" hidden>我</span></div>' +
+        '<div class="sc-hp-track"><i class="sc-shield-bar"></i><i class="sc-hp-bar"></i></div>' +
+        '<div class="sc-hp-text">0 / 0</div>' +
+        '<div class="sc-buffs buff-bar"></div>' +
+        '<div class="sc-skills mini-skills"></div>';
+      dom.seatGrid.appendChild(card);
+    }
+    // 标注本机操控的座位
+    if (dom.seatGrid.children[P2P.mySeat]) {
+      const me = dom.seatGrid.children[P2P.mySeat].querySelector('.sc-me');
+      if (me) me.hidden = false;
+    }
+  }
+
+  function renderSeatCards() {
+    if (!dom.seatGrid) return;
+    const cards = dom.seatGrid.children;
+    for (let i = 0; i < G.seats; i++) {
+      const card = cards[i];
+      if (!card) continue;
+      const f = G.actors[i];
+      const h = G.seatHud[i];
+      const maxHp = f ? (f.maxHp || 1) : 1;
+      const hp = f ? Math.max(0, f.hp) : 0;
+      const sh = f ? Math.max(0, f.shield) : 0;
+      const hpBar = card.querySelector('.sc-hp-bar');
+      const shBar = card.querySelector('.sc-shield-bar');
+      const txt = card.querySelector('.sc-hp-text');
+      if (hpBar) hpBar.style.width = (clamp(hp / maxHp, 0, 1) * 100) + '%';
+      if (shBar) shBar.style.width = (clamp(sh / maxHp, 0, 1) * 100) + '%';
+      if (txt) txt.textContent = Math.ceil(hp) + ' / ' + Math.round(maxHp) + (sh > 0.5 ? ('  +' + Math.ceil(sh) + '盾') : '');
+      const nickEl = card.querySelector('.sc-nick');
+      if (nickEl && h) nickEl.textContent = h.nick || '—';
+      const buffsEl = card.querySelector('.sc-buffs');
+      if (buffsEl && h) {
+        const sig = (h.buffs || []).map(b => b.id + ':' + b.stacks + ':' + Math.ceil(b.remain)).join('|');
+        if (buffsEl._sig !== sig) { buffsEl._sig = sig; buffsEl.innerHTML = buffChipsHtml(h.buffs || []); }
+      }
+      const skEl = card.querySelector('.sc-skills');
+      if (skEl && h) {
+        const sid = h.fruitId;
+        const sig = sid || '';
+        if (skEl._sig !== sig) {
+          skEl._sig = sig;
+          const sk = sid ? SKILLS.find(s => s.id === sid) : null;
+          skEl.innerHTML = renderMiniSkills(sk ? [sk] : []);
+        }
+      }
+    }
+  }
+
+  let _seatHudSig = '';
+  /* 房主把每座位（昵称 / 果实 / BUFF·DEBUFF）广播给客机；仅在内容变化时才发，避免刷屏 */
+  function p2pSendSeatHud(force) {
+    if (!P2P.active || P2P.role !== 'host' || G.mode !== '2v2') return;
+    const arr = computeSeatHud();
+    const sig = arr.map(s => s ? (s.nick + '|' + s.fruitId + '|' +
+      (s.buffs || []).map(b => b.id + ':' + b.stacks + ':' + Math.ceil(b.remain)).join(',')) : '-').join('||');
+    if (!force && sig === _seatHudSig) return;
+    _seatHudSig = sig;
+    p2pSend({
+      k: 'hud',
+      seats: arr.map(s => s ? {
+        seat: s.seat, team: s.team, side: s.side, nick: s.nick,
+        fruitId: s.fruitId, buffs: s.buffs
+      } : null)
+    });
+  }
+
   function renderSeatHud() {
     if (!dom.seatHud) return;
     dom.seatHud.querySelectorAll('.seat-hp').forEach(el => {
@@ -3928,10 +4107,19 @@
 
   function updateMeta() {
     if (!G.player || !G.enemy) return;
-    dom.pSkills.innerHTML = renderMiniSkills(G.playerSkills);
-    dom.eSkills.innerHTML = renderMiniSkills(G.enemySkills);
-    cacheSkillBars();
-    syncSkillCharge(true);
+    if (G.mode === '2v2') {
+      // 2V2：回合胜按队伍计（A=我方，B=对手），显示在回合面板
+      if (dom.teamScoreLine) {
+        dom.teamScoreLine.hidden = false;
+        dom.teamScoreLine.innerHTML = '队伍 A 胜 <b>' + G.scores.player + '</b> · 队伍 B 胜 <b>' + G.scores.enemy + '</b>';
+      }
+    } else {
+      dom.pSkills.innerHTML = renderMiniSkills(G.playerSkills);
+      dom.eSkills.innerHTML = renderMiniSkills(G.enemySkills);
+      cacheSkillBars();
+      syncSkillCharge(true);
+      if (dom.teamScoreLine) dom.teamScoreLine.hidden = true;
+    }
     // 瞄准阶段时，回合尚未开始，标签与高亮显示「即将到来的回合」
     const upcoming = G.phase === 'aim' ? G.round + 1 : G.round;
     dom.roundLabel.textContent = '第 ' + Math.max(1, upcoming) + ' / ' + CONFIG.TOTAL_ROUNDS + ' 回合';
@@ -4077,9 +4265,17 @@
         '<div class="rr-detail">我方 ' + Math.round(r.pp * 100) + '%  /  对手 ' + Math.round(r.ep * 100) + '%</div></div>';
     }).join('');
 
-    dom.buildReview.innerHTML =
-      buildCol('我方 · ' + nickName() + ' · 本局最后一枚果实', SIDE.player.color, G.playerSkills) +
-      buildCol('对手 · ' + enemyNick() + ' · 本局最后一枚果实', SIDE.enemy.color, G.enemySkills);
+    if (G.mode === '2v2') {
+      const teamFruits = side => G.actors.filter(f => f && f.side === side)
+        .map(f => G.actorFruits[f.seat]).filter(Boolean);
+      dom.buildReview.innerHTML =
+        buildCol('我方队伍 A · 本局果实', SIDE.player.color, teamFruits('player')) +
+        buildCol('对手队伍 B · 本局果实', SIDE.enemy.color, teamFruits('enemy'));
+    } else {
+      dom.buildReview.innerHTML =
+        buildCol('我方 · ' + nickName() + ' · 本局最后一枚果实', SIDE.player.color, G.playerSkills) +
+        buildCol('对手 · ' + enemyNick() + ' · 本局最后一枚果实', SIDE.enemy.color, G.enemySkills);
+    }
   }
 
   function buildCol(title, color, skills) {
@@ -4118,8 +4314,7 @@
     G.player = G.actors[0];
     G.enemy = G.actors[1];
     G.enemies = [];   // 兼容旧的多敌人扩展位：额外弹珠已在 G.actors 里，避免重复
-    G.round = 0;
-    G.roundTime = 0;
+    G.round = 0;    G.roundTime = 0;
     G.scores = { player: 0, enemy: 0, draw: 0 };
     G.roundResults = [];
     G.playerSkills = [];
@@ -4127,6 +4322,8 @@
     G.actorFruits = {};
     G.roundFruit = null;
     G.myPicks = [];
+    G.seatHud = [null, null, null, null];
+    _seatHudSig = '';
     G.logLines = [];
     G.particles = [];
     G.floaters = [];
@@ -4139,6 +4336,13 @@
 
     switchScreen('battle');
     resizeCanvas();
+    // 2V2：四座位独立状态卡（各自血条 / BUFF·DEBUFF），替换合并总血条
+    if (dom.battleScreen) dom.battleScreen.classList.toggle('mode-2v2', G.mode === '2v2');
+    buildSeatGrid();
+    // 2V2 每座位各自选果实：初始化收集状态
+    P2P.pickBySeat = {};
+    P2P.pendingOpts = {};
+    P2P.draftSeatsDone = 0;
     if (dom.asyncTag) {
       if (P2P.active) {
         dom.asyncTag.hidden = false;

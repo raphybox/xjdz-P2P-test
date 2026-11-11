@@ -99,5 +99,30 @@ ok('SKILLS.desc 仍保留唯一一份充能说明', /✸主动技能 · 充能 '
 ok('BUFF 栏常驻 min-height', /\.buff-bar \{[^}]*min-height: 28px;/.test(css));
 ok('BUFF 空时不再 display:none', /\.buff-bar:empty \{ display: flex; \}/.test(css));
 
+console.log('10) 2V2 · 四独立血条 + 每人各自选果实');
+ok('HTML 有四卡容器 #seatGrid', /<div id="seatGrid" class="seat-grid" hidden>/.test(html));
+ok('CSS：2V2 隐藏合并总血条、改显示四卡',
+  /#battleScreen\.mode-2v2 \.fighter-panel \{ display: none; \}/.test(css) &&
+  /#battleScreen\.mode-2v2 #seatGrid \{ display: grid; \}/.test(css));
+ok('CSS：座位卡含各自护盾条与 BUFF 栏',
+  /\.sc-shield-bar \{/.test(css) && /\.seat-card \.buff-bar/.test(css));
+ok('game 构建四卡并切换 mode-2v2',
+  /function buildSeatGrid\(\)/.test(game) && /classList\.toggle\('mode-2v2'/.test(game));
+ok('recompute 按座位取果实（不再 team 共享）',
+  /const fruit = \(G\.actorFruits && f\.seat != null\) \? G\.actorFruits\[f\.seat\] : null;/.test(game));
+ok('2V2 房主为每座位点对点发各自候选',
+  /for \(let s = 1; s < 4; s\+\+\) \{[\s\S]*?p2pSend\(\{ k: 'draft', r: G\.round, seat: s/.test(game));
+ok('2V2 任意座位都开选果实（非仅队长）',
+  /if \(G\.mode === '2v2' \|\| P2P\.mySeat === 1\) p2pGuestOpenDraft\(msg\);/.test(game));
+ok('2V2 客机只写自己座位的果实',
+  /G\.actorFruits = \{\}; G\.actorFruits\[P2P\.mySeat\] = x;/.test(game));
+ok('2V2 房主按 seat 收集、集齐 4 人开局',
+  /P2P\.pickBySeat\[seat\] = x;[\s\S]*?P2P\.draftSeatsDone \|\| 0\) >= 4/.test(game));
+ok('房主广播每座位展示模型（昵称/果实/BUFF）',
+  /function p2pSendSeatHud\(force\)/.test(game) && /k: 'hud'/.test(game));
+ok('客机收到 hud 写回每座位模型',
+  /case 'hud':[\s\S]*?G\.seatHud\[s\.seat\] = s;/.test(game));
+ok('客机快照补齐队友 maxHp', /f\.maxHp = a\.maxHp;/.test(game));
+
 console.log('\nv3 打磨回归：通过 ' + pass + ' / 失败 ' + fail);
 process.exit(fail ? 1 : 0);

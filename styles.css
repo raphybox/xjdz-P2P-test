@@ -745,10 +745,75 @@ body.preview-mode .arena-wrap { height: clamp(360px, 60vh, 720px); }
 .seat-hp[data-team="b"] .sh-bar { background: linear-gradient(90deg, #5d93c9, #8fc4f0); }
 .sh-text { font-size: 11px; color: var(--text-dim); text-align: right; font-variant-numeric: tabular-nums; }
 
+/* ---------- 2V2：四座位独立状态卡（各自血条 / 护盾 / BUFF·DEBUFF / 本回合果实） ---------- */
+.seat-grid {
+  display: none;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.seat-card {
+  background: linear-gradient(160deg, var(--side-bg, transparent), var(--panel-2) 42%, var(--panel)), var(--panel);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 9px 11px; position: relative; overflow: hidden;
+}
+.seat-card::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--side-color, #555); box-shadow: 0 0 12px var(--side-color, transparent);
+}
+.seat-card.team-a { border-color: #31536b; --side-color: #57c8ff; }
+.seat-card.team-b { border-color: #6b3a38; --side-color: #ff7b6b; }
+.sc-head { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; min-width: 0; }
+.sc-team {
+  flex: none; font-size: 11px; font-weight: 700; letter-spacing: .5px;
+  width: 20px; height: 20px; line-height: 20px; text-align: center; border-radius: 5px;
+  color: #0d1522; background: #8fdcff;
+}
+.seat-card.team-b .sc-team { background: #ff9d90; }
+.sc-nick {
+  font-size: 13px; font-weight: 700; letter-spacing: .4px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sc-me {
+  flex: none; font-size: 9.5px; color: #0d1522; background: #f0c874;
+  padding: 1px 6px; border-radius: 5px; margin-left: auto;
+}
+.sc-hp-track {
+  height: 11px; background: #0d121b; border: 1px solid #2b3648;
+  border-radius: 6px; overflow: hidden; position: relative;
+}
+.sc-hp-bar {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 100%;
+  background: linear-gradient(90deg, #b8434e, #e8736a);
+  transition: width .22s cubic-bezier(.2,.8,.3,1);
+}
+.seat-card.team-b .sc-hp-bar { background: linear-gradient(90deg, #c45a5a, #e8736a); }
+.sc-shield-bar {
+  position: absolute; left: 0; top: 0; bottom: auto; height: 3px; width: 0; z-index: 2;
+  background: repeating-linear-gradient(115deg, #8fc4f0 0 5px, #5d93c9 5px 10px);
+  transition: width .22s;
+}
+.sc-hp-text { margin-top: 6px; font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.seat-card .buff-bar { margin-top: 7px; min-height: 26px; }
+.seat-card .mini-skills { margin-top: 8px; }
+
+.team-score-line {
+  font-size: 12px; color: var(--text-dim); margin-top: 8px; letter-spacing: .3px;
+}
+.team-score-line b { color: var(--accent-2); }
+
+/* ---------- 2V2 模式切换：隐藏合并血条与旧细条，改显示四卡 ---------- */
+#battleScreen.mode-2v2 .fighter-panel { display: none; }
+#battleScreen.mode-2v2 .seat-hud { display: none; }
+#battleScreen.mode-2v2 #seatGrid { display: grid; }
+#battleScreen.mode-2v2 .scoreboard { grid-template-columns: 1fr; }
+#battleScreen.mode-2v2 .round-panel { padding: 9px 14px; }
+
 /* ---------- v3 自适应 ---------- */
 @media (max-width: 680px) {
   .fruit-grid { grid-template-columns: repeat(2, 1fr); }
   .skin-grid { grid-template-columns: repeat(2, 1fr); }
   .room-seats { grid-template-columns: 1fr; }
   .seat-hp { grid-template-columns: 72px minmax(0, 1fr) 52px; gap: 6px; }
+  .seat-grid { grid-template-columns: repeat(2, 1fr); }
 }

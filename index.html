@@ -136,6 +136,7 @@
         <div id="roundLabel" class="round-label">第 1 / 3 回合</div>
         <div id="roundPips" class="round-pips"></div>
         <div id="phaseLabel" class="phase-label">准备阶段</div>
+        <div id="teamScoreLine" class="team-score-line" hidden></div>
         <div id="asyncTag" class="async-tag" hidden></div>
       </div>
 
@@ -154,6 +155,9 @@
       <div class="seat-hp" data-seat="2"><span class="sh-name">—</span><span class="sh-track"><i class="sh-bar"></i></span><span class="sh-text">0</span></div>
       <div class="seat-hp" data-seat="3"><span class="sh-name">—</span><span class="sh-track"><i class="sh-bar"></i></span><span class="sh-text">0</span></div>
     </div>
+
+    <!-- 2V2：四座位独立状态卡（各自血条 / 护盾 / BUFF·DEBUFF / 本回合果实），替代合并总血条 -->
+    <div id="seatGrid" class="seat-grid" hidden></div>
 
     <div class="arena-wrap" id="arenaWrap">
       <canvas id="arena"></canvas>
