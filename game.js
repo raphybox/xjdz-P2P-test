@@ -113,7 +113,7 @@
   const THEMES = Array.isArray(DATA.themes) ? DATA.themes : [];
   const SKINS = (Array.isArray(DATA.skins) ? DATA.skins : []).filter(x => x && x.enabled !== false);
   const INVENTORY_KEY = 'wowpinball.fruits.v1';
-  let INV = { owned: [], skinId: '', skinTheme: 'all' };
+  let INV = { owned: [], skinId: '', skinTheme: 'all', skinsOwned: [] };
 
   function saveInventory() {
     try { window.localStorage.setItem(INVENTORY_KEY, JSON.stringify(INV)); } catch (e) { /* 存储不可用仅本次会话生效 */ }
@@ -129,6 +129,13 @@
     v.owned = v.owned.filter(o => o && ids[o.id]);
     if (!v.skinId || !SKINS.some(x => x.id === v.skinId)) v.skinId = SKINS.length ? SKINS[0].id : '';
     if (!v.skinTheme) v.skinTheme = 'all';
+    /* 外观解锁：首次进入按「初始解锁数量」发放前 N 个外观，其余靠商店外观蛋解锁。
+       后台删掉某外观时同步清理，当前选中的若未解锁则回落到第一个已解锁外观。 */
+    if (!Array.isArray(v.skinsOwned)) v.skinsOwned = SKINS.slice(0, SHOP.initialSkins).map(x => x.id);
+    const skinIds = Object.create(null); SKINS.forEach(x => { skinIds[x.id] = 1; });
+    v.skinsOwned = v.skinsOwned.filter(id => skinIds[id]);
+    if (!v.skinsOwned.length && SKINS.length) v.skinsOwned = [SKINS[0].id];
+    if (v.skinsOwned.indexOf(v.skinId) < 0) v.skinId = v.skinsOwned[0] || (SKINS[0] && SKINS[0].id) || '';
     INV = v;
     saveInventory();
     return v;
@@ -150,12 +157,137 @@
     };
   }
   const CLASSES = [baseView('player'), baseView('enemy')];
-  // 商店 / 钱包已移除，保留空壳避免残留调用抛错
-  const SHOP = { enabled: false, currency: '', initialCoins: 0, drawCost: 0, duplicateRefund: 0, rewards: {}, starter: [], pool: [] };
-  const SHOP_RARITY = { common: '普通', rare: '稀有', epic: '史诗' };
-  const isOwned = () => true;
-  function addCoins() {}
-  function shopPool() { return []; }
+  /* ---------------------------------------------------------
+     2.5 商店与金币
+     配置来自 DATA.shop（后台「数值平衡 → 商店与经济」可改）。
+     品质：普通 / 稀有 / 珍稀，分别对应果实与外观库里的 common / rare / epic。
+     --------------------------------------------------------- */
+  const SHOP_RAW = (DATA.shop && typeof DATA.shop === 'object') ? DATA.shop : {};
+  const SHOP_PRICE_KEYS = ['normal', 'rare', 'precious'];
+  const numShop = (v, d) => { const n = Number(v); return isFinite(n) ? n : d; };
+  function shopPrices(kind, def) {
+    const src = (SHOP_RAW.prices && SHOP_RAW.prices[kind]) || {};
+    const o = {};
+    SHOP_PRICE_KEYS.forEach(k => { o[k] = Math.max(0, Math.round(numShop(src[k], def[k]))); });
+    return o;
+  }
+  const SHOP = {
+    enabled: true,
+    currency: '金币',
+    initialCoins: Math.max(0, Math.round(numShop(SHOP_RAW.coinsInit, 300))),
+    initialSkins: Math.max(1, Math.round(numShop(SHOP_RAW.initialSkins, 3))),
+    duplicateRefund: Math.max(0, Math.min(1, numShop(SHOP_RAW.duplicateRefund, 0.5))),
+    rewards: {
+      win: Math.max(0, Math.round(numShop((SHOP_RAW.rewards || {}).win, 120))),
+      draw: Math.max(0, Math.round(numShop((SHOP_RAW.rewards || {}).draw, 60))),
+      lose: Math.max(0, Math.round(numShop((SHOP_RAW.rewards || {}).lose, 30)))
+    },
+    prices: {
+      fruit: shopPrices('fruit', { normal: 60, rare: 150, precious: 360 }),
+      skin: shopPrices('skin', { normal: 80, rare: 200, precious: 480 })
+    }
+  };
+  const SHOP_TIERS = [
+    { key: 'normal', name: '普通', tier: 'common' },
+    { key: 'rare', name: '稀有', tier: 'rare' },
+    { key: 'precious', name: '珍稀', tier: 'epic' }
+  ];
+  const SHOP_KINDS = [
+    { key: 'fruit', name: '果实蛋', glyph: '果', host: 'shopFruitPool' },
+    { key: 'skin', name: '弹珠外观蛋', glyph: '珠', host: 'shopSkinPool' }
+  ];
+
+  const WALLET_KEY = 'wowpinball.wallet.v1';
+  let COINS = SHOP.initialCoins;
+  function saveWallet() {
+    try { window.localStorage.setItem(WALLET_KEY, JSON.stringify({ coins: COINS })); } catch (e) { /* 存储不可用仅本次会话生效 */ }
+  }
+  function loadWallet() {
+    let v = null;
+    try { v = JSON.parse(window.localStorage.getItem(WALLET_KEY)); } catch (e) { v = null; }
+    COINS = (v && isFinite(Number(v.coins))) ? Math.max(0, Math.round(Number(v.coins))) : SHOP.initialCoins;
+    saveWallet();
+    return COINS;
+  }
+  function updateCoins() {
+    if (dom.coinAmount) dom.coinAmount.textContent = COINS;
+    if (dom.shopCoinAmount) dom.shopCoinAmount.textContent = COINS;
+    renderShopCards();
+  }
+  function addCoins(n) {
+    COINS = Math.max(0, COINS + Math.round(Number(n) || 0));
+    saveWallet(); updateCoins();
+  }
+  function spendCoins(n) {
+    if (COINS < n) return false;
+    COINS -= n; saveWallet(); updateCoins(); return true;
+  }
+  function isOwned(id) { return INV.skinsOwned.indexOf(id) >= 0; }
+  function shopPool(kind, tierKey) {
+    const t = SHOP_TIERS.find(x => x.key === tierKey) || SHOP_TIERS[0];
+    const src = kind === 'fruit' ? SKILLS : SKINS;
+    const pool = src.filter(x => x && (x.tier || 'common') === t.tier);
+    return pool.length ? pool : src.slice();
+  }
+  function shopResult(text, bad) {
+    if (!dom.shopResult) return;
+    if (!text) { dom.shopResult.hidden = true; return; }
+    dom.shopResult.hidden = false;
+    dom.shopResult.textContent = text;
+    dom.shopResult.classList.toggle('bad', !!bad);
+  }
+  function renderShopCards() {
+    SHOP_KINDS.forEach(k => {
+      const box = dom[k.host]; if (!box) return;
+      box.innerHTML = SHOP_TIERS.map(t => {
+        const price = SHOP.prices[k.key][t.key];
+        const can = COINS >= price;
+        return '<div class="shop-pool-item tier-' + t.key + '" data-kind="' + k.key + '" data-tier="' + t.key + '">' +
+          '<div class="shop-egg-icon">' + k.glyph + '</div>' +
+          '<div class="shop-egg-name">' + escHtml(t.name + k.name) + '</div>' +
+          '<div class="shop-egg-tier">' + t.name + '品质</div>' +
+          '<div class="shop-egg-price"><i class="coin-icon"></i>' + price + '</div>' +
+          '<button class="primary-btn shop-egg-btn" type="button" data-kind="' + k.key + '" data-tier="' + t.key + '"' +
+            (can ? '' : ' disabled') + '>抽取</button></div>';
+      }).join('');
+    });
+    if (window.WowPinballUI) window.WowPinballUI.apply();
+  }
+  let lastEgg = null;
+  function drawEgg(kind, tierKey) {
+    const k = SHOP_KINDS.find(x => x.key === kind); if (!k) return;
+    const price = SHOP.prices[kind][tierKey] || 0;
+    if (!spendCoins(price)) { shopResult('金币不足，还需要 ' + (price - COINS) + ' 金币；打一局对战可以获得金币。', true); return; }
+    lastEgg = { kind: kind, tier: tierKey };
+    if (dom.shopDrawBtn) dom.shopDrawBtn.disabled = false;
+    const pool = shopPool(kind, tierKey);
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    if (!pick) { addCoins(price); shopResult('这一档暂时没有可抽取的内容，金币已退还。', true); return; }
+    if (kind === 'fruit') {
+      INV.owned.push({
+        uid: 's' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6), id: pick.id
+      });
+      saveInventory(); renderFruitGrid();
+      shopResult('开出果实「' + pick.name + '」（' + (TIER_NAME[pick.tier] || '') + '），已存入果实库');
+    } else if (isOwned(pick.id)) {
+      const back = Math.round(price * SHOP.duplicateRefund);
+      addCoins(back);
+      shopResult('抽到已解锁的外观「' + pick.name + '」，返还 ' + back + ' 金币');
+    } else {
+      INV.skinsOwned.push(pick.id);
+      INV.skinId = pick.id;
+      saveInventory(); renderSkins(); applySelectedSkin();
+      shopResult('解锁新外观「' + pick.name + '」（' + (TIER_NAME[pick.tier] || '') + '），已为你选用');
+    }
+    updateCoins();
+    sfx.pick();
+  }
+  function openShop() {
+    dom.shopModal.hidden = false;
+    shopResult('', false);
+    updateCoins();
+  }
+  function closeShop() { if (dom.shopModal) dom.shopModal.hidden = true; }
 
   /* ---------------------------------------------------------
      3. 技能表
@@ -716,7 +848,7 @@
     el.style.color = kind === 'bad' ? 'var(--bad, #e5484d)' : kind === 'good' ? 'var(--good, #2f9e63)' : 'var(--muted, #8a8f98)';
   }
   function p2pStage(name) {
-    ['p2pStageSel', 'p2pStageJoin'].forEach(id => { const el = $(id); if (el) el.hidden = id !== name; });
+    ['p2pStageSel', 'p2pStageJoin', 'p2pStageLobby'].forEach(id => { const el = $(id); if (el) el.hidden = id !== name; });
   }
 
   function bindP2PMode() {
@@ -757,12 +889,21 @@
       },
       onSeats: function (members) {
         if (!Array.isArray(members)) return;
-        P2P.members = members;
-        members.forEach(m => {
+        // 重建为「座位→昵称字符串」的稀疏数组：原先直接 P2P.members = members（对象数组），
+        // 而房间态成员对象里通常没有 nick（昵称由 onCtrl hello/ready 才写入），导致 seatNick /
+        // 房间渲染把成员对象当昵称拼进文本，渲染成 [object Object]。
+        // 关键：保留 onCtrl 已经写入 P2P.members[seat] 的昵称串（房间轮询会反复调用 onSeats，
+        // 不能直接覆盖），只在房间态确实带 nick 时才覆盖。
+        const next = [];
+        members.forEach((m, idx) => {
           if (!m) return;
-          P2P.readyBySeat[m.seat] = !!m.ready;
-          if (m.nick) P2P.members[m.seat] = cleanNick(m.nick) || ('好友 ' + m.seat);
+          const seat = (typeof m.seat === 'number') ? m.seat : idx;
+          const prev = P2P.members && P2P.members[seat];
+          const roomNick = (typeof m.nick === 'string' && m.nick) ? cleanNick(m.nick) : '';
+          next[seat] = roomNick || (typeof prev === 'string' ? prev : ('好友 ' + seat));
+          P2P.readyBySeat[seat] = !!m.ready;
         });
+        P2P.members = next;
         P2P.peerReady = allPeersReady();
         p2pRoomRender();
       },
@@ -911,7 +1052,8 @@
       $('p2pModal').hidden = true;
       p2pRoomShow();
       p2pRoomStatus('正在创建房间并收集网络地址，请稍候…');
-      const made = await NET.Session.createHostRoom(P2P.mode, p2pSessionOpts('好友已连接'));
+      const pubChk = $('p2pPublicChk');
+      const made = await NET.Session.createHostRoom(P2P.mode, Object.assign(p2pSessionOpts('好友已连接'), { public: !!(pubChk && pubChk.checked) }));
       P2P.net = made.session;
       P2P.roomCode = made.code;
       if (made.session && made.session.mode) P2P.mode = made.session.mode;
@@ -956,6 +1098,74 @@
     } finally {
       if (btn) btn.disabled = false;
     }
+  }
+
+  /* ---------- 联机大厅 ---------- */
+  let lobbyTimer = null, lobbyRefreshing = false;
+  function lobbyEscapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function p2pLobbyStop() { if (lobbyTimer) { clearInterval(lobbyTimer); lobbyTimer = null; } }
+  function p2pLobbyOpen() {
+    p2pMsg('p2pSelMsg', null);
+    p2pMsg('p2pJoinMsg', null);
+    p2pStage('p2pStageLobby');
+    p2pLobbyRefresh();
+    p2pLobbyStop();
+    lobbyTimer = setInterval(p2pLobbyRefresh, 2500);
+  }
+  function p2pLobbyBack() {
+    p2pLobbyStop();
+    p2pStage('p2pStageSel');
+  }
+  async function p2pLobbyRefresh() {
+    if (lobbyRefreshing) return;
+    lobbyRefreshing = true;
+    try {
+      const list = $('lobbyList'), msg = $('lobbyMsg');
+      if (!list) return;
+      if (!NET || !NET.listRooms) {
+        if (msg) { msg.hidden = false; msg.textContent = '联机模块未就绪，请刷新页面'; }
+        return;
+      }
+      const r = await NET.listRooms();
+      if (r.error) {
+        if (msg) { msg.hidden = false; msg.textContent = '无法连接大厅：' + r.error; }
+        return;
+      }
+      const rooms = r.rooms || [];
+      if (!rooms.length) {
+        if (msg) { msg.hidden = false; msg.textContent = '当前没有公开的房间。创建时勾选「公开到大厅」即可出现在这里。'; }
+        list.innerHTML = '';
+        return;
+      }
+      if (msg) msg.hidden = true;
+      list.innerHTML = rooms.map(rm => {
+        const modeTxt = rm.mode === '2v2' ? '2V2' : '1V1';
+        const host = lobbyEscapeHtml(rm.host || '房主');
+        const joined = Number(rm.joined || 0), seats = Number(rm.seats || 2);
+        return '<button class="lobby-row" type="button" data-code="' + rm.code + '">' +
+          '<span class="lr-mode">' + modeTxt + '</span>' +
+          '<span class="lr-host">' + host + '</span>' +
+          '<span class="lr-seats">' + joined + '/' + seats + '</span>' +
+          '<span class="lr-code">' + rm.code + '</span>' +
+          '<span class="lr-join">加入</span>' +
+          '</button>';
+      }).join('');
+    } catch (e) {
+      const msg = $('lobbyMsg');
+      if (msg) { msg.hidden = false; msg.textContent = '大厅刷新失败：' + e.message; }
+    } finally {
+      lobbyRefreshing = false;
+    }
+  }
+  function p2pLobbyJoin(code) {
+    if (!code) return;
+    p2pLobbyStop();
+    const inp = $('p2pRoomCodeIn');
+    if (inp) inp.value = code;
+    p2pStage('p2pStageJoin');
+    p2pJoinAccept();
   }
 
   function p2pCopy(id, msgId) {
@@ -1015,8 +1225,14 @@
   const dom = {
     startScreen: $('startScreen'), battleScreen: $('battleScreen'), resultScreen: $('resultScreen'),
     roomScreen: $('roomScreen'),
-    fruitGrid: $('fruitGrid'), skinThemes: $('skinThemes'), skinGrid: $('skinGrid'),
+    fruitGrid: $('fruitGrid'), fruitSearch: $('fruitSearch'), fruitCount: $('fruitCount'),
+    skinThemes: $('skinThemes'), skinGrid: $('skinGrid'),
     selectedSkinName: $('selectedSkinName'), selectedSkinTheme: $('selectedSkinTheme'),
+    coinBadge: $('coinBadge'), coinAmount: $('coinAmount'),
+    shopBtn: $('shopBtn'), shopModal: $('shopModal'), shopCoinAmount: $('shopCoinAmount'),
+    shopPool: $('shopPool'), shopFruitPool: $('shopFruitPool'), shopSkinPool: $('shopSkinPool'),
+    shopResult: $('shopResult'), shopDrawBtn: $('shopDrawBtn'),
+    shopDoneBtn: $('shopDoneBtn'), shopCloseBtn: $('shopCloseBtn'),
     hatchModal: $('hatchModal'), hatchCanvas: $('hatchCanvas'), hatchSub: $('hatchSub'),
     hatchResult: $('hatchResult'), hatchConfirmBtn: $('hatchConfirmBtn'), hatchCloseBtn: $('hatchCloseBtn'),
     p2pModeSel: $('p2pModeSel'), roomSeats: $('roomSeats'), seatHud: $('seatHud'),
@@ -1091,22 +1307,50 @@
     applySelectedSkin();
   }
 
+  /* 果实库搜索词：输入即过滤（名称 / 介绍 / 机制 / 来源 / 品质） */
+  let fruitQuery = '';
+  const FRUIT_TIER_RANK = { epic: 2, rare: 1, common: 0 };
+
   function renderFruitGrid() {
     if (!dom.fruitGrid) return;
     const counts = Object.create(null);
     INV.owned.forEach(o => { counts[o.id] = (counts[o.id] || 0) + 1; });
-    const ids = Object.keys(counts);
+    const total = Object.keys(counts).length;
+    const rawQ = String(fruitQuery || '').trim();
+    const q = rawQ.toLowerCase();
+    let ids = Object.keys(counts).filter(id => !!fruitById(id));
+    if (q) {
+      ids = ids.filter(id => {
+        const x = fruitById(id);
+        return [x.name, x.intro, x.desc, x.origin, TIER_NAME[x.tier], x.tier]
+          .some(t => String(t || '').toLowerCase().indexOf(q) >= 0);
+      });
+    }
+    // 品质高 → 低，同品质按名称；果实多了以后浏览顺序稳定、不随库存插入顺序跳动
+    ids.sort((a, b) => {
+      const A = fruitById(a), B = fruitById(b);
+      const d = (FRUIT_TIER_RANK[B.tier] || 0) - (FRUIT_TIER_RANK[A.tier] || 0);
+      return d !== 0 ? d : String(A.name).localeCompare(String(B.name), 'zh-Hans-CN');
+    });
     dom.fruitGrid.innerHTML = ids.length ? ids.map(id => {
       const x = fruitById(id);
-      if (!x) return '';
       const icon = fruitIcon(x);
-      return '<div class="fruit-card" data-fruit="' + escHtml(id) + '" data-tier="' + escHtml(x.tier) + '" title="' + escHtml(x.intro || x.desc) + '">' +
+      const intro = x.intro || x.desc || '';
+      const tip = x.intro ? (x.intro + (x.desc ? '\n【机制】' + x.desc : '')) : (x.desc || '');
+      return '<div class="fruit-card" data-fruit="' + escHtml(id) + '" data-tier="' + escHtml(x.tier) + '" title="' + escHtml(tip) + '">' +
         (icon ? '<img class="fc-icon" alt="" src="' + escHtml(icon) + '">' :
                 '<span class="fc-icon fc-icon-empty">' + escHtml(x.name.charAt(0)) + '</span>') +
         '<span class="fc-name">' + escHtml(x.name) + '</span>' +
         '<span class="fc-tier">' + escHtml(TIER_NAME[x.tier] || x.tier) + '</span>' +
+        (intro ? '<span class="fc-intro">' + escHtml(intro) + '</span>' : '') +
         '<span class="fc-count">×' + counts[id] + '</span></div>';
-    }).join('') : '<div class="faint">果实库还是空的，孵化初始蛋就能获得果实</div>';
+    }).join('') : (total ? '<div class="faint">没有匹配「' + escHtml(rawQ) + '」的果实</div>'
+                        : '<div class="faint">果实库还是空的，孵化初始蛋就能获得果实</div>');
+    if (dom.fruitCount) {
+      dom.fruitCount.textContent = q
+        ? ('匹配 ' + ids.length + ' / ' + total + ' 种')
+        : ('共 ' + total + ' 种 · ' + INV.owned.length + ' 枚');
+    }
     if (window.WowPinballUI) window.WowPinballUI.apply();
   }
 
@@ -1120,17 +1364,26 @@
     dom.skinThemes.querySelectorAll('.skin-theme-btn').forEach(b => {
       b.addEventListener('click', () => { INV.skinTheme = b.dataset.theme; saveInventory(); renderSkins(); });
     });
-    const list = cur === 'all' ? SKINS : SKINS.filter(x => x.theme === cur);
-    dom.skinGrid.innerHTML = list.length ? list.map(x =>
+    // 商店外观蛋解锁后才可在主页选用；未解锁的外观不出现在网格里
+    const ownedSkins = SKINS.filter(x => isOwned(x.id));
+    const list = cur === 'all' ? ownedSkins : ownedSkins.filter(x => x.theme === cur);
+    const locked = SKINS.length - ownedSkins.length;
+    dom.skinGrid.innerHTML = (list.length ? list.map(x =>
       '<button class="skin-card' + (x.id === INV.skinId ? ' selected' : '') +
         '" type="button" data-skin="' + escHtml(x.id) + '">' +
         '<canvas class="skin-orb" data-orb="' + escHtml(x.id) + '"></canvas>' +
         '<span class="sk-name">' + escHtml(x.name) + '</span></button>'
-    ).join('') : '<div class="faint">这个题材还没有外观，可在后台「外观管理」上传</div>';
+    ).join('') : '<div class="faint">这个题材还没有已解锁的外观，去「商店」抽弹珠外观蛋</div>') +
+      (locked > 0 ? '<div class="faint shop-lock-hint">还有 ' + locked + ' 个外观未解锁，商店外观蛋可以解锁</div>' : '');
     dom.skinGrid.querySelectorAll('.skin-card').forEach(b => {
       b.addEventListener('click', () => pickSkin(b.dataset.skin));
     });
     paintSkinOrbs();
+    /* 卡片 / 球体是这里重建出来的：界面编辑器给 .skin-card（尺寸、位移）与
+       .skin-orb（位移）的样式只写在旧节点上，不重新应用就会出现
+       「首次加载正常、点一次外观后尺寸跳变回 CSS 默认值」。
+       与 renderFruitGrid 末尾同一套处理。 */
+    if (window.WowPinballUI) window.WowPinballUI.apply();
   }
 
   function paintSkinOrbs() {
@@ -1259,11 +1512,8 @@
     renderLibrary();
   }
 
-  function updateCoinChips() {}
-  function renderShop() {}
-  function showShopResult() {}
-  function openShop() {}
-  function closeShop() {}
+  /* 旧商店残留的空壳函数已移除：函数声明会提升，后定义的空 openShop/closeShop
+     会覆盖上面的真实实现，导致「点商店按钮没反应」。 */
 
   function escHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
@@ -2277,7 +2527,8 @@
       if (!ctx.desc || !SM.moduleTargets) return true;
       return SM.moduleTargets(effective, m, ctx.desc, ctx).length > 0;
     };
-    const fxList = (grp.fx || []).filter(gate);
+    // 归属「区域·残留」的特效由区域实体自己生成并跟随，不在事件点重复播一次
+    const fxList = (grp.fx || []).filter(f => gate(f) && f._hostType !== 'zone');
     const partList = (grp.particles || []).filter(gate);
     // 「敌方弹珠身上」的选靶只从本次判定命中的目标里挑，不再挂到全图另一侧的敌人身上
     const enemies = (ctx && ctx.targets && ctx.targets.length) ? ctx.targets.slice() : enemiesOf(followEnt);
@@ -2577,7 +2828,19 @@
 
   function spawnZoneModule(att, z, x, y, hostC) {
     if (!G.skillZones) G.skillZones = [];
-    G.skillZones.push({ owner: att, side: att.side, cfg: z, C: hostC || null, x: x, y: y, born: G.clock, life: z.duration || 3, tick: 0 });
+    const rec = { owner: att, side: att.side, cfg: z, C: hostC || null, x: x, y: y,
+      born: G.clock, life: z.duration || 3, tick: 0, _skinFx: false };
+    G.skillZones.push(rec);
+    /* 连到「区域·残留」的像素特效挂到区域实体上：位置随实体、到期一起回收。
+       编译层已按 fxByHostNode 把特效分流到对应载体，不再误当投射物皮肤。 */
+    const zfx = (hostC && hostC.fxByHostNode && hostC.fxByHostNode[z._nodeId]) || [];
+    if (!zfx.length) return;
+    rec._skinFx = true;
+    SKILL_RT.SE.spawnFx(zfx, 'zone', x, y, 0, null, null, null, null, 0).then(arr => {
+      if (!arr.length) { rec._skinFx = false; return; }
+      arr.forEach(a => { a.follow = rec; a.x = x; a.y = y; a.born = performance.now(); });
+      SKILL_RT.SE.pushFx(G.skillFx, arr);
+    });
   }
 
   /* 光环模块：以施法者为圆心持续展开的领域。
@@ -3097,7 +3360,7 @@
     // 区域残留：每 0.5 秒对范围内敌人结算一次
     if (G.skillZones && G.skillZones.length) {
       G.skillZones = G.skillZones.filter(z => {
-        if (G.clock - z.born > z.life) return false;
+        if (G.clock - z.born > z.life) { z.dead = true; return false; }   // 挂在该区域上的特效同步回收
         if (z.cfg.followCaster && z.owner && !z.owner.dead) { z.x = z.owner.x; z.y = z.owner.y; }
         z.tick -= dt;
         if (z.tick <= 0) {
@@ -3275,6 +3538,7 @@
     if (SHOW_HAZARD_RADIUS) {
       // 区域残留：半透明圆 + 呼吸描边
       (G.skillZones || []).forEach(z => {
+        if (z._skinFx) return;   // 区域已接专属特效：纯色圆不再叠加
         const R = z.cfg.radius || 70;
         const k = Math.max(0, 1 - (G.clock - z.born) / Math.max(0.001, z.life));
         const col = z.cfg.color || '#ff7a30';
@@ -3318,11 +3582,10 @@
       const col = (q._C && q._C.elements[0] && q._C.elements[0].color) || '#ffb35a';
       // 多发间隔还没轮到的弹：停在出生点待发，不绘制（否则会看到好几发叠在一起）
       if (q.gap > 0) return;
-      /* 拖尾先画，且不受 _skinFx 影响：这颗弹挂了像素特效时，弹体由特效渲染，
-         但尾迹仍然是投射物模块的事（之前整段 return 导致「勾了拖尾却看不到」）。 */
-      if (SKILL_RT.SE.drawShotTrail) SKILL_RT.SE.drawShotTrail(ctx, q, col);
-      // 该弹已挂上像素特效时，由特效充当外观，不再画默认手绘弹体
+      /* 已挂专属特效的弹：拖尾 / 手绘弹体 / PNG 素材全部让位给特效，
+         「连接特效之后的模块只识别特效素材」，不再叠加任何默认外观。 */
       if (q._skinFx) return;
+      if (SKILL_RT.SE.drawShotTrail) SKILL_RT.SE.drawShotTrail(ctx, q, col);
       // 上传过 PNG 素材时按素材绘制（随自转旋转）；没有素材才画默认手绘弹体
       if (!(SKILL_RT.SE.drawShotImage && SKILL_RT.SE.drawShotImage(ctx, q))) {
         ctx.beginPath(); ctx.arc(q.x, q.y, q.r, 0, Math.PI * 2);
@@ -3717,7 +3980,9 @@
   }
   // 弹珠上方跟随的阵营名牌：我方青蓝 / 对手橙红，同职业也能一眼分清
   function drawSideLabel(f, side) {
-    const name = f.side === 'player' ? nickName() : enemyNick();
+    // 2V2：四颗弹珠各自显示本座位真实昵称（来自 seatHud 广播），避免我方/对手都写成同一名字而重影/重叠
+    const hud = (G.seatHud && f.seat != null) ? G.seatHud[f.seat] : null;
+    const name = (hud && hud.nick) ? hud.nick : (f.side === 'player' ? nickName() : enemyNick());
     const text = side.label + ' · ' + name;
     ctx.save();
     ctx.font = '600 13px "PingFang SC","Microsoft YaHei",sans-serif';
@@ -3990,7 +4255,9 @@
   function seatNick(i) {
     if (i === P2P.mySeat) return nickName();
     const m = P2P.members && P2P.members[i];
-    return m || ('好友 ' + (i + 1));
+    if (!m) return ('好友 ' + (i + 1));
+    // 防御：成员可能是昵称串，也可能是早期存入的对象，统一兜底取 .nick
+    return (typeof m === 'string') ? m : (m.nick || ('好友 ' + (i + 1)));
   }
 
   function computeSeatHud() {
@@ -4503,6 +4770,7 @@
   if (p2pBtn) p2pBtn.addEventListener('click', openP2P);
   const p2pClose = $('closeP2pBtn');
   if (p2pClose) p2pClose.addEventListener('click', () => {
+    p2pLobbyStop();
     $('p2pModal').hidden = true;
     // 连接还没建起来就关窗：清理半成品会话
     if (P2P.active && !P2P.inMatch && (!P2P.net || !P2P.net.ready)) p2pTeardown(null);
@@ -4515,6 +4783,15 @@
     p2pStage('p2pStageJoin');
     const inp = $('p2pRoomCodeIn');
     if (inp) inp.focus();
+  });
+  bindP2P('p2pLobbyBtn', p2pLobbyOpen);
+  bindP2P('lobbyRefreshBtn', p2pLobbyRefresh);
+  bindP2P('lobbyBackBtn', p2pLobbyBack);
+  const lobbyList = $('lobbyList');
+  if (lobbyList) lobbyList.addEventListener('click', ev => {
+    const row = ev.target.closest('.lobby-row');
+    if (!row) return;
+    p2pLobbyJoin(row.dataset.code);
   });
   const roomCodeIn = $('p2pRoomCodeIn');
   if (roomCodeIn) {
@@ -4551,6 +4828,19 @@
   dom.closeRulesBtn.addEventListener('click', () => { dom.rulesModal.hidden = true; });
   dom.rulesModal.addEventListener('click', ev => { if (ev.target === dom.rulesModal) dom.rulesModal.hidden = true; });
 
+  // 商店：入口 / 关闭 / 蛋卡抽取 / 再抽一次
+  if (dom.shopBtn) dom.shopBtn.addEventListener('click', openShop);
+  if (dom.shopCloseBtn) dom.shopCloseBtn.addEventListener('click', closeShop);
+  if (dom.shopDoneBtn) dom.shopDoneBtn.addEventListener('click', closeShop);
+  if (dom.shopModal) dom.shopModal.addEventListener('click', ev => { if (ev.target === dom.shopModal) closeShop(); });
+  if (dom.shopPool) dom.shopPool.addEventListener('click', ev => {
+    const b = ev.target.closest('.shop-egg-btn');
+    if (b && !b.disabled) drawEgg(b.dataset.kind, b.dataset.tier);
+  });
+  if (dom.shopDrawBtn) dom.shopDrawBtn.addEventListener('click', () => {
+    if (lastEgg) drawEgg(lastEgg.kind, lastEgg.tier);
+  });
+
   // 战斗记录弹层：打开时刷新一次伤害统计摘要（平时由 recordDamage 实时更新）
   renderDmgSummary();
   dom.logBtn.addEventListener('click', () => { renderDmgSummary(); dom.logModal.hidden = false; });
@@ -4563,6 +4853,17 @@
   if (dom.hatchCloseBtn) dom.hatchCloseBtn.addEventListener('click', closeHatch);
   if (dom.hatchModal) dom.hatchModal.addEventListener('click', ev => { if (ev.target === dom.hatchModal) closeHatch(); });
   bindP2PMode();
+
+  // 果实库搜索：输入即过滤（不重建输入框，只在网格上重绘）
+  if (dom.fruitSearch) {
+    dom.fruitSearch.addEventListener('input', () => {
+      fruitQuery = dom.fruitSearch.value || '';
+      renderFruitGrid();
+    });
+    dom.fruitSearch.addEventListener('keydown', ev => {
+      if (ev.key === 'Escape') { dom.fruitSearch.value = ''; fruitQuery = ''; renderFruitGrid(); }
+    });
+  }
 
   // 昵称弹层：首次进入强制输入，之后可从顶栏修改
   if (dom.nickBtn) dom.nickBtn.addEventListener('click', () => openNameModal(true));
@@ -4765,6 +5066,8 @@
     requestAnimationFrame(loop);
   } else {
     loadInventory();
+    loadWallet();
+    updateCoins();           // 刷新顶栏金币 + 生成商店蛋卡（按钮按余额禁用）
     renderLibrary();
     p2pRoomBuildClasses();   // 兼容旧调用：职业网格已移除
     bindP2PMode();

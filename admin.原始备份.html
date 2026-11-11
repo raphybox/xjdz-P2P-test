@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>选技弹珠 · 内容管理后台</title>
+<link rel="stylesheet" href="admin.css">
+</head>
+<body>
+<div class="shell">
+
+  <aside class="sidebar">
+    <div class="sb-brand">
+      <div class="sb-mark"><span></span><span></span></div>
+      <div>
+        <strong>选技弹珠</strong>
+        <small>内容管理后台</small>
+      </div>
+    </div>
+
+    <nav class="sb-nav" id="nav">
+      <div class="sb-group">内容配置</div>
+      <button type="button" class="nav-item active" data-tab="dashboard"><i class="ni ni-dash"></i><span>总览</span></button>
+      <button type="button" class="nav-item" data-tab="skins"><i class="ni ni-skin"></i><span>外观管理</span><em id="navCountSkins">0</em></button>
+      <button type="button" class="nav-item" data-tab="statuses"><i class="ni ni-skill"></i><span>状态图标</span><em id="navCountStatuses">0</em></button>
+      <button type="button" class="nav-item" data-tab="skills"><i class="ni ni-skill"></i><span>果实管理</span><em id="navCountSkills">0</em></button>
+      <button type="button" class="nav-item" data-tab="balance"><i class="ni ni-balance"></i><span>数值平衡</span></button>
+      <button type="button" class="nav-item" data-tab="studio"><i class="ni ni-studio"></i><span>实时编排</span></button>
+      <button type="button" class="nav-item" data-tab="ui"><i class="ni ni-ui"></i><span>界面编辑器</span></button>
+      <button type="button" class="nav-item" data-tab="texts"><i class="ni ni-text"></i><span>文案编辑</span></button>
+      <div class="sb-group">场景与运营</div>
+      <button type="button" class="nav-item" data-tab="maps"><i class="ni ni-map"></i><span>地图编辑器</span><em id="navCountMaps">0</em></button>
+      <button type="button" class="nav-item" data-tab="events"><i class="ni ni-event"></i><span>活动事件</span><em id="navCountEvents">0</em></button>
+      <button type="button" class="nav-item" data-tab="weather"><i class="ni ni-weather"></i><span>对局天气</span></button>
+      <div class="sb-group">交付</div>
+      <button type="button" class="nav-item" data-tab="release"><i class="ni ni-release"></i><span>校验与发布</span></button>
+    </nav>
+
+    <div class="sb-foot">
+      <div class="sb-status"><span id="serverDot" class="dot"></span><span id="serverStatus">检测本地服务…</span></div>
+      <div class="sb-meta">配置 schema v1 · 本地优先</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="tb-title">
+        <h1 id="pageTitle">总览</h1>
+        <p id="pageSub">内容配置与发布状态</p>
+      </div>
+      <div class="tb-actions">
+        <span id="dirtyBadge" class="badge badge-warn" hidden>有未保存的修改</span>
+        <button id="helpBtn" class="ghost-btn" type="button" title="查看键盘快捷键 (? 或 F1)">快捷键</button>
+        <button id="openGameBtn" class="ghost-btn" type="button">打开游戏</button>
+        <button id="saveBtn" class="ghost-btn" type="button">保存到本地</button>
+        <button id="previewBtn" class="ghost-btn" type="button" title="写入 data/game-config.json，游戏页刷新即生效；不推送远程、版本号不变">发布到本地</button>
+        <button id="publishBtn" class="primary-btn" type="button" title="正式发布：版本号 +1 并推送 GitHub（先本地测试满意后再点）">同步 GitHub</button>
+      </div>
+    </header>
+    <div class="content" id="content"></div>
+  </main>
+</div>
+
+<div id="drawer" class="drawer" hidden>
+  <div class="drawer-mask" id="drawerMask"></div>
+  <div class="drawer-panel">
+    <div class="drawer-head">
+      <h2 id="drawerTitle">编辑</h2>
+      <button id="drawerClose" class="icon-btn" type="button">关闭</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+    <div class="drawer-foot">
+      <button id="drawerCancel" class="ghost-btn" type="button">取消</button>
+      <button id="drawerSave" class="primary-btn" type="button">保存修改</button>
+    </div>
+  </div>
+</div>
+
+<div id="confirmModal" class="modal" hidden>
+  <div class="modal-card">
+    <h3 id="confirmTitle">确认操作</h3>
+    <p id="confirmText"></p>
+    <div class="modal-actions">
+      <button id="confirmCancel" class="ghost-btn" type="button">取消</button>
+      <button id="confirmOk" class="danger-btn" type="button">确认</button>
+    </div>
+  </div>
+</div>
+
+<div id="shortcutModal" class="modal" hidden>
+  <div class="modal-card shortcut-modal">
+    <h3>键盘快捷键</h3>
+    <p>在输入框里编辑文字时，除 <kbd>Ctrl</kbd>+<kbd>S</kbd> 外的快捷键会自动让位给浏览器原生编辑操作。地图撤销记录最多保留 60 步，技能编辑器 50 步。</p>
+
+    <div class="sc-group">全局</div>
+    <div class="sc-grid">
+      <div><kbd>Ctrl</kbd> + <kbd>S</kbd></div><span>保存配置到本地，游戏刷新后生效</span>
+      <div><kbd>?</kbd> / <kbd>F1</kbd></div><span>打开或关闭本面板</span>
+      <div><kbd>Esc</kbd></div><span>关闭弹层；在地图上取消本次绘制或取消选中</span>
+    </div>
+
+    <div class="sc-group">地图编辑器 · 撤销与重做</div>
+    <div class="sc-grid">
+      <div><kbd>Ctrl</kbd> + <kbd>Z</kbd></div><span>撤销上一步地图编辑（Mac 用 <kbd>Cmd</kbd>）</span>
+      <div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Z</kbd></div><span>重做，等同 <kbd>Ctrl</kbd> + <kbd>Y</kbd></span>
+    </div>
+
+    <div class="sc-group">地图编辑器 · 工具切换</div>
+    <div class="sc-grid">
+      <div><kbd>V</kbd></div><span>选择工具（点击并拖动对象）</span>
+      <div><kbd>R</kbd> / <kbd>C</kbd></div><span>矩形 / 圆形障碍工具</span>
+      <div><kbd>1</kbd> / <kbd>2</kbd></div><span>出生点 1 / 出生点 2 工具</span>
+      <div><kbd>D</kbd> / <kbd>X</kbd></div><span>删除工具（点击画布上的障碍）</span>
+      <div><kbd>G</kbd></div><span>网格吸附开关，开启后绘制与拖动按 10px 对齐</span>
+      <div><kbd>M</kbd></div><span>对称轴开关：画一侧自动在对侧生成镜像障碍，移动 / 删除同步对侧</span>
+    </div>
+
+    <div class="sc-group">地图编辑器 · 选中对象后</div>
+    <div class="sc-grid">
+      <div><kbd>Delete</kbd> / <kbd>Backspace</kbd></div><span>删除选中障碍（有镜像配对时会一并删除）</span>
+      <div><kbd>Ctrl</kbd> + <kbd>D</kbd></div><span>复制选中障碍（右下偏移 24px；对称开启时同时生成镜像）</span>
+      <div><kbd>方向键</kbd></div><span>移动选中对象 1px</span>
+      <div><kbd>Shift</kbd> + <kbd>方向键</kbd></div><span>移动选中对象 10px</span>
+    </div>
+
+    <div class="sc-group">技能编辑器 · 节点操作</div>
+    <div class="sc-grid">
+      <div><kbd>Ctrl</kbd> + <kbd>Z</kbd></div><span>撤销上一步技能编辑（增删模块 / 移动 / 连线 / 改参数）</span>
+      <div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Z</kbd></div><span>重做，等同 <kbd>Ctrl</kbd> + <kbd>Y</kbd></span>
+      <div><kbd>Ctrl</kbd> + <kbd>C</kbd> / <kbd>Ctrl</kbd> + <kbd>V</kbd></div><span>复制选中模块 / 粘贴为新模块（发新 id、整体错开 28px）</span>
+      <div><kbd>Ctrl</kbd> + <kbd>D</kbd></div><span>就地复制选中模块，不占用剪贴板</span>
+      <div><kbd>Delete</kbd> / <kbd>Backspace</kbd></div><span>删除选中模块及其连线</span>
+    </div>
+
+    <div class="modal-actions" style="margin-top:18px">
+      <button id="shortcutClose" class="primary-btn" type="button">知道了</button>
+    </div>
+  </div>
+</div>
+
+<div id="toastWrap" class="toast-wrap"></div>
+<input type="file" id="importFile" accept=".json,application/json" hidden>
+
+<script src="game-data.js"></script>
+<script src="data/published-config.js"></script>
+<script src="skin-render.js"></script>
+<script src="ui-layout.js"></script>
+<!-- 模块化技能系统：pixelfx 特效目录与运行时、技能模块编译器、共用执行内核 -->
+<script src="data/pixelfx-catalog.js"></script>
+<script src="pixelfx-runtime.js"></script>
+<script src="motion-engine.js"></script>
+<script src="skill-modules.js"></script>
+<script src="skill-effects.js"></script>
+<script src="admin.js"></script>
+</body>
+</html>

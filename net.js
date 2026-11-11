@@ -558,6 +558,17 @@
 
   function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
+  /* 客户端预生成期望房间码（与服务端同字母表），用于 create 的 preferredCode，
+     让服务端有机会直接采用、省去一次随机碰撞重试。 */
+  function clientCodeAlphabet() { return 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; }
+  function genClientCode() {
+    var a = clientCodeAlphabet(), s = '', buf = new Uint8Array(8);
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(buf);
+    else for (var i = 0; i < 8; i++) buf[i] = Math.floor(Math.random() * 256);
+    for (var i = 0; i < 8; i++) s += a[buf[i] % a.length];
+    return s;
+  }
+
   /* 同域优先，失败回落线上服务；房间查询一律 no-store */
   async function roomCall(act, o) {
     o = o || {};
@@ -578,8 +589,8 @@
     throw new Error('房间服务连接失败：' + ((lastErr && lastErr.message) || '网络异常'));
   }
 
-  /* 房主：按 seats-1 各生成一条 offer → create → 轮询 poll 收齐全部 answers →
-     逐个 hostFinish(seat, answer)。兼容两种调用：
+  /* 房主：先建房间、立刻拿到 8 位码（不等 ICE 收集，码秒显），再后台逐座位收集
+     offer 并补传到服务端。兼容两种调用：
        createHostRoom(opts)              → 默认 1v1（旧 game.js 单参不回归）
        createHostRoom(mode, opts)       → '1v1' | '2v2' */
   Session.createHostRoom = async function (a, b) {
@@ -594,27 +605,37 @@
     s.roomRole = 'host'; s.roomMode = true;
     s._state('正在获取中继凭证…');
     await fetchTurn();
-    s._state('正在收集网络候选地址，请稍候…');
 
-    var offers = [null];             // offers[0] 恒为 null（房主自己不需要）
-    for (var seat = 1; seat < seats; seat++) {
-      var peer = s._makeHostPeer(seat);
-      var offer = await peer.pc.createOffer();
-      await peer.pc.setLocalDescription(offer);
-      await waitIce(peer.pc, effectiveTurn() ? 10000 : 3500);
-      var code = await pack({ t: 'offer', sdp: peer.pc.localDescription.sdp, ty: peer.pc.localDescription.type });
-      offers.push(code);
-    }
-
+    /* 1) 先建房间、立刻拿到 8 位码（不阻塞在 ICE 收集中），让房间码秒显 */
+    var preferred = genClientCode();
     var res = await roomCall('create', {
       method: 'POST',
-      body: { mode: mode, offers: offers, nick: opts.nick || '' },
+      body: { mode: mode, offers: null, nick: opts.nick || '', public: !!opts.public, preferredCode: preferred },
     });
     if (!res || res.error || !res.code) throw new Error((res && res.error) || '创建房间失败');
     var roomCode = res.code;
     s.roomCode = roomCode;
 
-    /* 后台轮询：全部座位的应答收齐后逐个应用；同时把成员状态回调出去 */
+    /* 2) 后台异步收集每个座位的 offer，逐个补传；不再阻塞码显示 */
+    (async function () {
+      try {
+        for (var seat = 1; seat < seats; seat++) {
+          if (s.closed) return;
+          var peer = s._makeHostPeer(seat);
+          var offer = await peer.pc.createOffer();
+          await peer.pc.setLocalDescription(offer);
+          s._state('正在收集网络候选地址（座位 ' + seat + '）…');
+          await waitIce(peer.pc, effectiveTurn() ? 10000 : 3500);
+          var code = await pack({ t: 'offer', sdp: peer.pc.localDescription.sdp, ty: peer.pc.localDescription.type });
+          await roomCall('offer', { method: 'POST', body: { code: roomCode, seat: seat, offer: code } });
+        }
+      } catch (e) {
+        // 收集失败不致命：已显示的码仍然有效，只是对应座位暂时连不上
+        console.warn('[p2p] offer 收集失败', e);
+      }
+    })();
+
+    /* 3) 后台轮询：全部座位的应答收齐后逐个应用；同时把成员状态回调出去 */
     (async function () {
       var notified = {};
       try {
@@ -671,7 +692,21 @@
     var mode = normalizeMode(look.mode);
     var seats = typeof look.seats === 'number' ? look.seats : seatsFromMode(mode);
     var mySeat = (typeof look.seat === 'number' && look.seat >= 1) ? look.seat : 1;
-    var made = await Session.createGuest(look.offer, Object.assign({}, opts, { roomMode: true }));
+    // 房主 offer 可能还在后台收集中：轮询 poll 直到本座位 offer 就绪（最多 15s）
+    var offer = look.offer;
+    if (!offer) {
+      var waited = 0;
+      while (waited < 15000) {
+        await delay(400);
+        waited += 400;
+        var st = await roomCall('poll', { query: '?code=' + encodeURIComponent(code) });
+        if (st.error) throw new Error(st.error);
+        var offersArr = Array.isArray(st.offers) ? st.offers : null;
+        if (offersArr && offersArr[mySeat]) { offer = offersArr[mySeat]; break; }
+      }
+      if (!offer) throw new Error('房间房主网络尚未就绪，请稍候重试');
+    }
+    var made = await Session.createGuest(offer, Object.assign({}, opts, { roomMode: true }));
     var s = made.session;
     s.roomCode = code;
     s.roomRole = 'guest';
@@ -700,11 +735,20 @@
     return made;
   };
 
+  /* 联机大厅：列公开房间（命中 ROOM_API_LIST，本地优先、回落线上）。
+     返回 { rooms:[{code,mode,seats,host,joined,ready,ts}], error? } */
+  async function listRooms() {
+    var res = await roomCall('list', { method: 'GET' });
+    if (!res || res.error) return { rooms: [], error: (res && res.error) || '大厅服务无响应' };
+    return { rooms: Array.isArray(res.rooms) ? res.rooms : [] };
+  }
+
   var API = {
     Session: Session,
     pack: pack,
     unpack: unpack,
     normalizeRoomCode: normalizeRoomCode,
+    listRooms: listRooms,
     // 顶层便捷引用：契约列出的导出名
     createHostRoom: Session.createHostRoom,
     joinRoom: Session.joinRoom,

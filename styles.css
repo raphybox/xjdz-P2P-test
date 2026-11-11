@@ -481,6 +481,36 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 }
 .room-code-input::placeholder { letter-spacing: 2px; font-size: 15px; color: var(--text-faint); font-weight: 400; }
 
+/* 公开到大厅开关（默认不公开） */
+.p2p-public-toggle {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin-bottom: 12px; font-size: 12.5px; color: var(--text-dim);
+  line-height: 1.5; cursor: pointer; user-select: none;
+}
+.p2p-public-toggle input { margin-top: 2px; flex: 0 0 auto; }
+
+/* 联机大厅列表 */
+.lobby-list { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; margin-bottom: 12px; }
+.lobby-row {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; text-align: left; cursor: pointer;
+  padding: 11px 13px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--text);
+  font-family: var(--font); font-size: 13px;
+}
+.lobby-row:hover { border-color: #42536c; background: #18202e; }
+.lobby-row .lr-mode {
+  flex: 0 0 auto; font-weight: 700; font-size: 11px; letter-spacing: .5px;
+  padding: 2px 7px; border-radius: 6px; color: var(--accent-2); background: rgba(217,164,65,.12);
+}
+.lobby-row .lr-host { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lobby-row .lr-seats { flex: 0 0 auto; color: var(--text-dim); font-size: 12px; }
+.lobby-row .lr-code { flex: 0 0 auto; font-weight: 700; letter-spacing: 1px; font-family: var(--font); }
+.lobby-row .lr-join {
+  flex: 0 0 auto; font-size: 12px; font-weight: 600; color: #7fce9a;
+  padding: 3px 10px; border-radius: 7px; background: rgba(47,158,99,.14);
+}
+
 /* ---------- 联机房间页面 ---------- */
 .room-shell {
   max-width: 860px; margin: 0 auto; padding: 22px 24px 28px;
@@ -605,6 +635,7 @@ body.preview-mode .arena-wrap { height: clamp(360px, 60vh, 720px); }
 /* ---------- 首页 · 果实库 ---------- */
 .fruit-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px;
+  align-content: start;
 }
 .fruit-card {
   position: relative; text-align: center; color: var(--text);
@@ -633,6 +664,30 @@ body.preview-mode .arena-wrap { height: clamp(360px, 60vh, 720px); }
   border: 1px solid var(--tier-color, var(--line)); color: var(--tier-color, var(--text-dim));
 }
 .fc-count { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+/* 果实介绍：卡片内直接展示，最多 3 行；完整文本仍在 title 提示里 */
+.fc-intro {
+  width: 100%; text-align: left; font-size: 11px; line-height: 1.5; color: var(--text-dim);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* ---------- 首页 · 果实库搜索与滚动（果实变多后仍可用） ---------- */
+.fruit-tools { display: flex; align-items: center; gap: 10px; margin: 6px 0 12px; }
+.fruit-search {
+  flex: 1; min-width: 0; padding: 8px 12px; font-size: 12.5px; font-family: inherit;
+  color: var(--text); background: #0d1522; border: 1px solid var(--line);
+  border-radius: 8px; outline: none; transition: border-color .14s, box-shadow .14s;
+}
+.fruit-search::placeholder { color: var(--text-faint); }
+.fruit-search:focus { border-color: #4b6f92; box-shadow: 0 0 0 2px #4b6f9233; }
+.fruit-count { flex: none; font-size: 11.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.fruit-scroll {
+  max-height: 46vh; overflow-y: auto; overscroll-behavior: contain;
+  padding: 2px 4px 2px 2px;
+  scrollbar-width: thin; scrollbar-color: #3a4a62 transparent;
+}
+.fruit-scroll::-webkit-scrollbar { width: 8px; }
+.fruit-scroll::-webkit-scrollbar-thumb { background: #33415a; border-radius: 5px; }
+.fruit-scroll::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------- 首页 · 外观题材与外观卡 ---------- */
 .skin-themes { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 12px; }
@@ -665,6 +720,61 @@ body.preview-mode .arena-wrap { height: clamp(360px, 60vh, 720px); }
   font-size: 12.5px; font-weight: 700; color: var(--text);
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* ---------- 金币徽标 / 蛋商店 ---------- */
+.coin-badge {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px;
+  border: 1px solid #7a5a1e; background: linear-gradient(160deg, #2a2110, #191510);
+  color: #ffd479; font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.coin-icon {
+  display: inline-block; width: 13px; height: 13px; border-radius: 50%; flex: none;
+  background: radial-gradient(circle at 32% 30%, #fff3b0, #e8a92c 62%, #8a5a10);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.45), 0 0 6px rgba(255,190,60,.35);
+}
+.shop-modal-card { width: min(780px, 100%); max-height: 86vh; display: flex; flex-direction: column; }
+.shop-draw-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 9px 0 12px; border-bottom: 1px solid var(--line);
+}
+.shop-coin-line { font-size: 13px; color: var(--text-dim); }
+.shop-coin-line strong { color: #ffd479; font-size: 17px; margin-left: 6px; font-variant-numeric: tabular-nums; }
+.shop-hint { font-size: 11.5px; color: var(--text-faint); }
+.shop-pools { overflow-y: auto; min-height: 0; padding: 4px 2px 8px; }
+.shop-section-title {
+  font-size: 12px; font-weight: 700; color: var(--text-dim);
+  margin: 12px 0 8px; padding-left: 8px; border-left: 3px solid var(--accent);
+}
+.shop-pool { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.shop-pool-item {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 8px;
+  border-radius: 10px; border: 1px solid var(--line);
+  background: linear-gradient(160deg, var(--panel-2), var(--panel));
+}
+.shop-pool-item.tier-rare { border-color: #4c6ea8; }
+.shop-pool-item.tier-precious { border-color: #9a6fc0; }
+.shop-egg-icon {
+  width: 54px; height: 54px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 21px; font-weight: 700; color: #dbe6f7; overflow: hidden;
+  background: radial-gradient(circle at 35% 28%, #3d4a61, #1b2231); border: 1px solid var(--line);
+}
+.shop-egg-icon img { width: 100%; height: 100%; object-fit: contain; }
+.shop-egg-name { font-size: 12.5px; font-weight: 700; color: var(--text); text-align: center; }
+.shop-egg-tier { font-size: 10.5px; color: var(--text-faint); }
+.shop-egg-price {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; color: #ffd479; font-variant-numeric: tabular-nums;
+}
+.shop-egg-btn { width: 100%; padding: 6px 4px; font-size: 11.5px; }
+.shop-egg-btn:disabled { opacity: .45; cursor: not-allowed; }
+.shop-result {
+  margin-top: 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid #3f6a52;
+  background: #102019; color: #b8e6cd; font-size: 12.5px; line-height: 1.7;
+}
+.shop-result.bad { border-color: #7a4149; background: #24171b; color: #f0b4b4; }
+.shop-foot { display: flex; justify-content: flex-end; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.shop-lock-hint { grid-column: 1 / -1; padding-top: 4px; font-size: 11px; }
+@media (max-width: 680px) { .shop-pool { grid-template-columns: repeat(2, 1fr); } }
 
 /* ---------- 弹层 · 果实孵化 ---------- */
 #hatchModal .modal-card { width: min(820px, 100%); }

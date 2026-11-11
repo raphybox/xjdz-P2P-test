@@ -25,6 +25,12 @@ function fakeState() {
       async get(k) { const v = m.get(k); return v == null ? undefined : JSON.parse(JSON.stringify(v)); },
       async put(k, v) { m.set(k, JSON.parse(JSON.stringify(v))); },
       async delete(k) { m.delete(k); },
+      async list(opts) {
+        const pre = (opts && opts.prefix) || '';
+        const out = new Map();
+        for (const [k, v] of m) if (!pre || k.startsWith(pre)) out.set(k, JSON.parse(JSON.stringify(v)));
+        return out;
+      },
     },
   };
 }
@@ -64,8 +70,17 @@ async function main() {
   ok('房间已落盘', hub.state._m.has('room:' + cc.code));
   ok('响应禁止缓存', /no-store/.test(created.headers.get('Cache-Control') || ''));
   ok('响应允许跨域', created.headers.get('Access-Control-Allow-Origin') === '*');
-  const bad = await hub.fetch(req('create', 'POST', { offer: '' }));
-  ok('空 offer 被拒 400', bad.status === 400, bad.status);
+  // 重构后：创建不再要求先有 offer（码需秒显），offers 为空也允许，之后逐个补传
+  const empty = await (await hub.fetch(req('create', 'POST', { mode: '1v1', offers: [null, null], nick: '空offer房主' }))).json();
+  ok('无 offer 也能创建（码秒出）', mod.isValidCode(empty.code), empty);
+  const emptyRec = hub.state._m.get('room:' + empty.code);
+  ok('空 offer 房间 offers 全空', emptyRec && emptyRec.offers[0] === null && emptyRec.offers[1] === null, emptyRec && emptyRec.offers);
+  ok('public 默认 false', emptyRec && emptyRec.public === false, emptyRec && emptyRec.public);
+  // preferredCode：房主自带期望码，服务端应直接采用；撞码则回退随机
+  const pref = await (await hub.fetch(req('create', 'POST', { mode: '1v1', offers: [null, 'z.PREF'], preferredCode: 'QWERTYAB', nick: '期望码房主' }))).json();
+  ok('preferredCode 被采用', pref.code === 'QWERTYAB', pref);
+  const prefDup = await (await hub.fetch(req('create', 'POST', { mode: '1v1', offers: [null, 'z.PREF2'], preferredCode: 'QWERTYAB', nick: '撞码房主' }))).json();
+  ok('preferredCode 撞码时回退随机码', prefDup.code && prefDup.code !== 'QWERTYAB' && mod.isValidCode(prefDup.code), prefDup);
   const def = await (await hub.fetch(req('create', 'POST', { offers: [null, 'z.DEFOFFER'], nick: '默认房主' }))).json();
   ok('不传 mode 默认 1v1', def.mode === '1v1' && def.seats === 2, def);
 
@@ -152,7 +167,31 @@ async function main() {
   const dupA2 = await hub3.fetch(req('answer', 'POST', { code: cr2.code, seat: 2, answer: 'r.DUPANSXX' }));
   ok('2v2 同 seat 重复应答 409', dupA2.status === 409, dupA2.status);
 
-  console.log('\n[8] 其它');
+  console.log('\n[8] 联机大厅 / 公开 / offer 补传 / lookup 等待 / 满员过滤');
+  const hubL = new mod.RoomHub(fakeState());
+  const priv = await (await hubL.fetch(req('create', 'POST', { mode: '1v1', offers: [null, 'z.PRIV'], nick: '私有房主' }))).json();
+  const pub = await (await hubL.fetch(req('create', 'POST', { mode: '1v1', offers: [null, null], public: true, nick: '公开房主' }))).json();
+  ok('私有房 public=false', hubL.state._m.get('room:' + priv.code).public === false, priv);
+  ok('公开房 public=true', hubL.state._m.get('room:' + pub.code).public === true, pub);
+  // 专门测 waiting/补传的房间（避免占用 pub 座位影响 list 断言）
+  const pubWait = await (await hubL.fetch(req('create', 'POST', { mode: '1v1', offers: [null, null], public: true, nick: '等待房主' }))).json();
+  const wl = await (await hubL.fetch(req('lookup?code=' + pubWait.code, 'GET'))).json();
+  ok('offer 未就绪时 lookup 返回 waiting', wl.waiting === true && wl.offer === null, wl);
+  const up = await hubL.fetch(req('offer', 'POST', { code: pubWait.code, seat: 1, offer: 'z.PUBOFFER' }));
+  ok('offer 补传成功', (await up.json()).ok === true);
+  // 客机不应二次 lookup（会再占座），而应轮询 poll 等本座位 offer 就绪
+  const polled = await (await hubL.fetch(req('poll?code=' + pubWait.code, 'GET'))).json();
+  ok('补传后 poll 能看到该座位 offer', polled.offers[1] === 'z.PUBOFFER', polled.offers);
+  // list：仅含公开且未满员房间，且不返回 SDP
+  const lst = await (await hubL.fetch(req('list', 'GET'))).json();
+  ok('list 仅含未占座的公开房（pub，不含已满的 pubWait）', lst.rooms.length === 1 && lst.rooms[0].code === pub.code, lst.rooms);
+  ok('list 不返回 offer/SDP', lst.rooms[0].offer === undefined && lst.rooms[0].answers === undefined, lst.rooms[0]);
+  ok('list 含 host/joined/seats', lst.rooms[0].host === '公开房主' && lst.rooms[0].seats === 2 && lst.rooms[0].joined === 1, lst.rooms[0]);
+  // 满员公开房不显示：pubWait 已在 wl 占 seat1 → 满员
+  const lst2 = await (await hubL.fetch(req('list', 'GET'))).json();
+  ok('满员公开房（pubWait）不出现在 list', lst2.rooms.every(r => r.code !== pubWait.code) && lst2.rooms.some(r => r.code === pub.code), lst2.rooms);
+
+  console.log('\n[9] 其它');
   ok('OPTIONS 预检 204', (await hub.fetch(req('create', 'OPTIONS'))).status === 204);
   ok('未知动作 404', (await hub.fetch(req('nope', 'GET'))).status === 404);
 

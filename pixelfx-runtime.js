@@ -50,6 +50,18 @@
     if (o.seed == null) o.seed = 1;
     var fx = C.createFx(mod, o);
     var dead = false, stopped = false;
+    /* 把动画快进到素材时间轴的第 t 秒。
+       特效内部多用「每帧累加 dt」推进状态，一次塞 3~10 秒的大 dt 会让粒子 / 缓动
+       直接跳到终态甚至溢出，所以按 1/30 秒小步推进（seek 只在生成 / 重开时执行一次）。 */
+    function fastForward(t) {
+      var step = 1 / 30, left = Math.max(0, num(t, 0)), guard = 0;
+      while (left > 0.0001 && guard++ < 1500) {
+        var d = Math.min(step, left);
+        fx.update(d);
+        inst.t += d;
+        left -= d;
+      }
+    }
     var inst = {
       id: id, meta: meta, options: o,
       t: 0,
@@ -82,12 +94,22 @@
       },
       done: function () { return dead || stopped || fx.done(); },
       stop: function () { stopped = true; fx.stop(); },
-      /** 循环播放：从第一帧重开一轮（同一个画布 / 同一份参数，不重新加载模块）
+      /** 循环播放：重开一轮（同一个画布 / 同一份参数，不重新加载模块）。
+       *  from 为「动画起始秒」时重开后直接快进到该处，实现 3→6 秒区间循环。
        *  被 kill / stop 过的不复活，返回 false 让宿主照常收尾。 */
-      restart: function () {
+      restart: function (from) {
         if (dead || stopped) return false;
         fx = C.createFx(mod, o);
         inst.t = 0;
+        fastForward(num(from, 0));
+        return true;
+      },
+      /** 跳到素材时间轴的第 t 秒（用于「不从第一帧开始播放」） */
+      seek: function (t) {
+        if (dead || stopped) return false;
+        fx = C.createFx(mod, o);
+        inst.t = 0;
+        fastForward(t);
         return true;
       },
       kill: function () { dead = true; },
@@ -103,8 +125,17 @@
     if (!meta || !canvas) return function () { };
     var cx = canvas.getContext('2d');
     var v = view || {};
+    var clipFrom = Math.max(0, num(v.clipStart, 0));
+    var clipTo = num(v.clipEnd, 0);
+    if (clipTo > 0 && clipTo <= clipFrom) clipTo = clipFrom + 0.05;
+    var hasLife = num(v.life, 0) > 0;
+    var tailMode = v.tailMode || 'freeze';
+    var frozen = false;
     function start() {
-      spawn(id, opts).then(function (i) { inst = i; }).catch(function () { inst = null; });
+      spawn(id, opts).then(function (i) {
+        inst = i; frozen = false;
+        if (clipFrom > 0 && inst.seek) inst.seek(clipFrom);
+      }).catch(function () { inst = null; });
     }
     start();
     function tick(now) {
@@ -112,13 +143,30 @@
       var dt = Math.min(0.05, (now - last) / 1000); last = now;
       cx.clearRect(0, 0, canvas.width, canvas.height);
       if (inst) {
-        inst.update(dt);
-        if (inst.done()) { inst = null; start(); }
-        else inst.render(cx, canvas.width / 2, canvas.height / 2, {
-          scale: Math.min(canvas.width / meta.size[0], canvas.height / meta.size[1]) * 0.9 * num(v.zoom, 1),
-          alpha: num(v.alpha, 1), additive: !!v.additive, rotation: num(v.rotation, 0),
-          light: num(v.light, 1)
-        });
+        if (!frozen) inst.update(dt);
+        var endT = clipTo > 0 ? clipTo : inst.cycle;
+        if (!frozen && inst.t >= endT) {
+          if (hasLife) {
+            if (tailMode === 'freeze') { inst.t = endT; frozen = true; }
+            else if (tailMode === 'loop' && inst.restart) inst.restart(Math.max(clipFrom, endT - 0.1));
+            else if (inst.restart) inst.restart(clipFrom);
+          } else if (inst.restart) inst.restart(clipFrom);
+        }
+        // 填了存在时长时由 tailMode 决定收尾，不因素材自身 done() 反复重启
+        if (!hasLife && inst.done()) { inst = null; start(); }
+        else {
+          try {
+            inst.render(cx, canvas.width / 2, canvas.height / 2, {
+              scale: Math.min(canvas.width / meta.size[0], canvas.height / meta.size[1]) * 0.9 * num(v.zoom, 1),
+              alpha: num(v.alpha, 1), additive: !!v.additive, rotation: num(v.rotation, 0),
+              light: num(v.light, 1)
+            });
+          } catch (e) {
+            // 单个素材画不出来时只清掉这份预览，别让 RAF 链断掉（否则预览/试放整体冻结）
+            if (inst.kill) inst.kill();
+            inst = null;
+          }
+        }
       }
       requestAnimationFrame(tick);
     }

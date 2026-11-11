@@ -31,8 +31,12 @@
   var ATTACH = [
     ['projectile', '跟随投射物'], ['marble', '跟随弹珠'], ['launch', '发射瞬间'], ['impact', '命中瞬间'],
     ['wall', '撞墙瞬间'], ['wallFace', '贴合墙面(碰撞接触面)'], ['expire', '消失瞬间'], ['caster', '施法者身上'],
-    ['enemy', '敌方弹珠身上'], ['marbleCenter', '弹珠圆心（居中挂载）']
+    ['enemy', '敌方弹珠身上'], ['marbleCenter', '弹珠圆心（居中挂载）'],
+    ['host', '跟随所属载体（连线自动识别）']
   ];
+  /* host：特效按连线归属自动挂到「投射物 / 区域残留 / 光环」实体上。
+     连线到区域残留时再显示「跟随投射物」会让人以为特效挂在弹体上，
+     实际上运行时找不到投射物就会落空 —— 见 compile 的 fxByHostNode。 */
   /* marbleCenter：素材以自身 meta.origin 为锚点绘制，运行时会反向补偿 origin，
      让特效包围盒中心真正落在弹珠圆心上（普通「跟随弹珠」不做这层补偿）。 */
   /* 多个敌人时的选靶规则：仅在挂载位置=敌方弹珠身上 时生效 */
@@ -312,13 +316,18 @@
         sel('enemyPick', '敌人选择', 'nearest', ENEMY_PICK, '挂载位置=敌方弹珠身上 时生效：最近/随机只挂一个，全部则每名敌人各挂一份'),
         n('scale', '尺寸倍率', 1, 0.1, 8, 0.05),
         n('fps', '播放帧率倍率', 1, 0.1, 4, 0.05, '相对特效原始帧率'),
+        n('clipStart', '动画起始(秒)', 0, 0, 30, 0.1, '相对素材自身动画时间轴：填 3 = 跳过前 3 秒，直接从素材第 3 秒的画面开始播。配合「动画结束」可只播中间一段（例如 3→6 秒）。0 = 从第一帧开始；属性面板会显示当前素材一轮时长'),
+        n('clipEnd', '动画结束(秒)', 0, 0, 30, 0.1, '播到素材第几秒为止；0 = 播到素材末尾（一轮时长由所选特效决定）。勾选「循环播放」时在「动画起始 → 动画结束」之间循环，而不是每次回到第一帧'),
         n('alpha', '不透明度', 1, 0, 1, 0.05),
         n('light', '发光强度', 1, 0, 3, 0.05),
         n('rotation', '旋转(度)', 0, -180, 180, 1),
         n('offsetX', '横向偏移', 0, -200, 200, 1),
         n('offsetY', '纵向偏移', 0, -200, 200, 1),
-        b('loop', '循环播放', true, '勾选 = 一轮播完（一轮时长 = 特效自身时长 ÷ 播放帧率倍率）立刻回到第一帧重播，按同一节奏无限重复；取消 = 只播一次，播完就消失。循环本身不会自己停，收尾看下一项「存在时长」。注：填了「存在时长」时，即使这里不勾也会自动循环补满到该时长'),
-        n('life', '存在时长(秒)', 0, 0, 20, 0.5, '填了数值 = 这份特效存在这么久，动画不够长会自动循环补满（例：旋风斩自身 0.8 秒一轮，填 10 秒就会连续转 10 秒）。0 = 自动：挂在敌方弹珠身上且同组有「标记·印记」时，这一份特效的寿命就等于印记的持续秒数（到点自己消失，重复施加不会长生不老；敌人选择=最近时，印记被消耗 / 引爆还会当场回收）；没有印记时兜底 4 秒后回收。挂在弹珠 / 施法者身上的没有印记就一直循环到宿主消失或回合结束；不跟随实体的瞬时特效（发射 / 命中 / 撞墙瞬间）兜底 3.2 秒。填数值时到点强制销毁，优先于以上所有兜底'),
+        b('loop', '循环播放', true, '仅在「存在时长 = 0」时生效：勾选 = 一轮播完立刻回到第一帧重播；取消 = 只播一次，播完就消失。填了存在时长时，播完一轮后的行为由下面「动画播完后」决定，本项不再让动画整轮重播'),
+        n('life', '存在时长(秒)', 0, 0, 20, 0.5, '填了数值 = 这份特效一定存在这么久：动画播完一轮（或「动画起始→结束」区间）后，按下一项「动画播完后」保持画面直到时长结束，不会提前消失。0 = 自动：挂在敌方弹珠身上且同组有「标记·印记」时，这一份特效的寿命就等于印记的持续秒数（到点自己消失）；没有印记时兜底 4 秒后回收；不跟随实体的瞬时机效兜底 3.2 秒。填数值时到点强制销毁，优先于以上所有兜底'),
+        sel('tailMode', '动画播完后', 'freeze', [
+          ['freeze', '定格最后一帧'], ['loop', '循环最后 0.1 秒'], ['restart', '整轮从头重播']
+        ], '仅在填了「存在时长」时生效：动画比存在时长短时如何撑满剩余时间。定格 = 停在最后一帧不动（默认）；循环最后 0.1 秒 = 反复播放末尾一小段，画面有轻微变化；整轮重播 = 旧的「自动循环补满」行为'),
         b('stackReplace', '同类特效覆盖', true, '勾选=同一目标上重复触发时先销毁旧实例、只保留最新一份；取消=每次触发都新留一份。注：挂在敌方身上且同组有「标记·印记」时始终只保留一份（一份印记配一份表现）'),
         b('additive', '叠加发光', false),
         b('flipX', '水平镜像', false),
@@ -910,14 +919,27 @@
         if (f.attach === 'wallFace') f._wallDuration = wallHazard.wallDuration;
       });
     });
-    var projectileFx = [], wallFx = [];
+    var projectileFx = [], wallFx = [], fxByHostNode = {};
     EVENT_KEYS.forEach(function (ev) {
       events[ev].fx.forEach(function (f) {
-        if ((f.attach || 'projectile') === 'projectile' && projectileFx.indexOf(f) < 0) projectileFx.push(f);
+        var hid = f._hostId || '', ht = f._hostType || '';
+        /* 特效按「连线归属」登记到载体节点名下：区域 / 光环 / 指向性也能拥有自己的外观，
+           运行时创建实体时据此把特效挂上去，而不是一律当成投射物皮肤。 */
+        if (hid && (ht === 'projectile' || ht === 'zone' || ht === 'aura' || ht === 'targeted')) {
+          if (!fxByHostNode[hid]) fxByHostNode[hid] = [];
+          if (fxByHostNode[hid].indexOf(f) < 0) fxByHostNode[hid].push(f);
+        }
+        /* 投射物皮肤只认「归属投射物」或「技能级公共」的特效。
+           以前只看 attach，导致连到区域残留的特效（attach 默认 projectile）被误收进
+           projectileFx：区域自己拿不到特效，只剩「区域颜色」纯色圆。 */
+        var at = f.attach || 'projectile';
+        if ((at === 'projectile' || at === 'host') &&
+            (!hid || ht === 'projectile') && projectileFx.indexOf(f) < 0) projectileFx.push(f);
         if (f.attach === 'wallFace' && wallFx.indexOf(f) < 0) wallFx.push(f);
       });
     });
-    return { events: events, projectileFx: projectileFx, wallFx: wallFx, wallHazard: wallHazard };
+    return { events: events, projectileFx: projectileFx, wallFx: wallFx,
+      wallHazard: wallHazard, fxByHostNode: fxByHostNode };
   }
   /** 沿入边向上游按层回溯，找到距离最近的载体节点；找不到返回 ''（技能级公共）。
    *  同层多个载体时取连线顺序里靠后的那个，行为稳定可预期。 */
@@ -1294,6 +1316,8 @@
       // 运行时反查：这个节点属于哪个载体、自己是哪张节点（光环 / 区域实体据此取专属结算组）
       normalized._nodeId = x.id;
       normalized._hostId = ownerOf[x.id] || '';
+      var ownN = normalized._hostId && byId[normalized._hostId];
+      normalized._hostType = ownN ? ownN.type : '';
       /* 伤害节点带上编译期定死的「命中判定」与「伤害对象」：
          运行时按这两个字段决定「这次命中算不算数」「打谁」，两端口径完全一致 */
       if (x.type === 'damage') {
@@ -1391,6 +1415,7 @@
       sid: (skill && skill.id) || '',
       graph: g, nodes: nodes, liveIds: seen, present: present,
       projectileFx: groups.projectileFx, wallFx: groups.wallFx, wallHazard: groups.wallHazard,
+      fxByHostNode: groups.fxByHostNode,
       sources: multi.source, elements: events.onHit.elements, fx: events.onHit.fx,
       particles: events.onHit.particles, damage: events.onHit.damage, impact: events.onHit.impact,
       stats: single.stats, projectile: single.projectile, targeted: single.targeted,

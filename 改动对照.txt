@@ -1,0 +1,20 @@
+方案 A · admin.html 改动对照
+================================================================
+改动类型：仅新增 1 行，无删除、无修改、无属性变更
+新增位置：<script src="admin.js"></script> 之后
+新增内容：<script src="y3/embed.js"></script>
+
+说明：样式、页签按钮、iframe 面板全部由 y3/embed.js 在运行时注入；
+      admin.js / admin.css / 任何存档 key 均未改动。
+
+完整差异：
+--- admin.html（原）
++++ admin.html（方案A）
+@@ -153,4 +153,5 @@
+ <script src="skill-effects.js"></script>
+ <script src="admin.js"></script>
++<script src="y3/embed.js"></script>
+ </body>
+ </html>
+
+原始行数：156    改动后行数：157    净增：1 行

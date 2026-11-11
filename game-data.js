@@ -21,6 +21,19 @@ window.WOWPINBALL_DEFAULT = {
   },
   "version": "",
   "versionSeq": 0,
+  /* 商店与经济：6 种蛋（果实 / 外观 × 普通 / 稀有 / 珍稀）价格、初始金币、
+     对局胜平负奖励、初始解锁外观数、抽到重复外观的返还比例。
+     后台「数值平衡 → 商店与经济」可直接改，静态托管读 published-config.js。 */
+  "shop": {
+    "coinsInit": 300,
+    "rewards": { "win": 120, "draw": 60, "lose": 30 },
+    "initialSkins": 3,
+    "duplicateRefund": 0.5,
+    "prices": {
+      "fruit": { "normal": 60, "rare": 150, "precious": 360 },
+      "skin": { "normal": 80, "rare": 200, "precious": 480 }
+    }
+  },
   "config": {
     "arenaW": 900,
     "arenaH": 400,

@@ -402,6 +402,16 @@
   /* ---------------- pixelfx 实例 ---------------- */
   function fxOpts(node, extra) {
     var o = Object.assign({}, node.fxOptions || {});
+    /* 旧存档 / 直接导入的配置可能带 0：目录里 min=0 的尺寸、种子参数
+       送进素材核心会除零或生成异常（表现为触发特效后整个渲染循环停住）。
+       统一夹到 >=1，后台属性面板也用同一口径。 */
+    var PF = root.PixelFX;
+    var meta = PF && PF.get && PF.get(node.effect);
+    if (meta && meta.fields) meta.fields.forEach(function (f) {
+      if (f.type !== 'number' || Number(f.min) !== 0) return;
+      var v = Number(o[f.key]);
+      if (!isFinite(v) || v <= 0) o[f.key] = 1;
+    });
     if (node.seed == null) o.seed = 1;
     Object.assign(o, extra || {});
     return o;
@@ -471,8 +481,16 @@
     }
     var wallRot = onWall ? wallFaceRotation(onWall) : null;
     return window.PixelFX.spawn(f.effect, fxOpts(f, extra)).then(function (inst) {
+      /* 动画播放区间（相对素材自身时间轴，单位秒）：
+         clipStart=3 / clipEnd=6 → 跳过前 3 秒、只播 3→6 秒这一段。 */
+      var cFrom = Math.max(0, Number(f.clipStart) || 0);
+      var cTo = Math.max(0, Number(f.clipEnd) || 0);
+      if (cTo > 0 && cTo <= cFrom) cTo = cFrom + 0.05;   // 结束必须晚于起始
+      if (cFrom > 0 && inst.seek) inst.seek(cFrom);
       var q = {
         inst: inst, cfg: f, x: px, y: py, centerAlign: centerAlign,
+        clipStart: cFrom, clipEnd: cTo,
+        tailMode: f.tailMode || 'freeze', frozen: false,
         rot: wallRot == null ? rot : wallRot, follow: follow,
         wallFace: !!onWall, wallRot: wallRot, wall: onWall, age: 0,
         /* 归属：施法者实体（有 side），持续伤害区（game.js）据此判断打谁 */
@@ -545,25 +563,45 @@
     }
     return list;
   }
-  /** 这份特效该不该循环播：
-   *   · 勾了「循环播放」→ 循环，直到被回收；
-   *   · 填了「存在时长」→ 同样循环：特效自身动画常常比填的时长短，
-   *     不补满就会出现「存在时长 10 秒，播 0.8 秒就没了」；
-   *  两者都不满足 = 只播一次。 */
+  /** 这份特效是否要一直留在场上（由存在时长 / 印记 / 宿主决定何时回收）。
+   *  注意：这只是「不主动播完就删」的标记；填了存在时长后，动画播完一轮
+   *  具体怎么撑满剩余时间由 stepFx 的 tailMode 决定，不再默认整轮重播。 */
   function isLooping(q) {
     var f = (q && q.cfg) || {};
     return !!f.loop || Number(f.life) > 0;
   }
-  /** 循环播放：一轮播完立刻从第一帧重开，按特效自身时长无限重复。
-   *  「存在时长」/ 印记 / 宿主存活负责收尾，这里只负责让动画真的转起来。 */
+  var TAIL_SPAN = 0.1;   // 「循环最后 0.1 秒」的片段长度（素材秒）
+  /** 推进动画。填了「存在时长」时，一轮播完后按 tailMode 撑满剩余时长：
+   *   freeze  定格最后一帧（不再推进 fx，只继续累加 age 供宿主按时长回收）
+   *   loop    反复播放末尾 0.1 秒（重开并快进到末尾前 0.1 秒）
+   *   restart 整轮从头重播（旧行为，显式选择才走）
+   *  没填存在时长时沿用「循环播放」：勾了就整轮重开，没勾由 drawFx 播完回收。 */
   function stepFx(list, dt) {
     list.forEach(function (q) {
       if (!q || !q.inst) return;
       q.age = (q.age || 0) + dt;
+      if (q.frozen) return;                 // 定格中：画面不变，但 age 继续走到存在时长
       var inst = q.inst;
       inst.update(dt * (q.cfg.fps || 1));
-      if (isLooping(q) && !inst.nativeLoop && inst.restart && inst.t >= (inst.cycle || 0)) {
-        if (inst.restart()) q.cycles = (q.cycles || 0) + 1;
+      var endT = q.clipEnd > 0 ? q.clipEnd : (inst.cycle || 0);
+      if (inst.t < endT) return;
+
+      if (Number(q.cfg.life) > 0) {
+        var mode = q.tailMode || 'freeze';
+        if (mode === 'freeze') {
+          // fx 内部状态此刻已是末尾那一帧，停在这里即可
+          inst.t = endT;
+          q.frozen = true;
+        } else if (mode === 'loop') {
+          if (inst.restart) inst.restart(Math.max(q.clipStart || 0, endT - TAIL_SPAN));
+        } else if (inst.restart) {
+          inst.restart(q.clipStart || 0);
+        }
+        return;
+      }
+      // 无存在时长：循环播放由 loop 决定；nativeLoop 素材未设 clipEnd 时让它自己循环
+      if (isLooping(q) && inst.restart && (!inst.nativeLoop || q.clipEnd > 0)) {
+        if (inst.restart(q.clipStart || 0)) q.cycles = (q.cycles || 0) + 1;
       }
     });
   }
@@ -689,13 +727,22 @@
         rx += sc * (mt.origin[0] - mt.size[0] / 2);
         ry += sc * (mt.origin[1] - mt.size[1] / 2);
       }
-      q.inst.render(ctx, rx, ry, {
-        scale: f.scale, alpha: f.alpha, light: f.light, additive: f.additive,
-        flipX: f.flipX, rotation: rotation
-      });
+      try {
+        q.inst.render(ctx, rx, ry, {
+          scale: f.scale, alpha: f.alpha, light: f.light, additive: f.additive,
+          flipX: f.flipX, rotation: rotation
+        });
+      } catch (e) {
+        /* 单个素材渲染异常不能中断整条试放 / 对局的 RAF 循环，
+           否则画面会直接冻结（用户感知为「卡死」）。出错的这一份直接回收。 */
+        if (q.inst && q.inst.kill) q.inst.kill();
+        list.splice(i, 1);
+        continue;
+      }
       // 墙面残留在持续时间内保持（即便特效本身不循环），到期由宿主按 wallDuration 回收。
       // 只播一次（既没勾循环、也没填存在时长）：一轮播完就回收
-      if (!isLooping(q) && !q.wallFace && q.inst.t >= (q.inst.cycle || 0)) { q.inst.kill(); list.splice(i, 1); }
+      var endT = q.clipEnd > 0 ? q.clipEnd : (q.inst.cycle || 0);
+      if (!isLooping(q) && !q.wallFace && q.inst.t >= endT) { q.inst.kill(); list.splice(i, 1); }
     }
   }
 

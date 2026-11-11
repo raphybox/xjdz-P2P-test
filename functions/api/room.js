@@ -113,6 +113,8 @@ export class RoomHub {
     if (request.method === 'OPTIONS') return noContent();
     try {
       if (act === 'create' && request.method === 'POST') return await this.create(request);
+      if (act === 'list' && request.method === 'GET') return await this.list();
+      if (act === 'offer' && request.method === 'POST') return await this.offer(request);
       if (act === 'lookup' && request.method === 'GET') return await this.lookup(url);
       if (act === 'answer' && request.method === 'POST') return await this.answer(request);
       if (act === 'poll' && request.method === 'GET') return await this.poll(url);
@@ -155,12 +157,17 @@ export class RoomHub {
     if (!b) return json({ error: 'invalid_offer' }, 400);
     const mode = normalizeMode(b.mode);
     const seats = seatsFromMode(mode);
-    const offers = buildOffers(b, seats);
-    if (!offers) return json({ error: 'invalid_offer' }, 400);
+    // 房主可能还没开始收集 ICE（邀请码需要先秒显），允许 offers 为空；之后再逐个补传
+    let offers = buildOffers(b, seats);
+    if (!offers) offers = new Array(seats).fill(null);
+    // 优先采用房主自带的期望码（客户端已预生成，少一次随机碰撞重试）
     let code = null;
-    for (let i = 0; i < 12; i++) {
-      const c = genCode();
-      if (!(await this.read(c))) { code = c; break; }
+    if (isValidCode(b.preferredCode) && !(await this.read(b.preferredCode))) code = b.preferredCode;
+    if (!code) {
+      for (let i = 0; i < 12; i++) {
+        const c = genCode();
+        if (!(await this.read(c))) { code = c; break; }
+      }
     }
     if (!code) return json({ error: 'code_exhausted' }, 503);
     const nicks = new Array(seats).fill('');
@@ -174,9 +181,48 @@ export class RoomHub {
       nicks,
       ready: new Array(seats).fill(false),
       joined,
+      public: !!b.public,            // 是否进入联机大厅（默认不公开）
       ts: Date.now(),
     });
     return json({ code, mode, seats });
+  }
+
+  /* 房主收集完某个座位的 offer 后逐个补传，避免创建时被 ICE 收集阻塞。
+     { code, seat, offer } → { ok } */
+  async offer(request) {
+    const b = await bodyOf(request);
+    const code = normalizeCode(b && b.code);
+    if (!isValidCode(code)) return json({ error: '房间码格式不对' }, 400);
+    const r = await this.read(code);
+    if (!r) return json({ error: '房间不存在或已过期' }, 404);
+    const seat = Number(b && b.seat);
+    if (!Number.isInteger(seat) || seat < 1 || seat >= r.seats) return json({ error: '座位号无效' }, 400);
+    if (typeof b.offer !== 'string' || b.offer.length < 8 || b.offer.length > 200000) {
+      return json({ error: 'invalid_offer' }, 400);
+    }
+    r.offers[seat] = b.offer;
+    await this.storage.put('room:' + code, r);
+    return json({ ok: true });
+  }
+
+  /* 联机大厅：列出公开的、未过期的、未满员的房间（不返回 SDP） */
+  async list() {
+    const now = Date.now();
+    const all = await this.storage.list({ prefix: 'room:' });
+    const out = [];
+    for (const [k, r] of all) {
+      if (!r || now - (r.ts || 0) > ROOM_TTL) continue;
+      if (!r.public) continue;
+      let joined = 0, ready = 0;
+      for (let i = 0; i < (r.seats || 0); i++) {
+        if (r.joined && r.joined[i]) joined++;
+        if (r.ready && r.ready[i]) ready++;
+      }
+      if (joined >= (r.seats || 0)) continue;   // 满员不显示
+      out.push({ code: r.code, mode: r.mode, seats: r.seats, host: (r.nicks && r.nicks[0]) || '', joined, ready, ts: r.ts });
+    }
+    out.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    return json({ rooms: out });
   }
 
   async lookup(url) {
@@ -190,10 +236,13 @@ export class RoomHub {
     }
     if (seat < 0) return json({ error: '这个房间已经满员了' }, 409);
     r.joined[seat] = true;           // 预占该座位，避免并发 lookup 撞座
+    const offer = r.offers[seat];
     await this.storage.put('room:' + code, r);
+    // 房主 offer 可能还在后台收集中：先放行座位，让客机轮询 poll 等 offer 就绪
+    if (!offer) return json({ code, mode: r.mode, seats: r.seats, seat, offer: null, host: r.nicks[0] || '', waiting: true });
     return json({
       code, mode: r.mode, seats: r.seats, seat,
-      offer: r.offers[seat], host: r.nicks[0] || '',
+      offer, host: r.nicks[0] || '',
     });
   }
 
@@ -240,7 +289,7 @@ export class RoomHub {
     }
     return json({
       code, mode: r.mode, seats: r.seats,
-      members, answers: r.answers.slice(),
+      members, answers: r.answers.slice(), offers: r.offers.slice(),
       joined: !!firstAnswer, answer: firstAnswer, guest, host: r.nicks[0] || '',
     });
   }

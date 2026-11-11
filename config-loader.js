@@ -33,6 +33,27 @@
   // 现改为「初始方向发射 + 无衰减 + 碰撞加速反弹」。升级旧存档避免回退到旧手感。
   function migrate(d) {
     if (!d || !d.config) return d;
+    /* 商店与经济：旧存档 / 旧静态副本没有 shop，逐项补齐默认，避免前台读 prices 报错 */
+    var defShop = DEF.shop || {};
+    if (!d.shop || typeof d.shop !== 'object') d.shop = JSON.parse(JSON.stringify(defShop));
+    else {
+      var s = d.shop;
+      s.rewards = s.rewards || {};
+      Object.keys(defShop.rewards || {}).forEach(function (k) {
+        if (!isFinite(Number(s.rewards[k]))) s.rewards[k] = defShop.rewards[k];
+      });
+      s.prices = s.prices || {};
+      ['fruit', 'skin'].forEach(function (kind) {
+        s.prices[kind] = s.prices[kind] || {};
+        ['normal', 'rare', 'precious'].forEach(function (t) {
+          if (!isFinite(Number(s.prices[kind][t])))
+            s.prices[kind][t] = (defShop.prices && defShop.prices[kind] && defShop.prices[kind][t]) || 0;
+        });
+      });
+      if (!isFinite(Number(s.coinsInit))) s.coinsInit = defShop.coinsInit || 300;
+      if (!isFinite(Number(s.initialSkins))) s.initialSkins = defShop.initialSkins || 3;
+      if (!isFinite(Number(s.duplicateRefund))) s.duplicateRefund = defShop.duplicateRefund || 0.5;
+    }
     var c = d.config;
     /* ---- v3 核心玩法迁移：职业系统 -> 统一弹珠 + 果实池 + 外观库 ----
        幂等。旧存档里的职业贴图会被转成「魔兽主题」外观保留下来，不会丢素材。 */
@@ -60,7 +81,9 @@
       d.skins = moved.length ? moved : JSON.parse(JSON.stringify(DEF.skins || []));
     }
     delete d.classes;
-    delete d.shop;
+    /* 商店与经济已回归：这里不再清除 d.shop（旧版本会把它删掉），
+       migrate() 开头的补全逻辑负责补齐旧存档 / 旧静态副本缺的字段，
+       否则后台配置的蛋价永远不会生效。 */
     // skills 即果实池：去职业归属、补图标字段、清掉节点里的「职业限制」
     (d.skills || []).forEach(function (sk) {
       if (!sk) return;

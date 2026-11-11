@@ -153,10 +153,14 @@ async function handleLocalRoom(req, res, url) {
     if (!body) return json(res, 400, { error: 'invalid_offer' });
     const mode = localMode(body.mode);
     const seats = localSeats(mode);
-    const offers = localBuildOffers(body, seats);
-    if (!offers) return json(res, 400, { error: 'invalid_offer' });
+    // 房主可能还没收集 ICE，允许 offers 为空；之后逐个补传
+    let offers = localBuildOffers(body, seats);
+    if (!offers) offers = new Array(seats).fill(null);
     let code = null;
-    for (let i = 0; i < 12; i++) { const c = localCode(); if (!readRoom(c)) { code = c; break; } }
+    if (validCode(body.preferredCode) && !readRoom(body.preferredCode)) code = body.preferredCode;
+    if (!code) {
+      for (let i = 0; i < 12; i++) { const c = localCode(); if (!readRoom(c)) { code = c; break; } }
+    }
     if (!code) return json(res, 503, { error: 'code_exhausted' });
     const nicks = new Array(seats).fill('');
     const joined = new Array(seats).fill(false);
@@ -169,9 +173,41 @@ async function handleLocalRoom(req, res, url) {
       nicks,
       ready: new Array(seats).fill(false),
       joined,
+      public: !!body.public,
       ts: Date.now(),
     });
     return json(res, 200, { code, mode, seats });
+  }
+  if (act === 'list' && req.method === 'GET') {
+    const now = Date.now();
+    const out = [];
+    for (const [k, r] of LOCAL_ROOMS) {
+      if (!r || now - (r.ts || 0) > ROOM_TTL) continue;
+      if (!r.public) continue;
+      let joined = 0, ready = 0;
+      for (let i = 0; i < (r.seats || 0); i++) {
+        if (r.joined && r.joined[i]) joined++;
+        if (r.ready && r.ready[i]) ready++;
+      }
+      if (joined >= (r.seats || 0)) continue;
+      out.push({ code: r.code, mode: r.mode, seats: r.seats, host: (r.nicks && r.nicks[0]) || '', joined, ready, ts: r.ts });
+    }
+    out.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    return json(res, 200, { rooms: out });
+  }
+  if (act === 'offer' && req.method === 'POST') {
+    const code = normCode(body && body.code);
+    if (!validCode(code)) return json(res, 400, { error: '房间码格式不对' });
+    const r = readRoom(code);
+    if (!r) return json(res, 404, { error: '房间不存在或已过期' });
+    const seat = Number(body && body.seat);
+    if (!Number.isInteger(seat) || seat < 1 || seat >= r.seats) return json(res, 400, { error: '座位号无效' });
+    if (typeof body.offer !== 'string' || body.offer.length < 8 || body.offer.length > 200000) {
+      return json(res, 400, { error: 'invalid_offer' });
+    }
+    r.offers[seat] = body.offer;
+    LOCAL_ROOMS.set(code, r);
+    return json(res, 200, { ok: true });
   }
   if (act === 'lookup' && req.method === 'GET') {
     const code = normCode(u.searchParams.get('code'));
@@ -182,8 +218,10 @@ async function handleLocalRoom(req, res, url) {
     for (let i = 1; i < r.seats; i++) if (!r.joined[i]) { seat = i; break; }
     if (seat < 0) return json(res, 409, { error: '这个房间已经满员了' });
     r.joined[seat] = true;           // 预占，避免并发 lookup 撞座
+    const offer = r.offers[seat];
     LOCAL_ROOMS.set(code, r);
-    return json(res, 200, { code, mode: r.mode, seats: r.seats, seat, offer: r.offers[seat], host: r.nicks[0] || '' });
+    if (!offer) return json(res, 200, { code, mode: r.mode, seats: r.seats, seat, offer: null, host: r.nicks[0] || '', waiting: true });
+    return json(res, 200, { code, mode: r.mode, seats: r.seats, seat, offer, host: r.nicks[0] || '' });
   }
   if (act === 'answer' && req.method === 'POST') {
     const code = normCode(body && body.code);
@@ -217,7 +255,7 @@ async function handleLocalRoom(req, res, url) {
     for (let i = 1; i < r.seats; i++) if (r.nicks[i]) { guest = r.nicks[i]; break; }
     return json(res, 200, {
       code, mode: r.mode, seats: r.seats,
-      members, answers: r.answers.slice(),
+      members, answers: r.answers.slice(), offers: r.offers.slice(),
       joined: !!firstAnswer, answer: firstAnswer, guest, host: r.nicks[0] || '',
     });
   }

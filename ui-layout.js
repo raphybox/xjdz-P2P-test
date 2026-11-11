@@ -23,6 +23,11 @@
     ['brandTitle', '品牌主标题', '.brand-text h1', 0, 0, '文字 · 单独编辑'],
     ['brandSub', '品牌副标题', '.brand-text p', 0, 0, '文字 · 单独编辑'],
     ['topActions', '右上按钮组', '.top-actions'],
+    ['coinBadge', '金币徽标', '#coinBadge'],
+    ['coinAmount', '金币数字', '#coinAmount', 0, 0, '文字 · 单独编辑'],
+    ['coinIcon', '金币图标（可上传 PNG）', '.coin-icon', 0, 1],
+    ['shopBtn', '商店入口按钮', '#shopBtn', 0, 0, '右上按钮 · 单独编辑'],
+    ['shopLockHint', '未解锁外观提示', '.shop-lock-hint', 0, 0, '文字 · 单独编辑'],
     ['nickBtn', '昵称按钮', '#nickBtn', 0, 0, '右上按钮 · 单独编辑'],
     ['speedBtn', '速度按钮', '#speedBtn', 0, 0, '右上按钮 · 单独编辑'],
     ['soundBtn', '音效按钮', '#soundBtn', 0, 0, '右上按钮 · 单独编辑'],
@@ -30,9 +35,13 @@
     ['head', '标题说明区', '#startScreen .section-head'],
     ['headTitle', '首页主标题', '#startScreen .section-head h2', 0, 0, '文字 · 单独编辑'],
     ['headDesc', '首页说明小字', '#startScreen .section-head p', 0, 0, '文字 · 单独编辑'],
+    ['fruitTools', '果实库工具条', '#startScreen .fruit-tools'],
+    ['fruitSearch', '果实库搜索框', '#fruitSearch', 0, 0, '文字 · 单独编辑'],
+    ['fruitScroll', '果实库滚动区', '#startScreen .fruit-scroll'],
     ['grid', '果实库网格', '#fruitGrid'],
     ['fruitCard', '果实库卡片', '.fruit-card', 0, 1],
     ['fruitIcon', '果实图标', '.fc-icon', 0, 1],
+    ['fruitIntro', '果实介绍文字', '.fc-intro', 0, 1],
     ['skinTitle', '外观区标题', '.skin-section-title', 0, 0, '文字 · 单独编辑'],
     ['skinThemes', '外观题材切换', '#skinThemes'],
     ['skinGrid', '外观卡网格', '#skinGrid'],
@@ -113,11 +122,29 @@
       ['card1', '首张技能卡', '#draftCards .draft-card']
     ] },
     { id: 'shop', name: '弹层 · 商店', kind: 'modal', root: '#shopModal', items: [
-      ['mask', '弹层遮罩', '#shopModal', 1], ['card', '弹层卡片', '#shopModal .modal-card'],
-      ['head', '标题栏', '#shopModal .modal-head'], ['drawRow', '抽卡信息行', '.shop-draw-row'],
-      ['drawBtn', '抽取按钮', '#shopDrawBtn'], ['result', '抽取结果', '#shopResult'],
-      ['poolTitle', '卡池标题', '.shop-section-title'], ['pool', '卡池列表', '#shopPool'],
-      ['pool1', '首个卡池项', '#shopPool .shop-pool-item']
+      ['mask', '弹层遮罩', '#shopModal', 1],
+      ['card', '商店卡片', '#shopModal .modal-card'],
+      ['head', '标题栏', '#shopModal .modal-head'],
+      ['title', '商店标题', '#shopTitle', 0, 0, '文字 · 单独编辑'],
+      ['closeBtn', '标题栏关闭按钮', '#shopCloseBtn'],
+      ['drawRow', '金币信息行', '.shop-draw-row'],
+      ['coinLine', '持有金币文字', '.shop-coin-line'],
+      ['coinAmount', '商店金币数字', '#shopCoinAmount', 0, 0, '文字 · 单独编辑'],
+      ['hint', '商店说明小字', '.shop-hint', 0, 0, '文字 · 单独编辑'],
+      ['pool', '蛋池总容器', '#shopPool'],
+      ['poolTitle', '分组标题', '.shop-section-title', 0, 1],
+      ['fruitPool', '果实蛋网格', '#shopFruitPool'],
+      ['skinPool', '外观蛋网格', '#shopSkinPool'],
+      ['eggCard', '蛋卡（全部 6 张）', '.shop-pool-item', 0, 1],
+      ['eggIcon', '蛋图标（可上传 PNG）', '.shop-egg-icon', 0, 1],
+      ['eggName', '蛋名称', '.shop-egg-name', 0, 1],
+      ['eggTier', '品质文字', '.shop-egg-tier', 0, 1],
+      ['eggPrice', '价格行', '.shop-egg-price', 0, 1],
+      ['eggBtn', '抽取按钮', '.shop-egg-btn', 0, 1],
+      ['result', '抽取结果', '#shopResult'],
+      ['foot', '底部按钮行', '.shop-foot'],
+      ['drawBtn', '再抽一次按钮', '#shopDrawBtn'],
+      ['doneBtn', '完成按钮', '#shopDoneBtn']
     ] },
     { id: 'p2p', name: '弹层 · 联机房间入口', kind: 'modal', root: '#p2pModal', items: [
       ['mask', '弹层遮罩', '#p2pModal', 1],
@@ -134,6 +161,14 @@
       ['codeInput', '8 位码输入框', '#p2pRoomCodeIn'],
       ['acceptBtn', '加入确认按钮', '#p2pAcceptBtn'],
       ['joinMsg', '加入提示', '#p2pJoinMsg'],
+      ['publicChk', '公开到大厅开关', '#p2pPublicChk'],
+      ['lobbyBtn', '联机大厅入口按钮', '#p2pLobbyBtn'],
+      ['lobbyPanel', '大厅列表面板', '#p2pStageLobby'],
+      ['lobbyList', '大厅房间列表', '#lobbyList'],
+      ['lobbyRow', '大厅房间行', '.lobby-row', 0, 1],
+      ['lobbyMsg', '大厅提示', '#lobbyMsg'],
+      ['lobbyRefreshBtn', '大厅刷新按钮', '#lobbyRefreshBtn'],
+      ['lobbyBackBtn', '大厅返回按钮', '#lobbyBackBtn'],
       ['status', '连接状态行', '#p2pStatus']
     ] },
     { id: 'hatch', name: '弹层 · 果实孵化', kind: 'modal', root: '#hatchModal', items: [
@@ -192,6 +227,14 @@
 
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
   function num(v, lo, hi) { var n = parseFloat(v); return isFinite(n) ? clamp(n, lo, hi) : null; }
+  /* #rrggbb + 透明度 → rgba()：只影响背景色本身，元素内文字 / 图标 / 子元素的
+     不透明度不受牵连（那是另一个 opacity 字段）。 */
+  function hexRgba(hex, a) {
+    var h = String(hex || '').replace('#', '');
+    if (!/^[0-9a-fA-F]{6}$/.test(h)) return hex;
+    var r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + Math.round(a * 1000) / 1000 + ')';
+  }
   function screenById(id) { for (var i = 0; i < SCREENS.length; i++) if (SCREENS[i].id === id) return SCREENS[i]; return null; }
   function itemOf(screenId, key) {
     var s = screenById(screenId); if (!s) return null;
@@ -267,6 +310,7 @@
             p.img.length < 2600000) q.img = p.img;
         if (FITS.indexOf(p.fit) >= 0) q.fit = p.fit;
         if (typeof p.bg === 'string' && COLOR_RE.test(p.bg)) q.bg = p.bg;
+        keep('bgA', 0, 1);   // 背景色不透明度（1 = 实心，0 = 全透明）
         if (p.hide === true) q.hide = true;
         /* 画布图层（例如瞄准箭头）：没有 DOM，位置由游戏逻辑决定，
            除通用字段（img / rot / opacity / hide）外还要保留这几个绘制参数。 */
@@ -326,7 +370,11 @@
     while (node && node.nodeType === 1 && node !== document.body && node !== document.documentElement) {
       var cs = window.getComputedStyle(node);
       var changes = [];
-      var crop = cs.overflow !== 'visible' || cs.overflowX !== 'visible' || cs.overflowY !== 'visible';
+      /* 滚动容器（overflow: auto / scroll）的裁剪是功能性裁剪：内容本来就在里面滚动，
+         子元素「越界」是常态。若把它改成 visible，滚动条会失效、长列表直接铺开
+         （果实库滚动区就被这个坑过）。所以只解除 overflow: hidden / clip 这类静态裁剪。 */
+      var scrollBox = /^(auto|scroll|overlay)$/.test(cs.overflowY) || /^(auto|scroll|overlay)$/.test(cs.overflowX);
+      var crop = !scrollBox && (cs.overflow !== 'visible' || cs.overflowX !== 'visible' || cs.overflowY !== 'visible');
       if (crop) {
         var nr = node.getBoundingClientRect();
         var spill = er.left < nr.left - 0.5 || er.top < nr.top - 0.5 ||
@@ -408,7 +456,12 @@
       set('backgroundPosition', (num(p.bgX, 0, 100) === null ? 50 : num(p.bgX, 0, 100)) + '% ' +
         (num(p.bgY, 0, 100) === null ? 50 : num(p.bgY, 0, 100)) + '%');
     }
-    if (p.bg) set('backgroundColor', p.bg);
+    /* 背景色 + 可选的「背景色不透明度」：只把颜色写成 rgba，
+       不动元素级 opacity（文字 / 图标保持原样）。 */
+    if (p.bg) {
+      var bgA = num(p.bgA, 0, 1);
+      set('backgroundColor', bgA === null ? p.bg : hexRgba(p.bg, bgA));
+    }
     /* ---------- 文字排版 ----------
        字号 / 字重 / 字体 / 颜色 / 行距 / 字距 / 斜体 / 不换行 / 阴影。
        只写本元素：子元素没单独设字号时会自然继承；设了固定 px 的子元素
@@ -583,7 +636,7 @@
   }
 
   /* ---------- 屏幕切换（正常模式不调用，仅编辑器使用） ---------- */
-  var FORCE_VISIBLE = ['#banner', '#aimOverlay', '#asyncTag', '#hatchResult',
+  var FORCE_VISIBLE = ['#banner', '#aimOverlay', '#asyncTag', '#hatchResult', '#shopResult',
     '#nameMsg', '#nameCancelBtn', '#closeNameBtn',
     /* 联机弹层的加入面板与提示默认 hidden，编辑态强制展开才能改素材 */
     '#p2pStageJoin', '#p2pJoinMsg'];
@@ -597,7 +650,10 @@
     ['#eSkills', 2, 'mini-skill', '技能'],
     ['#pBuffs', 3, 'buff-chip', '状态'],
     ['#eBuffs', 3, 'buff-chip', '状态'],
-    ['#rulesList', 4, '', '规则说明示例']
+    ['#rulesList', 4, '', '规则说明示例'],
+    /* 商店：编辑器态若还没渲染出蛋卡，补占位元素以便选中 / 拖拽 / 上传素材 */
+    ['#shopFruitPool', 3, 'shop-pool-item', '果实蛋示例'],
+    ['#shopSkinPool', 3, 'shop-pool-item', '外观蛋示例']
   ];
   function fillSamples() {
     SAMPLE_FILL.forEach(function (row) {
@@ -857,6 +913,18 @@
       else if (d.type === 'ui') { state.ui = normalize(d.ui); applyAll(); drawBoxes(); }
       else if (d.type === 'reset') { setPatch(d.screen, d.key, null); drawBoxes(); }
       else if (d.type === 'showScreenOnly') { showScreen(d.screen); drawBoxes(); }
+    });
+
+    /* 编辑器快捷键转发：焦点落在预览 iframe 里时，父窗口收不到 keydown，
+       撤销 / 重做 / 复制 / 粘贴统一转给父窗口（历史栈与剪贴板都在后台侧）。 */
+    document.addEventListener('keydown', function (ev) {
+      if (!(ev.ctrlKey || ev.metaKey)) return;
+      var t = ev.target;
+      if (t && (/INPUT|TEXTAREA|SELECT/.test(t.tagName || '') || t.isContentEditable)) return;
+      var k = String(ev.key || '').toLowerCase();
+      if (k !== 'z' && k !== 'y' && k !== 'c' && k !== 'v') return;
+      ev.preventDefault();
+      post({ type: 'key', key: k, shift: !!ev.shiftKey });
     });
 
     // 父窗口若在脚本就绪前就发了 init，这里主动要一次
