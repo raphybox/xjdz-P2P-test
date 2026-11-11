@@ -77,10 +77,11 @@ ok('试放沙盘同步隐藏手绘环', /!shieldHasFxPreview/.test(admin));
 ok('ATTACH 新增弹珠圆心选项', /\['marbleCenter', '弹珠圆心（居中挂载）'\]/.test(mods));
 ok('运行时按 origin 反向补偿到圆心', /q\.centerAlign/.test(fx) && /mt\.origin\[0\] - mt\.size\[0\] \/ 2/.test(fx));
 ok('圆心特效锚定施法弹珠实体（跟随）', /f\.attach === 'marbleCenter'/.test(fx));
-const shieldSkill = cfg.skills.find(s => /魔法护盾/.test(s.name));
-ok('魔法护盾编译出 shieldHasFx=true',
+const skillHas = (s, type) => ((s.graph || {}).nodes || []).some(n => n && n.type === type);
+const shieldSkill = cfg.skills.find(s => skillHas(s, 'shield') && skillHas(s, 'fx'));
+ok('含护盾且连特效的果实编译出 shieldHasFx=true',
   !!shieldSkill && (function () { try { return SM.compile(shieldSkill).shieldHasFx === true; } catch (e) { return false; } })());
-const chargeSkill = cfg.skills.find(s => /冲锋/.test(s.name));
+const chargeSkill = cfg.skills.find(s => skillHas(s, 'fx') && !skillHas(s, 'shield'));
 ok('不含护盾的果实 shieldHasFx=false',
   !!chargeSkill && (function () { try { return SM.compile(chargeSkill).shieldHasFx === false; } catch (e) { return false; } })());
 

@@ -33,6 +33,7 @@
     ['grid', '果实库网格', '#fruitGrid'],
     ['fruitCard', '果实库卡片', '.fruit-card', 0, 1],
     ['fruitIcon', '果实图标', '.fc-icon', 0, 1],
+    ['skinTitle', '外观区标题', '.skin-section-title', 0, 0, '文字 · 单独编辑'],
     ['skinThemes', '外观题材切换', '#skinThemes'],
     ['skinGrid', '外观卡网格', '#skinGrid'],
     ['skinCard', '外观卡片', '.skin-card', 0, 1],
