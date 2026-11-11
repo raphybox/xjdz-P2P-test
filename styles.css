@@ -179,8 +179,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .hp-text { font-variant-numeric: tabular-nums; }
 .score-text { color: var(--accent-2); }
 /* 对局双方卡片：BUFF / DEBUFF 图标栏（图标、颜色、名称、说明均由后台「状态图标」页配置） */
-.buff-bar { display: flex; gap: 5px; margin-top: 8px; flex-wrap: wrap; align-items: center; min-height: 0; }
-.buff-bar:empty { display: none; }
+/* 常驻预留一行高度：BUFF/DEBUFF 出现时不再把计分板整体撑高、拉伸竞技场 */
+.buff-bar { display: flex; gap: 5px; margin-top: 8px; flex-wrap: wrap; align-items: center; min-height: 28px; }
+.buff-bar:empty { display: flex; }
 .enemy-panel .buff-bar { justify-content: flex-end; }
 .buff-chip {
   position: relative; display: inline-flex; align-items: center; justify-content: center;

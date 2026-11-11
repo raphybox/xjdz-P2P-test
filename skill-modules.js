@@ -31,8 +31,10 @@
   var ATTACH = [
     ['projectile', '跟随投射物'], ['marble', '跟随弹珠'], ['launch', '发射瞬间'], ['impact', '命中瞬间'],
     ['wall', '撞墙瞬间'], ['wallFace', '贴合墙面(碰撞接触面)'], ['expire', '消失瞬间'], ['caster', '施法者身上'],
-    ['enemy', '敌方弹珠身上']
+    ['enemy', '敌方弹珠身上'], ['marbleCenter', '弹珠圆心（居中挂载）']
   ];
+  /* marbleCenter：素材以自身 meta.origin 为锚点绘制，运行时会反向补偿 origin，
+     让特效包围盒中心真正落在弹珠圆心上（普通「跟随弹珠」不做这层补偿）。 */
   /* 多个敌人时的选靶规则：仅在挂载位置=敌方弹珠身上 时生效 */
   var ENEMY_PICK = [
     ['nearest', '距离施法者最近的敌人'], ['random', '随机一个敌人'], ['all', '全部敌人（各挂一份）']
@@ -677,11 +679,14 @@
 
   function makeGraph(nodes, edges) { return { nodes: nodes, edges: edges }; }
 
-  // 起始图只放「触发 + 属性」：不含投射物、特效、伤害。
-  // 旧版被动技能（无 graph）在编辑器里被转成图时，不能凭空获得一个默认投射物。
+  /* 起始图：触发来源 → 目标·锁定 → 属性。
+     「目标 · 锁定」是所有果实的必需节点，保证新建 / 补图 / 重置得到的果实
+     都有明确的指向单位，且按逻辑链路串在 source 之后、其它模块之前。
+     起始图仍不含投射物 / 特效 / 伤害，旧版被动技能补图时不会凭空多出弹体。 */
   function starterGraph(skill) {
-    var s = node('source', 40, 90), st = node('stats', 320, 90);
-    return makeGraph([s, st], [{ from: s.id, to: st.id }]);
+    var s = node('source', 40, 90), sel = node('select', 180, 90), st = node('stats', 320, 90);
+    sel.params.side = 'enemyOne';   // 默认锁定最近敌人，保持「打对手」的直觉行为
+    return makeGraph([s, sel, st], [{ from: s.id, to: sel.id }, { from: sel.id, to: st.id }]);
   }
 
   /** 合并同类单例节点：数值相加 / 布尔取或 / 枚举取最后 / 颜色取最后 */
@@ -1354,6 +1359,31 @@
       };
     });
 
+    /* 护盾屏障是否在图里连到了像素特效模块：相连时原手绘护盾环交给特效表现。
+       从每个 shield 节点沿 edges 正向 BFS，能到达 fx 节点即为「已连接」。 */
+    var shieldHasFx = false;
+    (function () {
+      var typeOf = {}, next = {};
+      (g.nodes || []).forEach(function (n) { if (n && n.id) typeOf[n.id] = n.type; });
+      (g.edges || []).forEach(function (e) {
+        if (!e || !e.from) return;
+        (next[e.from] || (next[e.from] = [])).push(e.to);
+      });
+      var seen = {}, q = [];
+      (g.nodes || []).forEach(function (n) {
+        if (n && n.type === 'shield' && !seen[n.id]) { seen[n.id] = true; q.push(n.id); }
+      });
+      while (q.length && !shieldHasFx) {
+        var cur = q.shift();
+        (next[cur] || []).forEach(function (nx) {
+          if (seen[nx]) return;
+          seen[nx] = true;
+          if (typeOf[nx] === 'fx') { shieldHasFx = true; return; }
+          q.push(nx);
+        });
+      }
+    })();
+
     var result = {
       /* 技能名随编译结果一起带出：战斗记录 / 伤害统计按技能名归因，
          运行时的 C / C._viewOf 视图都能直接取到，不用再回查技能表。 */
@@ -1364,7 +1394,7 @@
       sources: multi.source, elements: events.onHit.elements, fx: events.onHit.fx,
       particles: events.onHit.particles, damage: events.onHit.damage, impact: events.onHit.impact,
       stats: single.stats, projectile: single.projectile, targeted: single.targeted,
-      select: single.select,
+      select: single.select, shieldHasFx: shieldHasFx,
       events: events, active: active,
       hosts: hosts, bindings: { byNode: ownerOf, publicBucket: scoped[''] },
       rangeByHost: rangeByHost,

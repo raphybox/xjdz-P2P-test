@@ -457,7 +457,8 @@
   function makeFxJob(f, where, x, y, rot, extra, followEnt, contact, enemyEnt, groupMarkLife) {
     // 跟随弹珠 / 施法者身上：特效锚定施法弹珠实体，随其移动（避免释放后特效与弹珠脱离）
     // 敌方弹珠身上：锚定被选中的那名敌人
-    var isFollow = enemyEnt ? true : ((f.attach === 'marble' || f.attach === 'caster') && followEnt);
+    var centerAlign = f.attach === 'marbleCenter';
+    var isFollow = enemyEnt ? true : ((f.attach === 'marble' || f.attach === 'caster' || centerAlign) && followEnt);
     var onWall = !enemyEnt && f.attach === 'wallFace' && contact ? contact : null;
     var follow = enemyEnt || (isFollow ? followEnt : (onWall ? false : (where === 'projectile')));
     var sx = isFollow ? (enemyEnt || followEnt).x : (onWall ? onWall.x : x);
@@ -471,7 +472,7 @@
     var wallRot = onWall ? wallFaceRotation(onWall) : null;
     return window.PixelFX.spawn(f.effect, fxOpts(f, extra)).then(function (inst) {
       var q = {
-        inst: inst, cfg: f, x: px, y: py,
+        inst: inst, cfg: f, x: px, y: py, centerAlign: centerAlign,
         rot: wallRot == null ? rot : wallRot, follow: follow,
         wallFace: !!onWall, wallRot: wallRot, wall: onWall, age: 0,
         /* 归属：施法者实体（有 side），持续伤害区（game.js）据此判断打谁 */
@@ -680,7 +681,15 @@
       // 贴合墙面的特效固定按「墙面切向」摆放，不受 matchRotation / 弹体速度朝向影响
       var rotation = q.wallFace ? (q.wallRot || 0) + (f.rotation || 0)
         : (f.matchRotation ? q.rot + f.rotation : f.rotation);
-      q.inst.render(ctx, q.x, q.y, {
+      /* 「弹珠圆心」：pixelfx 素材以 meta.origin 为锚点绘制，
+         反向补偿 origin 与包围盒中心的差值，让特效中心真正落在弹珠圆心上。 */
+      var rx = q.x, ry = q.y;
+      if (q.centerAlign && q.inst.meta && q.inst.meta.size && q.inst.meta.origin) {
+        var sc = Number(f.scale) || 1, mt = q.inst.meta;
+        rx += sc * (mt.origin[0] - mt.size[0] / 2);
+        ry += sc * (mt.origin[1] - mt.size[1] / 2);
+      }
+      q.inst.render(ctx, rx, ry, {
         scale: f.scale, alpha: f.alpha, light: f.light, additive: f.additive,
         flipX: f.flipX, rotation: rotation
       });

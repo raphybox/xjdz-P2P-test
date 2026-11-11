@@ -3,10 +3,29 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>果实弹珠 · 每回合选一枚果实</title>
+<title>果实弹珠</title>
 <link rel="stylesheet" href="styles.css">
+<!-- 默认加载页：内联样式保证首帧就生效，不依赖外部 CSS / JS。
+     4MB+ 的配置脚本是同步加载的，遮罩覆盖整段解析期，避免露出半成品骨架。 -->
+<style>
+  #bootSplash{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;
+    flex-direction:column;gap:18px;background:#0b0e14;color:#e8eef8;
+    font:14px/1.6 system-ui,-apple-system,"Microsoft YaHei",sans-serif}
+  #bootSplash .bs-orb{width:54px;height:54px;border-radius:50%;
+    background:radial-gradient(circle at 32% 28%,#8fd8ff,#2b7fc4 55%,#123a5e);
+    box-shadow:0 0 0 6px rgba(87,200,255,.10),0 0 26px rgba(87,200,255,.35);
+    animation:bsPulse 1.1s ease-in-out infinite}
+  #bootSplash .bs-name{font-size:20px;font-weight:700;letter-spacing:3px}
+  #bootSplash .bs-tip{color:#7d8ca3;font-size:12px;letter-spacing:1px}
+  @keyframes bsPulse{0%,100%{transform:scale(1);opacity:.85}50%{transform:scale(1.12);opacity:1}}
+</style>
 </head>
 <body>
+<div id="bootSplash" aria-live="polite">
+  <div class="bs-orb"></div>
+  <div class="bs-name">果实弹珠</div>
+  <div class="bs-tip">正在载入果实库…</div>
+</div>
 <div class="app">
 
   <div id="verTag" class="version-tag" title="内部构建标识"></div>
@@ -34,7 +53,7 @@
   </header>
 
   <!-- ============ 首页 · 果实库 + 外观题材 ============ -->
-  <section id="startScreen" class="screen">
+  <section id="startScreen" class="screen" hidden>
     <div class="section-head">
       <div>
         <h2>我的果实库</h2>

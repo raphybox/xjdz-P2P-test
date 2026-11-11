@@ -674,7 +674,7 @@ window.WOWPINBALL_DEFAULT = {
       "group": "品牌与首页",
       "selector": ".brand-text h1",
       "mode": "text",
-      "value": "选技弹珠"
+      "value": "果实弹珠"
     },
     {
       "id": "brandSub",

@@ -69,6 +69,31 @@
       var ns = sk.graph && Array.isArray(sk.graph.nodes) ? sk.graph.nodes : [];
       ns.forEach(function (n) { if (n && n.type === 'source' && n.params) delete n.params.classId; });
     });
+    /* 所有果实必须有「目标 · 锁定」，且必须串在 source 之后的主链路上。
+       对旧存档 / 导入配置幂等补全，保证运行时一定有明确的指向单位。 */
+    (d.skills || []).forEach(function (sk) {
+      var g = sk && sk.graph;
+      if (!g || !Array.isArray(g.nodes) || !Array.isArray(g.edges)) return;
+      var sel = g.nodes.find(function (n) { return n && n.type === 'select'; });
+      var src = g.nodes.find(function (n) { return n && n.type === 'source'; });
+      if (!src) return;
+      if (!sel) {
+        sel = {
+          id: 'select_auto_' + Math.random().toString(36).slice(2, 9),
+          type: 'select', x: 200, y: 90,
+          params: { bindTo: 'auto', side: 'enemyOne', pick: 'nearest', count: 1 }
+        };
+        g.nodes.push(sel);
+        // source 的所有出边改由 select 转发，select 接在 source 之后
+        g.edges.forEach(function (e) { if (e && e.from === src.id) e.from = sel.id; });
+        g.edges.push({ from: src.id, to: sel.id });
+      } else if (!g.edges.some(function (e) { return e && e.from === sel.id; })) {
+        // 已有 select 却是孤立分支：把主链路从 select 出发，真正参与逻辑链路
+        g.edges.forEach(function (e) {
+          if (e && e.from === src.id && e.to !== sel.id) e.from = sel.id;
+        });
+      }
+    });
     // 出生点扩到 4 个：1V1 用前两个，2V2 用全部
     (d.maps || []).forEach(function (m) {
       if (!m || !Array.isArray(m.spawns)) return;
@@ -214,6 +239,39 @@
     (d.weather.types || []).forEach(function (t) {
       if (t && t.id === 'rain' && !(typeof t.rainForce === 'number')) t.rainForce = 70;
     });
+    /* v3.1：浏览器本地存档可能停留在旧草稿（素材被快照剥离、外观被误禁用、
+       品牌文案还是旧名），从而遮蔽服务端 / 已发布的新配置。
+       这里只补「当前缺、已发布配置有」的字段，不覆盖用户新编辑的结构。 */
+    var PUBD = window.WOWPINBALL_PUBLISHED;
+    if (PUBD && Array.isArray(PUBD.skins) && Array.isArray(d.skins)) {
+      var pubHas = PUBD.skins.some(function (x) { return x && x.src; });
+      var curHas = d.skins.some(function (x) { return x && x.src; });
+      if (pubHas && !curHas) {
+        d.skins.forEach(function (x) {
+          if (!x || x.src) return;
+          var m = PUBD.skins.find(function (y) { return y && y.id === x.id; });
+          if (m && m.src) { x.src = m.src; if (m.w) x.w = m.w; if (m.h) x.h = m.h; }
+        });
+      }
+      if (pubHas && !curHas) {
+        // 整份素材都被剥掉属于异常状态，连启用标记一起按已发布配置复位
+        d.skins.forEach(function (x) {
+          if (!x) return;
+          var m = PUBD.skins.find(function (y) { return y && y.id === x.id; });
+          if (m && m.enabled !== false) x.enabled = true;
+        });
+      } else {
+        d.skins.forEach(function (x) {
+          if (!x || x.enabled !== false || !x.src) return;
+          var m = PUBD.skins.find(function (y) { return y && y.id === x.id; });
+          if (m && m.enabled !== false) x.enabled = true;
+        });
+      }
+      var pubBrand = (PUBD.texts || []).find(function (t) { return t && t.id === 'brandTitle'; });
+      var curBrand = (d.texts || []).find(function (t) { return t && t.id === 'brandTitle'; });
+      if (pubBrand && curBrand && pubBrand.value) curBrand.value = pubBrand.value;
+    }
+
     // 私有版本号：旧 localStorage 存档没有 version 字段时，从已发布静态副本回填，
     // 否则右下角版本号会被旧存档遮蔽（发布记录在服务端文件里，浏览器存档天然滞后一拍）
     if (!d.version && window.WOWPINBALL_PUBLISHED && window.WOWPINBALL_PUBLISHED.version) {

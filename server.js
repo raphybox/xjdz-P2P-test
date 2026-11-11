@@ -57,7 +57,7 @@ function json(res, code, obj) { send(res, code, JSON.stringify(obj)); }
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let s = '';
-    req.on('data', c => { s += c; if (s.length > 8 * 1024 * 1024) reject(new Error('配置过大')); });
+    req.on('data', c => { s += c; if (s.length > 20 * 1024 * 1024) reject(new Error('配置过大')); });
     req.on('end', () => resolve(s));
     req.on('error', reject);
   });

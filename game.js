@@ -1984,6 +1984,8 @@
           sources: sources.map(src => ({ src: src, at: 0, n: 0, lastEv: -10 }))
         });
       });
+      // 护盾屏障与像素特效模块相连时，原手绘护盾环交给特效表现
+      f._shieldHasFx = f._skillCasters.some(c => !!(c.C && c.C.shieldHasFx));
     });
     G.skillShots = []; G.skillFx = []; G.skillParts = []; G.skillZones = []; G.skillEchoes = []; G.skillWallHazards = []; G.skillAuras = []; G.skillChannels = []; G.skillDotZones = []; G._pendingProjMovers = [];
     if (MOTION) MOTION.clear(G.movers, { now: G.clock }); else G.movers = [];
@@ -2161,8 +2163,7 @@
         if (ctx.targets.length) {
           resolveAt(VC, f, pt.x, pt.y, desc.angle, 'onHit', ctx.targets, undefined, ctx, 'area');
         } else {
-          // 空挥：只在判定点播一次表现，不结算伤害 / 状态 / 震屏
-          spawnSkillBurst(VC, pt.x, pt.y, desc.angle, 'impact', f, null, ctx);
+          // 空挥：没有任何命中目标，既不结算伤害也不播放命中特效
         }
       }
     });
@@ -2203,13 +2204,24 @@
     const ev = ({ launch: 'onCast', caster: 'onCast', impact: 'onHit', wall: 'onWall', expire: 'onExpire' })[where] || 'onHit';
     const grp = (C.events && C.events[ev]) || C;
     const SM = SKILL_RT.SM;
-    // 命中表现也按「每个模块自己的作用范围」筛：区域内没有任何合法目标时该模块不播。
-    // 空挥（ctx.targets 为空）不过滤，仍允许在判定点播一次表现。
+    /* 「命中时」特效必须真的打中「目标 · 锁定」选出的单位才播：
+       ① 只对 onHit 生效（施放 / 撞墙 / 消失特效本就不要求命中）；
+       ② 本次判定没有任何命中目标 = 空挥，不播；
+       ③ 命中目标与锁定单位取交集，交集为空不播；
+       ④ 最后再按每个模块自己的作用范围筛。 */
+    const strictHit = (ev === 'onHit');
     const gate = m => {
-      if (!ctx || !ctx.desc || !SM || !SM.moduleTargets) return true;
+      if (!strictHit || !ctx) return true;
       const ts = ctx.targets || [];
-      if (!ts.length) return true;
-      return SM.moduleTargets(ts, m, ctx.desc, ctx).length > 0;
+      if (!ts.length) return false;
+      let effective = ts;
+      if (C && C.present && C.present.select && SM.selectTargets) {
+        const locked = SM.selectTargets(C, followEnt, G.actors.concat(G.enemies || []));
+        effective = ts.filter(t => locked.indexOf(t) >= 0);
+      }
+      if (!effective.length) return false;
+      if (!ctx.desc || !SM.moduleTargets) return true;
+      return SM.moduleTargets(effective, m, ctx.desc, ctx).length > 0;
     };
     const fxList = (grp.fx || []).filter(gate);
     const partList = (grp.particles || []).filter(gate);
@@ -3727,7 +3739,7 @@
     ctx.setLineDash([]);
 
     // 状态环改成中性色，避免与阵营色混淆
-    if (f.shield > 0.5) {
+    if (f.shield > 0.5 && !f._shieldHasFx) {
       ctx.beginPath();
       ctx.arc(f.x, f.y, f.r + 12.5, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(240,220,155,' + (0.45 + 0.25 * Math.sin(performance.now() / 180)) + ')';
@@ -3940,11 +3952,11 @@
     const slots = Array.from({ length: count }, (_, i) => {
       const s = skills[i];
       if (!s) return '<div class="mini-skill empty">技能位 ' + (i + 1) + '</div>';
-      const t = (s.charge > 0 ? s.charge : 3).toFixed(1);
+      // desc 已由 SKILLS 拼好「主动技能 · 充能 Xs」，这里只补被动说明，避免充能时间重复
       const isActive = !!(s.compiled && s.compiled.active);
       const tip = s.intro ? s.intro + ' · ' + (s.desc || s.name) : (s.desc || s.name);
       return '<div class="mini-skill has-cd" data-tier="' + escHtml(s.tier) + '" data-sid="' + escHtml(s.id) + '" title="' + escHtml(tip) +
-        (isActive ? ' · 充能 ' + t + 's' : ' · 被动 · 无需充能') + '">' +
+        (!isActive ? ' · 被动 · 无需充能' : '') + '">' +
         '<span class="ms-name">' + escHtml(s.name) + '</span>' +
         '<span class="ms-cd"><i></i></span></div>';
     });
@@ -4517,6 +4529,8 @@
       if (!el) continue;
       const v = t.value == null ? '' : String(t.value);
       if (t.mode === 'html') el.innerHTML = v; else el.textContent = v;
+      // 网站名称 = 品牌标题：后台改 LOGO 文字时标签页标题同步跟随
+      if (t.selector === '.brand-text h1' && v) document.title = v;
     }
   }
 
@@ -4559,4 +4573,7 @@
     if (!PROFILE.name && !UI_EDITOR) openNameModal(false);
     else if (!INV.owned.length && !UI_EDITOR) openHatchModal();
   }
+  // 全部初始化完成后移除默认加载页；预览模式与界面编辑器 iframe 同样走这里
+  const bootSplash = $('bootSplash');
+  if (bootSplash) bootSplash.remove();
 })();
