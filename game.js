@@ -464,7 +464,8 @@
     myReady: false, peerReady: false, peerFruits: null,
     guestOpts: null, guestPick: false, myPickDone: false,
     guestAim: null, guestLaunched: false, myLaunched: false,
-    buf: null, snapAcc: 0, noSnapT: 0, noSnapWarned: false, snapLogged: false
+    buf: null, snapAcc: 0, noSnapT: 0, noSnapWarned: false, snapLogged: false,
+    hudAcc: 0   // 客机 HUD 节流累加器（不必每帧重排血条 / BUFF DOM）
   };
   let P2P_MODE = '1v1';   // 联机弹层里选择的模式：'1v1' | '2v2'
 
@@ -754,17 +755,23 @@
 
   /* ---------- 主循环钩子 ---------- */
 
-  function p2pSendSnap() {
+  function p2pSendSnap(frozen) {
     if (!P2P.net || !P2P.net.ready || !G.player || !G.enemy || !SYNC) return;
+    let snap;
     if (G.mode === '2v2' && SYNC.encodeActors && G.actors.length === 4) {
       const list = G.actors.map(f => ({
         x: f.x, y: f.y, vx: f.vx, vy: f.vy,
         hp: f.hp, shield: f.shield, maxHp: f.maxHp
       }));
-      P2P.net.sendGame(JSON.stringify(SYNC.encodeActors(G.round, G.clock, list, G.roundTime)));
+      snap = SYNC.encodeActors(G.round, G.clock, list, G.roundTime);
     } else {
-      P2P.net.sendGame(JSON.stringify(SYNC.encodeSnap(G.round, G.clock, G.player, G.enemy, G.roundTime)));
+      snap = SYNC.encodeSnap(G.round, G.clock, G.player, G.enemy, G.roundTime);
     }
+    /* 命中停顿：房主物理与 clock 都冻结。照常发快照并打 f:1，
+       客机 SnapBuf 收到后把渲染时钟一起停住，避免按最后速度外推导致
+       「弹珠继续飞 → 下一帧硬纠正」的命中瞬间窜动。旧端忽略该字段，行为不变。 */
+    if (frozen) snap.f = 1;
+    P2P.net.sendGame(JSON.stringify(snap));
   }
 
   function p2pGuestFrame(dt) {
@@ -812,7 +819,11 @@
       G.roundTime = sm.rt;
       p2pGuestHitFx(mine.hp, mf, true);
       p2pGuestHitFx(foe.hp, ef, false);
-      updateHud();
+      /* HUD 是纯 DOM 重排（血条 / 座位卡 / BUFF / 技能充能），60fps 全量刷新
+         在弱机上会掉帧，而掉帧又让 advanceAdaptive 的 dt 变大、回放更不平滑。
+         12.5Hz 足够跟上血量变化，倒计时文本同理按 10Hz 更新。 */
+      P2P.hudAcc += dt;
+      if (P2P.hudAcc >= 0.08) { P2P.hudAcc = 0; updateHud(); }
     }
     dom.timerText.textContent = Math.max(0, G.roundTime).toFixed(1);
   }
@@ -2580,8 +2591,8 @@
     };
     fxList.forEach(f => { if ((f._delay || 0) > 0) scheduleSkill(f._delay, () => applyFxEntry(f)); else applyFxEntry(f); });
     // 「弹珠移动路径」：触发后按「路径触发间隔」沿施法弹珠移动轨迹留下一串特效/粒子（实现「移动留下技能效果」）
-    pathFx.forEach(f => { if ((f._delay || 0) > 0) scheduleSkill(f._delay, () => registerPathDrop(followEnt, f, 'fx')); else registerPathDrop(followEnt, f, 'fx'); });
-    pathParts.forEach(p => { if ((p._delay || 0) > 0) scheduleSkill(p._delay, () => registerPathDrop(followEnt, p, 'particles')); else registerPathDrop(followEnt, p, 'particles'); });
+    pathFx.forEach(f => { if ((f._delay || 0) > 0) scheduleSkill(f._delay, () => registerPathDrop(followEnt, f, 'fx', C)); else registerPathDrop(followEnt, f, 'fx', C); });
+    pathParts.forEach(p => { if ((p._delay || 0) > 0) scheduleSkill(p._delay, () => registerPathDrop(followEnt, p, 'particles', C)); else registerPathDrop(followEnt, p, 'particles', C); });
     // 粒子已在编译期按 triggerEvent 归入对应事件组（events[ev].particles），
     // attach 仅作视觉锚点，不再按 attach===where 过滤，否则默认 attach='impact' 的粒子在非命中事件中不生效
     normalParts.forEach(p => { if ((p._delay || 0) > 0) scheduleSkill(p._delay, () => applyPartEntry(p)); else applyPartEntry(p); });
@@ -2767,14 +2778,18 @@
      落下一个独立、不跟随的特效/粒子实例。每个落点是固定残影（区别于「跟随弹珠」始终贴着弹珠），
      所以弹珠移动时就会沿运动轨迹铺出一条由技能效果组成的拖尾 —— 即「移动时留下技能效果」。
      弹珠已死亡（att.dead）则不再落点，但发射器仍按持续时长自然回收。 */
-  function registerPathDrop(att, node, kind) {
+  function registerPathDrop(att, node, kind, skillC) {
     if (!att || att.dead) return;
     if (!G.skillPathEmitters) G.skillPathEmitters = [];
     const interval = Math.max(0.02, Number(node.pathInterval) || 0.15);
     const life = Math.max(0.1, Number(node.pathDuration) || 2);
+    // 「路径特效 → 持续伤害」路由：该特效下游的伤害节点持续伤害配置挂到发射器上，
+    // 每个落点都生成一片判定区（弹珠移动轨迹 = 持续伤害轨迹）。emitter 已在 spawnSkillBurst
+    // 里按特效节点的 _delay 延迟注册，落点自然也跟着延后，无需再处理延迟。
+    const pathDot = node._pathDot || null;
     G.skillPathEmitters.push({
       owner: att, side: att.side, kind: kind, node: node,
-      interval: interval, life: life, age: 0, tick: 0
+      interval: interval, life: life, age: 0, tick: 0, pathDot: pathDot, skillC: skillC || null
     });
   }
 
@@ -2791,13 +2806,30 @@
       em.tick += em.interval;                        // 到点：沿当前弹珠位置落一个特效/粒子
       const att = em.owner;
       if (!att || att.dead || att.x == null) return true;
-      if (em.kind === 'fx') {
-        SKILL_RT.SE.spawnFx([em.node], 'pathDrop', att.x, att.y, (att.rot || 0), null, null, null, null, 0).then(arr => {
-          (arr || []).forEach(a => { a.born = performance.now(); });
-          SKILL_RT.SE.pushFx(G.skillFx, arr);
+      /* 顺序很重要：判定区（玩法）先生成，特效 / 粒子（表现）后生成且整段隔离。
+         表现层任何异常都不能吃掉这一帧的判定区，否则表现为「特效在播、路径上却没有
+         范围伤害」——这类问题在试放里极难定位，对局里更是只有手感上的「打不中」。 */
+      // 「路径特效 → 持续伤害」：在每个落点（弹珠当前位置）生成一片固定判定区，
+      // 与路径表现同步，弹珠走过处都留下持续伤害（每片按自身 dotDuration 自然到期）
+      if (em.pathDot) {
+        em.pathDot.forEach(function (dc) {
+          spawnDamageDot(att, dc, null, att.x, att.y, em.skillC);
         });
-      } else {
-        G.skillParts = G.skillParts.concat(SKILL_RT.SE.burstParticles(em.node, att.x, att.y, (att.rot || 0), null, null, null));
+      }
+      try {
+        if (em.kind === 'fx') {
+          SKILL_RT.SE.spawnFx([em.node], 'pathDrop', att.x, att.y, (att.rot || 0), null, null, null, null, 0).then(arr => {
+            (arr || []).forEach(a => { a.born = performance.now(); });
+            SKILL_RT.SE.pushFx(G.skillFx, arr);
+          });
+        } else {
+          G.skillParts = G.skillParts.concat(SKILL_RT.SE.burstParticles(em.node, att.x, att.y, (att.rot || 0), null, null, null));
+        }
+      } catch (e) {
+        if (!G._pathFxErr) {
+          G._pathFxErr = true;
+          console.error('[skill] 路径落点特效生成失败（判定区不受影响，只影响表现）', e);
+        }
       }
       return true;
     });
@@ -2872,6 +2904,8 @@
     // 「延迟」模块：按该节点自己的累计延迟延后触发这一片掉血区（之前误用合并对象的「最大」延迟）。
     (grp.damageList || []).forEach(function (dm) {
       if (!dm || !dm.dotEnable || !(Number(dm.dotDps) > 0)) return;
+      // 已被路由到「弹珠移动路径」发射器：持续伤害区改在每个落点生成，这里不再单独生成跟随红圈
+      if (dm._routedToPath) return;
       const go = function () {
         let followEnt = null;
         const fm = dm.dotFollow || 'caster';
@@ -4853,6 +4887,11 @@
       if (P2P.active && P2P.role === 'guest') {
         // 联机客机：不跑物理，消费房主快照做插值回放
         p2pGuestFrame(realDt);
+      } else if (P2P.active && P2P.role === 'host' && ts < G.hitStopUntil) {
+        /* 命中停顿期间房主不推进物理，但快照不能断：否则客机缓冲枯竭后
+           按旧速度外推，命中瞬间会「窜一下再弹回」。发同 clock 的冻结帧。 */
+        P2P.snapAcc += realDt;
+        if (P2P.snapAcc >= 0.033) { P2P.snapAcc -= 0.033; p2pSendSnap(true); }
       } else if (ts >= G.hitStopUntil) {
         const dt = realDt * (P2P.active ? 1 : SPEEDS[G.speedIdx]);   // 联机锁 x1：双方节奏必须一致
         const steps = Math.max(1, Math.ceil(dt / (1 / 120)));

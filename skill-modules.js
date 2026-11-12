@@ -1277,7 +1277,9 @@
       var cur = queue.shift();
       (next[cur] || []).forEach(function (to) { if (!seen[to]) { seen[to] = 1; queue.push(to); } });
     }
-    var live = nodes.filter(function (x) { return seen[x.id]; });
+    /* 编辑器可以临时「停用」某个节点（n.enabled === false）：保留连线但不参与编译。
+       旧数据没有这个字段，undefined !== false，行为完全不变。 */
+    var live = nodes.filter(function (x) { return seen[x.id] && x.enabled !== false; });
 
     /* 「延迟」模块：下游所有模块相对触发事件延后 seconds 秒生效。
        沿全部可达边做最长路径松弛（延迟非负），取每个节点到根的最大累计延迟。
@@ -1318,6 +1320,8 @@
        scoped[hostId]      = 只绑定到该载体的节点 → 该实体的专属属性 */
     var all = emptyBuckets(), scoped = { '': emptyBuckets() }, ownerOf = {}, boundOf = {};
     live.forEach(function (x) { if (HOST_TYPES[x.type]) scoped[x.id] = emptyBuckets(); });
+    // 节点 id → 编译后归一化对象；路由计算与跨视图补字段时按 _nodeId 反查
+    var normalizedById = {};
 
     live.forEach(function (x) {
       if (x.type !== 'source' && x.type !== 'stats') {
@@ -1358,6 +1362,7 @@
       if (isMotion) { normalized.bindTo = params.bindTo; normalized._autoBind = params._autoBind; }
       // 运行时反查：这个节点属于哪个载体、自己是哪张节点（光环 / 区域实体据此取专属结算组）
       normalized._nodeId = x.id;
+      normalizedById[x.id] = normalized;
       normalized._hostId = ownerOf[x.id] || '';
       var ownN = normalized._hostId && byId[normalized._hostId];
       normalized._hostType = ownN ? ownN.type : '';
@@ -1378,6 +1383,53 @@
       all[evKey][x.type].push(normalized);
       ownBucket[evKey][x.type].push(Object.assign({}, normalized));
     });
+
+    /* 「弹珠移动路径」特效 → 下游「伤害·结算」持续伤害路由：
+       当一条像素特效是「路径移动路径」模式，且它的下游（沿边可达）存在一个勾选了
+       「持续伤害(跟随)」的伤害节点时，把该伤害节点的持续伤害配置挂到路径特效节点上，
+       让持续伤害区在路径「每个落点」（每 pathInterval）生成 —— 即弹珠走过的地方都留下
+       一片判定区，而不是只在命中点生成一个跟随施法者的红圈。这样「路径特效 + 持续伤害」
+       组合出「移动留下持续伤害轨迹」，与路径表现严格对齐。该伤害节点本身不再生成
+       独立的跟随红圈（避免重复），标记 _routedToPath 跳过 applyExtraModules 的单独生成。 */
+    var fxNodePathDot = {}, routedDamageIds = {};
+    (function routePathDots() {
+      var typeOf = {};
+      (g.nodes || []).forEach(function (n) { if (n && n.id) typeOf[n.id] = n.type; });
+      live.forEach(function (x) {
+        if (x.type !== 'fx') return;
+        var p = Object.assign(defaults('fx'), x.params || {});
+        if (p.attach !== 'path') return;
+        // 沿边正向 BFS，收集可到达的「伤害·结算」节点（带持续伤害）
+        var seen = {}, q = [x.id]; seen[x.id] = true;
+        var cfgs = [];
+        while (q.length) {
+          var cur = q.shift();
+          (next[cur] || []).forEach(function (to) {
+            if (seen[to]) return; seen[to] = true;
+            if (typeOf[to] === 'damage') {
+              var d = Object.assign(defaults('damage'), (byId[to] && byId[to].params) || {});
+              if (d.dotEnable && Number(d.dotDps) > 0) {
+                // 路径落点上的持续伤害：固定在该落点（跟随方式强制 impact），
+                // 与「弹珠移动路径」表现一致 —— 弹珠走过处都留下伤害区
+                d.dotFollow = 'impact';
+                d._routedToPath = true;
+                cfgs.push(d);
+                routedDamageIds[to] = true;
+                // 直接写回该伤害节点的归一化对象：公共视图（all 桶）下不再单独生成跟随红圈
+                if (normalizedById[to]) normalizedById[to]._routedToPath = true;
+              }
+            }
+            q.push(to);
+          });
+        }
+        if (cfgs.length) {
+          fxNodePathDot[x.id] = cfgs;
+          // 直接写回编译后归一化对象：该对象正是 result.events 里那份运行时特效节点，
+          // 确保「公共视图」路径（all 桶）也带上 _pathDot，而不只是 scoped[''] 桶的视图
+          if (normalizedById[x.id]) normalizedById[x.id]._pathDot = cfgs;
+        }
+      });
+    })();
 
     /* 范围判定节点不进事件组，只按「作用对象」归到某个载体（或技能整体）。
        同一载体接多个时取第一个，行为稳定可预期。 */
@@ -1514,6 +1566,28 @@
     Object.keys(viewCache.hosts).forEach(function (k) { allViews.push(viewCache.hosts[k]); });
     Object.keys(viewCache.exclusive).forEach(function (k) { allViews.push(viewCache.exclusive[k]); });
     allViews.forEach(function (V) { V._views = viewCache; });
+    // 把「路径特效 → 持续伤害」路由结果写回所有运行时视图（公共 / 各载体 / 专属）的
+    // 特效与伤害节点上，避免多视图 copy 丢配置（对局与试放两边都吃这份编译结果）
+    if (Object.keys(fxNodePathDot).length || Object.keys(routedDamageIds).length) {
+      allViews.forEach(function (V) {
+        var evs = V.events || {};
+        Object.keys(evs).forEach(function (k) {
+          var g = evs[k]; if (!g) return;
+          (g.fx || []).forEach(function (f) {
+            if (f && f._nodeId != null && fxNodePathDot[f._nodeId]) f._pathDot = fxNodePathDot[f._nodeId];
+          });
+          (g.damageList || []).forEach(function (d) {
+            if (d && d._nodeId != null && routedDamageIds[d._nodeId]) d._routedToPath = true;
+          });
+        });
+        // 专属视图的 tick 组（光环 / 区域每帧结算）也一并补上
+        if (V._tickGrp) {
+          (V._tickGrp.damageList || []).forEach(function (d) {
+            if (d && d._nodeId != null && routedDamageIds[d._nodeId]) d._routedToPath = true;
+          });
+        }
+      });
+    }
     return result;
   }
 

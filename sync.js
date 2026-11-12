@@ -81,15 +81,32 @@
     this.rate = 1;          // 自适应时钟速率（观测用）
     this.jitter = 0;        // 到达抖动 EWMA
     this._lastArrival = null;
+    this.frozen = false;    // 房主命中停顿标志：客机渲染时钟同步停住，不再外推乱飞
+    this._frozenAt = 0;
   }
 
   SnapBuf.prototype.push = function (snap) {
     var s = snap && snap.s;
     if (!s || s.length < 17) return;
-    // 乱序丢弃：clock 回退的包直接扔掉
-    if (this.snaps.length && s[1] < this.snaps[this.snaps.length - 1].s[1]) return;
-    // 抖动观测：到达间隔与房主时钟增量的偏差（EWMA，用于放宽外推窗口）
     var now = Date.now() / 1000;
+    /* 房主命中停顿帧：clock 与上一帧完全相同（物理没推进），数据也相同，
+       入队毫无意义且会被「重复 clock」检查丢掉。这里只刷新冻结标志与时间戳，
+       让客机渲染时钟同步停住；下一帧正常快照自动解冻。 */
+    if (snap.f) {
+      this.frozen = true;
+      this._frozenAt = now;
+      this._lastArrival = now;
+      return;
+    }
+    this.frozen = false;
+    /* 乱序处理（旧版直接和「队尾 clock」比较后丢弃）：
+       无序不可靠通道下，42ms 抖动 > 33ms 帧间隔时，晚发先到是常态，
+       旧写法会把随后到达但仍有效的帧误丢约 15%。改为：
+       - 已经早于渲染时刻的帧才丢（对回放没价值）；
+       - 其余按 clock 有序插入，重复 clock 只留一份。 */
+    if (this.renderT != null && s[1] <= this.renderT - 0.05) return;
+    if (this.snaps.some(function (x) { return x.s[1] === s[1]; })) return;
+    // 抖动观测：到达间隔与房主时钟增量的偏差（EWMA，用于放宽外推窗口）
     if (this._lastArrival != null && this.snaps.length) {
       var aGap = now - this._lastArrival;
       var cGap = s[1] - this.snaps[this.snaps.length - 1].s[1];
@@ -98,7 +115,9 @@
       }
     }
     this._lastArrival = now;
-    this.snaps.push(snap);
+    var i = this.snaps.length;
+    while (i > 0 && this.snaps[i - 1].s[1] > s[1]) i--;
+    this.snaps.splice(i, 0, snap);
     // 首包 / 每回合重置后自动启动渲染时钟：否则 sample() 永远返回 null，
     // 快照堆满缓冲却一帧都显示不出来（历史 bug，务必保留）
     if (this.renderT == null) this.renderT = s[1] - this.delay;
@@ -124,6 +143,12 @@
      速率变化连续且幅度受限，画面不会忽快忽慢。 */
   SnapBuf.prototype.advanceAdaptive = function (dt) {
     if (this.renderT == null) return;
+    /* 房主命中停顿（hitStop）时物理与 clock 都冻结，但仍按节拍发带 f:1 的快照。
+       客机若继续推进 renderT 就会走外推、让弹珠「继续飞」，下一帧再被硬纠正回来，
+       正是命中瞬间那一下窜动。这里把渲染时钟一起停住，两端保持同一画面。 */
+    // 冻结标志最多信任 250ms：若后续正常帧全丢（或房主掉线），不能把画面永久钉住
+    if (this.frozen && Date.now() / 1000 - this._frozenAt > 0.25) this.frozen = false;
+    if (this.frozen) { this.rate = 0; return; }
     var last = this.latest();
     if (!last) { this.renderT += dt; return; }
     var ahead = last.s[1] - this.renderT;
@@ -146,33 +171,82 @@
   /* 取 renderT 时刻的插值状态；找不到相邻对时返回 null（沿用上次画面）。
      回调里写入的是模拟侧语义：out.p = 房主弹珠，out.e = 客机弹珠。
      返回值额外带 actors 字段（N 实体快照用），原有 p/e/rt/snap 不变。 */
+  /* roundTime 永远是数组最后一个槽：k:'s' 是 index 16，
+     k:'a'（N 实体）是 3+7n，写死 s[16] 会把 4 实体的 maxHp 当倒计时。 */
+  function rtOf(s) { return s[s.length - 1]; }
+  function sideOf(actors, i) {
+    return actors[i] || { x: 0, y: 0, vx: 0, vy: 0, hp: 0, shield: 0, maxHp: 1 };
+  }
+  /* N 实体快照按 alpha 插值（旧版直接取较新帧整帧原值 → 2V2 客机 30Hz 逐帧跳变）。
+     连续量插值，血量/护盾/maxHp 取较新帧，与 1V1 口径一致。 */
+  function lerpActors(a, b, alpha) {
+    var A = decodeActors(a).actors, B = decodeActors(b).actors;
+    var n = Math.min(A.length, B.length), out = [];
+    for (var i = 0; i < n; i++) {
+      var x = A[i], y = B[i];
+      out.push({
+        x: x.x + (y.x - x.x) * alpha, y: x.y + (y.y - x.y) * alpha,
+        vx: x.vx + (y.vx - x.vx) * alpha, vy: x.vy + (y.vy - x.vy) * alpha,
+        hp: y.hp, shield: y.shield, maxHp: y.maxHp
+      });
+    }
+    return out;
+  }
+  function extrapActors(s, dt) {
+    return decodeActors(s).actors.map(function (a) {
+      return {
+        x: a.x + clamp(a.vx * dt, -90, 90), y: a.y + clamp(a.vy * dt, -90, 90),
+        vx: a.vx, vy: a.vy, hp: a.hp, shield: a.shield, maxHp: a.maxHp
+      };
+    });
+  }
+
+  function sampleOut(p, e, rt, snapObj, actorsOverride) {
+    var actors = actorsOverride || [p, e];
+    return { p: p, e: e, rt: rt, snap: snapObj, actors: actors };
+  }
+  function sampleFrame(snapObj, over) {
+    var s = snapObj.s;
+    if (snapObj.k === 'a') {
+      var ac = over > 0 ? extrapActors(s, over) : decodeActors(s).actors;
+      return { p: sideOf(ac, 0), e: sideOf(ac, 1), rt: Math.max(0, rtOf(s) - (over || 0)), actors: ac };
+    }
+    return {
+      p: over > 0 ? extrapSide(s, 2, over) : unpackSide(s, 2),
+      e: over > 0 ? extrapSide(s, 9, over) : unpackSide(s, 9),
+      rt: Math.max(0, rtOf(s) - (over || 0)), actors: null
+    };
+  }
+
   SnapBuf.prototype.sample = function () {
     var t = this.renderT;
     if (t == null || !this.snaps.length) return null;
     var snaps = this.snaps;
-    // 统一构造：在原有 p/e/rt/snap 之外补 actors
-    function out(p, e, rt, snapObj) {
-      return { p: p, e: e, rt: rt, snap: snapObj, actors: actorsOf(snapObj, p, e) };
-    }
     var first = snaps[0].s, last = snaps[snaps.length - 1].s;
     if (t <= first[1]) {
-      return out(unpackSide(first, 2), unpackSide(first, 9), first[16], snaps[0]);
+      var f0 = sampleFrame(snaps[0], 0);
+      return sampleOut(f0.p, f0.e, f0.rt, snaps[0], f0.actors);
     }
     if (t >= last[1]) {
       var over = t - last[1];
       var lim = Math.min(0.14, this.maxExtrap + Math.min(this.jitter, 0.06));
-      if (over > 0 && over <= lim) {
-        return out(extrapSide(last, 2, over), extrapSide(last, 9, over),
-          Math.max(0, last[16] - over), snaps[snaps.length - 1]);
-      }
-      return out(unpackSide(last, 2), unpackSide(last, 9), last[16], snaps[snaps.length - 1]);
+      var snapLast = snaps[snaps.length - 1];
+      var fL = sampleFrame(snapLast, (over > 0 && over <= lim) ? over : 0);
+      return sampleOut(fL.p, fL.e, fL.rt, snapLast, fL.actors);
     }
     for (var i = 0; i < snaps.length - 1; i++) {
       var a = snaps[i].s, b = snaps[i + 1].s;
       if (t >= a[1] && t <= b[1]) {
         var alpha = (b[1] - a[1]) > 0 ? (t - a[1]) / (b[1] - a[1]) : 0;
+        var snapB = snaps[i + 1];
         // 位置/速度插值；离散量取较新帧，血条与倒计时不慢半拍
-        return out(lerpSide(a, b, alpha, 2), lerpSide(a, b, alpha, 9), b[16], snaps[i + 1]);
+        if (snaps[i].k === 'a' && snapB.k === 'a') {
+          var ac = lerpActors(a, b, alpha);
+          return sampleOut(sideOf(ac, 0), sideOf(ac, 1), rtOf(b), snapB, ac);
+        }
+        var fB = snapB.k === 'a' ? frameOf(snapB, 0) : null;
+        if (fB) return sampleOut(fB.p, fB.e, rtOf(b), snapB, fB.actors);
+        return sampleOut(lerpSide(a, b, alpha, 2), lerpSide(a, b, alpha, 9), rtOf(b), snapB);
       }
     }
     return null;

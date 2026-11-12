@@ -432,6 +432,11 @@
     targets.forEach(function (p) {
       var ch = kind === 'ctrl' ? p.ctrl : p.game;
       if (ch && ch.readyState === 'open') {
+        /* 快照是不可靠通道：TURN 拥塞时 SCTP 发送队列会堆积，
+           旧快照排队到达只会放大抖动、让客机缓冲忽空忽满。
+           队列超过 4KB 直接丢弃本次快照（下一帧 33ms 后就有新数据），
+           ctrl 是可靠控制消息，绝不能丢。 */
+        if (kind === 'game' && ch.bufferedAmount > 4096) return;
         try { ch.send(payload); } catch (e) {}
       }
     });

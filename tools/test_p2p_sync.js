@@ -146,4 +146,54 @@ assert.strictEqual(smA.actors[1].hp, 88.55);
 assert.strictEqual(smA.actors[3].maxHp, 75);
 assert.ok(smA.p && smA.e && smA.rt !== undefined && smA.snap === act, '原有 p/e/rt/snap 字段保持不变');
 
+// 10) 2V2（k:'a'）快照必须插值，且 roundTime 取数组末槽
+const mkActors = (clock, x0, rt) => S.encodeActors(1, clock, [
+  { x: x0, y: 0, vx: 100, vy: 0, hp: 100, shield: 0, maxHp: 100 },
+  { x: 500, y: 0, vx: 0, vy: 0, hp: 90, shield: 0, maxHp: 100 },
+  { x: 600, y: 0, vx: 0, vy: 0, hp: 80, shield: 0, maxHp: 100 },
+  { x: 700, y: 0, vx: 0, vy: 0, hp: 70, shield: 0, maxHp: 100 }
+], rt);
+const bufN = new S.SnapBuf();
+bufN.push(mkActors(1.00, 0, 9.0));
+bufN.push(mkActors(1.10, 10, 8.9));
+bufN.renderT = 1.05;
+const smN = bufN.sample();
+assert.ok(Math.abs(smN.actors[0].x - 5) < 0.01, '2V2 中点应插值为 5，而不是整帧原值');
+assert.strictEqual(smN.actors.length, 4, '2V2 四个实体都要插值');
+assert.strictEqual(smN.actors[1].hp, 90, '离散量取较新帧');
+assert.ok(Math.abs(smN.rt - 8.9) < 0.001, '2V2 roundTime 必须取数组末槽，不能读 s[16]');
+assert.strictEqual(smN.actors[0], smN.p, 'k=a 时 p 与 actors[0] 同引用');
+const smNx = bufN.sample();
+assert.ok(smNx, '2V2 sample 不应为 null');
+// 2V2 外推分支也应走 N 实体路径
+bufN.renderT = 1.12;
+const smNe = bufN.sample();
+assert.ok(smNe.actors[0].x >= 10, '2V2 缓冲枯竭时应按实体速度外推');
+
+// 11) 乱序到达但仍在渲染时刻之后的帧不能被误丢
+const bufR = new S.SnapBuf();
+bufR.push(mk(10.00, 100));
+bufR.push(mk(10.09, 109));
+bufR.push(mk(10.03, 103));                       // 晚到，但仍有效
+assert.strictEqual(bufR.snaps.length, 3, '有效乱序帧应保留');
+assert.deepStrictEqual(bufR.snaps.map(x => x.s[1]), [10.00, 10.09, 10.03].sort((a, b) => a - b),
+  '缓冲必须按 clock 单调递增');
+const tooOld = mk(9.00, 1);
+bufR.push(tooOld);
+assert.strictEqual(bufR.snaps.length, 3, '已经早于渲染时刻的帧才丢弃');
+
+// 12) 房主命中停顿帧：客机渲染时钟同步停住，不外推
+const bufF = new S.SnapBuf();
+bufF.push(mk(20.00, 100, 300, 100, 5));
+const frozenSnap = mk(20.00, 100, 300, 100, 5);   // hitStop 时 clock 不推进
+frozenSnap.f = 1;
+bufF.push(frozenSnap);
+const tF = bufF.renderT;
+bufF.advanceAdaptive(0.1);
+assert.strictEqual(bufF.rate, 0, '冻结帧时速率为 0');
+assert.strictEqual(bufF.renderT, tF, '冻结帧时渲染时钟不推进');
+bufF.push(mk(20.06, 118, 300, 80, 4.94));       // 恢复正常帧
+bufF.advanceAdaptive(0.016);
+assert.ok(bufF.renderT > tF, '非冻结帧恢复后时钟继续推进');
+
 console.log('test_p2p_sync: all assertions passed');
