@@ -4,7 +4,7 @@ window.WOWPINBALL_PUBLISHED = {
   "meta": {
     "schema": 1,
     "gameName": "魔兽弹珠",
-    "updatedAt": "2026-11-11",
+    "updatedAt": "2026-11-12",
     "note": "默认配置，与首版游戏数值一致"
   },
   "config": {
@@ -1037,8 +1037,8 @@ window.WOWPINBALL_PUBLISHED = {
           {
             "id": "element_yl7mu5x",
             "type": "element",
-            "x": 734,
-            "y": 50,
+            "x": 700,
+            "y": 33,
             "params": {
               "bindTo": "auto",
               "triggerEvent": "onHit",
@@ -1061,8 +1061,8 @@ window.WOWPINBALL_PUBLISHED = {
           {
             "id": "fx_dmav372",
             "type": "fx",
-            "x": 993,
-            "y": 48,
+            "x": 949,
+            "y": 24,
             "params": {
               "bindTo": "auto",
               "triggerEvent": "onCast",
@@ -1107,8 +1107,8 @@ window.WOWPINBALL_PUBLISHED = {
           {
             "id": "damage_1m608zq",
             "type": "damage",
-            "x": 1227,
-            "y": 43,
+            "x": 1221,
+            "y": 14,
             "params": {
               "bindTo": "auto",
               "affect": "enemy",
@@ -1141,6 +1141,122 @@ window.WOWPINBALL_PUBLISHED = {
               "rangeOrigin": "impact",
               "rangeMaxTargets": 0
             }
+          },
+          {
+            "id": "fx_o1caplz",
+            "type": "fx",
+            "x": 885,
+            "y": 217,
+            "params": {
+              "bindTo": "auto",
+              "triggerEvent": "onCast",
+              "name": "",
+              "effect": "nature/poison-cloud",
+              "attach": "path",
+              "enemyPick": "nearest",
+              "pathInterval": 1,
+              "pathDuration": 5,
+              "scale": 0.75,
+              "fps": 1,
+              "clipStart": 0,
+              "clipEnd": 0,
+              "alpha": 1,
+              "light": 1,
+              "rotation": 0,
+              "offsetX": 0,
+              "offsetY": 0,
+              "loop": false,
+              "life": 5,
+              "tailMode": "restart",
+              "stackReplace": true,
+              "additive": false,
+              "flipX": false,
+              "matchRotation": true,
+              "noRotFollow": true,
+              "fxOptions": {
+                "palette": [
+                  "#071426",
+                  "#123a68",
+                  "#1f6aa8",
+                  "#ffffff",
+                  "#ffffff"
+                ],
+                "spread": 1,
+                "seed": 3
+              },
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          },
+          {
+            "id": "damage_7vh4n0z",
+            "type": "damage",
+            "x": 1162,
+            "y": 183,
+            "params": {
+              "bindTo": "auto",
+              "affect": "enemy",
+              "triggerEvent": "onHit",
+              "hitKind": "auto",
+              "base": 0,
+              "pctMaxHp": 0,
+              "critChance": 0,
+              "critMult": 0,
+              "lifesteal": 0,
+              "armorPen": 0,
+              "knockback": 0,
+              "ignoreShield": false,
+              "ignoreDodge": false,
+              "canCrit": false,
+              "wallDamageMode": "contact",
+              "wallDps": 0,
+              "wallTouchDamage": 0,
+              "wallTouchInterval": 0,
+              "wallDuration": 0.5,
+              "wallRadius": 0,
+              "dotEnable": true,
+              "dotDps": 8,
+              "dotRadius": 70,
+              "dotInterval": 0.2,
+              "dotFollow": "impact",
+              "dotDuration": 5,
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          },
+          {
+            "id": "status_niu9u9n",
+            "type": "status",
+            "x": 1191,
+            "y": 352,
+            "params": {
+              "bindTo": "auto",
+              "triggerEvent": "onHit",
+              "status": "slow",
+              "statusPower": 0.5,
+              "statusDuration": 2,
+              "statusTag": "",
+              "self": false,
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0,
+              "statusPersistent": true,
+              "statusInterval": 1
+            }
+          },
+          {
+            "id": "delay_mmvuvfw",
+            "type": "delay",
+            "x": 660,
+            "y": 230,
+            "params": {
+              "seconds": 1
+            }
           }
         ],
         "edges": [
@@ -1163,6 +1279,18 @@ window.WOWPINBALL_PUBLISHED = {
           {
             "from": "select_z48yxb5",
             "to": "range_nwopmuw"
+          },
+          {
+            "from": "fx_o1caplz",
+            "to": "status_niu9u9n"
+          },
+          {
+            "from": "delay_mmvuvfw",
+            "to": "fx_o1caplz"
+          },
+          {
+            "from": "fx_o1caplz",
+            "to": "damage_7vh4n0z"
           }
         ]
       },
@@ -1832,8 +1960,8 @@ window.WOWPINBALL_PUBLISHED = {
       }
     ]
   },
-  "version": "WJ-MEXG-Y3J5-AAAAAT-BQ9N-EDUB-Z2K4-CP6R-PCVA",
-  "versionSeq": 17,
+  "version": "WJ-MEXG-Y3J5-AAAAAU-BQ9N-NDUB-Z2K4-CP6R-PCVA",
+  "versionSeq": 18,
   "statuses": [
     {
       "kind": "buff",

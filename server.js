@@ -8,7 +8,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
@@ -77,6 +77,25 @@ function safePath(urlPath) {
   const target = path.resolve(ROOT, rel || 'index.html');
   if (target !== ROOT && !target.startsWith(ROOT + path.sep)) return null;
   return target;
+}
+
+/* 在系统默认浏览器里打开 URL（开发启动台「打开入口页」用）。
+   浏览器本身不能直接起进程，所以由本地服务代开。 */
+function openBrowser(targetUrl) {
+  const u = String(targetUrl);
+  try {
+    if (process.platform === 'win32') {
+      try {
+        spawn('cmd', ['/c', 'start', '', u], { stdio: 'ignore', detached: false, windowsHide: true });
+      } catch (e) {
+        try { spawn('explorer', [u], { stdio: 'ignore', windowsHide: true }); } catch (e2) { /* 忽略 */ }
+      }
+    } else if (process.platform === 'darwin') {
+      spawn('open', [u], { stdio: 'ignore', windowsHide: true });
+    } else {
+      spawn('xdg-open', [u], { stdio: 'ignore', windowsHide: true });
+    }
+  } catch (e) { /* 开浏览器失败不应中断服务 */ }
 }
 
 /* -------------------------------------------------------------
@@ -395,6 +414,23 @@ const server = http.createServer(async (req, res) => {
       ensureDirs();
       if (url.startsWith('/api/room')) return await handleLocalRoom(req, res, url);
       if (req.method === 'GET' && url.startsWith('/api/turn')) return await handleLocalTurn(res);
+      // 开发启动台控制接口（launcher.html 用）。服务自身即游戏服务，故 status 恒为运行中。
+      if (url.startsWith('/api/status')) {
+        return json(res, 200, { ok: true, running: true, port: PORT, launcher: true });
+      }
+      if (url.startsWith('/api/open')) {
+        let target = '/index.html';
+        try { target = new URL(url, 'http://' + HOST + ':' + PORT).searchParams.get('path') || '/index.html'; } catch (e) {}
+        const safe = String(target).replace(/[^a-zA-Z0-9_.\/-]/g, '');
+        const openUrl = 'http://' + HOST + ':' + PORT + safe;
+        openBrowser(openUrl);
+        return json(res, 200, { ok: true, url: openUrl });
+      }
+      if (req.method === 'POST' && url.startsWith('/api/stop')) {
+        send(res, 200, JSON.stringify({ ok: true }));
+        setTimeout(() => process.exit(0), 200);   // 先回响应再退出，避免连接被掐断
+        return;
+      }
       if (req.method === 'GET' && url.startsWith('/api/config')) {
         if (!fs.existsSync(CONFIG_FILE)) return json(res, 200, { ok: true, data: null });
         const data = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
@@ -480,8 +516,13 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   ensureDirs();
   console.log('选技弹珠开发服务已启动');
+  console.log('  开发启动台： http://' + HOST + ':' + PORT + '/launcher.html');
   console.log('  后台工具： http://' + HOST + ':' + PORT + '/admin.html');
   console.log('  游戏预览： http://' + HOST + ':' + PORT + '/index.html');
   console.log('  配置文件： ' + CONFIG_FILE);
   console.log('按 Ctrl+C 停止');
+  // 自动打开开发启动台，让「双击 bat → 页面出现」。设 WB_NO_OPEN=1 可关闭。
+  if (!process.env.WB_NO_OPEN) {
+    setTimeout(() => openBrowser('http://' + HOST + ':' + PORT + '/launcher.html'), 600);
+  }
 });

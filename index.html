@@ -284,13 +284,12 @@
   </div>
 </div>
 
-<!-- 联机对战弹层：8 位房间码，服务端只中转一次建连信令 -->
+<!-- 联机对战弹层（好友房间） -->
 <div id="p2pModal" class="modal" hidden>
   <div class="modal-card ghost-modal-card">
     <div class="modal-head">
       <h3>联机对战 · 好友房间</h3>
       <div class="shop-head-right">
-        <span class="faint">对战数据两端直连 · 服务端只中转一次建连信令</span>
         <button id="closeP2pBtn" class="icon-btn" type="button">关闭</button>
       </div>
     </div>
@@ -301,10 +300,20 @@
         <button id="p2pMode2v2" class="p2p-mode-btn" type="button" data-mode="2v2">2V2 · 四人</button>
       </div>
       <div class="p2p-tip">房主创建房间后得到 8 位邀请码；好友输入这串码即可加入，不需要回传任何东西。</div>
-      <label class="p2p-public-toggle">
-        <input id="p2pPublicChk" type="checkbox" />
-        <span>公开到大厅（让其他人能在联机大厅里看到并直接加入，默认不公开）</span>
-      </label>
+      <div id="p2pVisibility" class="p2p-visibility">
+        <div class="pv-label">房间可见性</div>
+        <div class="pv-opts">
+          <label id="p2pVisPublic" class="pv-opt active">
+            <input type="radio" name="p2pVis" value="public" checked />
+            <span>公开大厅</span>
+          </label>
+          <label id="p2pVisFriends" class="pv-opt">
+            <input type="radio" name="p2pVis" value="friends" />
+            <span>仅好友可见</span>
+          </label>
+        </div>
+        <div class="pv-hint">公开大厅：任何人都能在联机大厅看到并直接加入。仅好友可见：不进大厅，只用 8 位邀请码加入。</div>
+      </div>
       <div class="p2p-choice">
         <button id="p2pCreateBtn" class="primary-btn" type="button">创建房间</button>
         <button id="p2pJoinBtn" class="ghost-btn" type="button">加入房间</button>
@@ -321,7 +330,7 @@
     </div>
 
     <div id="p2pStageLobby" class="p2p-stage" hidden>
-      <div class="share-code-head"><span>联机大厅</span><span class="faint">公开的房间会自动出现在这里</span></div>
+      <div class="share-code-head"><span>联机大厅</span><span class="faint">公开的房间会实时出现在这里</span></div>
       <div id="lobbyList" class="lobby-list"></div>
       <div id="lobbyMsg" class="ghost-msg" hidden></div>
       <div class="p2p-choice">
@@ -330,8 +339,10 @@
       </div>
     </div>
 
-    <div class="share-code-head"><span>连接状态</span></div>
-    <div id="p2pStatus" class="faint">未连接</div>
+    <div id="p2pStatusRow" class="share-code-head" hidden>
+      <span>连接状态</span>
+      <span id="p2pStatus" class="faint"></span>
+    </div>
   </div>
 </div>
 

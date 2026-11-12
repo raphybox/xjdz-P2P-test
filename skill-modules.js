@@ -32,8 +32,13 @@
     ['projectile', '跟随投射物'], ['marble', '跟随弹珠'], ['launch', '发射瞬间'], ['impact', '命中瞬间'],
     ['wall', '撞墙瞬间'], ['wallFace', '贴合墙面(碰撞接触面)'], ['expire', '消失瞬间'], ['caster', '施法者身上'],
     ['enemy', '敌方弹珠身上'], ['marbleCenter', '弹珠圆心（居中挂载）'],
+    ['path', '弹珠移动路径'],
     ['host', '跟随所属载体（连线自动识别）']
   ];
+  /* path：弹珠移动路径。特效/粒子不跟随弹珠、也不固定在一处，而是「触发后」在「路径持续时长」内，
+     每隔「路径触发间隔」在施法弹珠当前所在位置落下一个独立实例；弹珠移动时就会沿轨迹铺出一条
+     由技能效果组成的拖尾（区别于「跟随弹珠」——那是始终贴着弹珠、不留下残影）。
+     需配合同模块的 pathInterval / pathDuration 两个参数使用。 */
   /* host：特效按连线归属自动挂到「投射物 / 区域残留 / 光环」实体上。
      连线到区域残留时再显示「跟随投射物」会让人以为特效挂在弹体上，
      实际上运行时找不到投射物就会落空 —— 见 compile 的 fxByHostNode。 */
@@ -140,6 +145,16 @@
         sel('aim', '发射方向', 'atEnemy', [['atEnemy', '瞄准对手'], ['forward', '沿当前速度'], ['random', '随机方向'], ['mouse', '固定角度']]),
         n('angle', '固定角度(度)', 0, -180, 180, 1, 'aim=固定角度 时生效'),
         b('enabled', '启用', true)
+      ]
+    },
+    /* 延迟·延时：纯路由节点，不是效果本身。接在任意模块之后，它下游直接 / 间接连着的所有模块
+       都相对触发事件延后 seconds 秒才生效（特效延后播放、状态延后施加、护盾延后套上……）。
+       同一模块若同时被多个延迟节点覆盖，取累计延迟的最大值。它是「模块与模块之间的延迟生效」开关，
+       不写入任何数值、不产生任何表现，只改变下游的结算时机。 */
+    delay: {
+      label: '延迟 · 延时', short: '延迟', color: '#9aa6b8', desc: '纯路由节点：接在任意模块之后，让它下游所有模块相对触发事件延后「延迟(秒)」才生效。可以串联多个延迟做更长的延时；不写任何数值、不产生表现，只改变下游的结算时机',
+      fields: [
+        n('seconds', '延迟(秒)', 0.5, 0, 8, 0.05, '本模块下游直接 / 间接连着的所有模块，都延后这么多秒才生效（相对它自己的触发事件）。0 = 不延迟')
       ]
     },
     /* 目标 · 锁定：决定「这个技能作用在谁身上」。
@@ -301,7 +316,9 @@
         n('statusPower', '状态强度', 0.3, 0, 1, 0.05),
         n('statusDuration', '状态时长(秒)', 2.5, 0.2, 10, 0.1),
         t('statusTag', '状态图标标签', '', '可选：填一个标签，对局双方卡片的 BUFF/DEBUFF 栏会显示后台「状态图标」里同标签的自定义条目（名称、颜色、图标都在后台配置）'),
-        b('self', '作用于自身', false, '勾选=给自己加状态（护盾/治疗）；否则给对手')
+        b('self', '作用于自身', false, '勾选=给自己加状态（护盾/治疗）；否则给对手'),
+        b('statusPersistent', '持续生效', false, '勾选=在「状态时长」内按「持续间隔」反复重新施加该状态，使其持续覆盖（如减速全程不断、治疗按间隔多次触发）。不勾选=只在触发瞬间施加一次'),
+        n('statusInterval', '持续间隔(秒)', 0.5, 0.05, 5, 0.05, '仅「持续生效」勾选时生效：每隔多久重新施加一次该状态')
       ]
     },
     fx: {
@@ -314,6 +331,8 @@
         { key: 'effect', label: '特效', type: 'effect', def: 'fire/fireball', hint: '点击右侧特效库选择' },
         sel('attach', '挂载位置', 'projectile', ATTACH, '贴合墙面：生成在球与墙体的接触面上、沿墙面朝向，适合「墙面残留」类效果；该区域的伤害参数在「伤害·结算」模块里设置。敌方弹珠身上：特效挂在敌方弹珠上随之移动，多个敌人时的选靶规则见下一项'),
         sel('enemyPick', '敌人选择', 'nearest', ENEMY_PICK, '挂载位置=敌方弹珠身上 时生效：最近/随机只挂一个，全部则每名敌人各挂一份'),
+        n('pathInterval', '路径触发间隔(秒)', 0.15, 0.02, 2, 0.01, '仅「挂载位置=弹珠移动路径」时生效：每隔这么久在弹珠当前所在位置落下一个特效，弹珠移动时就会沿运动轨迹留下一串等时间间隔的特效'),
+        n('pathDuration', '路径持续时长(秒)', 2, 0.1, 20, 0.1, '仅「挂载位置=弹珠移动路径」时生效：触发后持续这么久沿路径落特效；建议同时设置本模块的「存在时长」让每个落点特效短暂淡出，形成干净拖尾而非长时间残留'),
         n('scale', '尺寸倍率', 1, 0.1, 8, 0.05),
         n('fps', '播放帧率倍率', 1, 0.1, 4, 0.05, '相对特效原始帧率'),
         n('clipStart', '动画起始(秒)', 0, 0, 30, 0.1, '相对素材自身动画时间轴：填 3 = 跳过前 3 秒，直接从素材第 3 秒的画面开始播。配合「动画结束」可只播中间一段（例如 3→6 秒）。0 = 从第一帧开始；属性面板会显示当前素材一轮时长'),
@@ -355,6 +374,8 @@
         n('emitRate', '持续发射(个/秒)', 0, 0, 120, 1, '0 = 只在触发瞬间发射一次'),
         sel('attach', '挂载位置', 'impact', ATTACH, '敌方弹珠身上：粒子从敌方弹珠身上持续喷发，多个敌人时的选靶规则见下一项'),
         sel('enemyPick', '敌人选择', 'nearest', ENEMY_PICK, '挂载位置=敌方弹珠身上 时生效：最近/随机只挂一个，全部则每名敌人各挂一份'),
+        n('pathInterval', '路径触发间隔(秒)', 0.15, 0.02, 2, 0.01, '仅「挂载位置=弹珠移动路径」时生效：每隔这么久在弹珠当前所在位置喷发一次粒子，弹珠移动时就会沿运动轨迹留下一串等时间间隔的粒子'),
+        n('pathDuration', '路径持续时长(秒)', 2, 0.1, 20, 0.1, '仅「挂载位置=弹珠移动路径」时生效：触发后持续这么久沿路径喷发粒子'),
         c('color', '粒子颜色', '#ffd76a'),
         c('color2', '渐变色', '#ff5a2a'),
         n('spin', '自旋', 0, -720, 720, 5),
@@ -544,7 +565,7 @@
   // 下拉分组（仅影响后台「添加模块」的归类展示）
   var GROUPS = {
     source: '触发', select: '触发', projectile: '投递', targeted: '投递', motion: '投递', range: '投递',
-    element: '效果', damage: '效果', impact: '效果', status: '效果', mark: '效果', shield: '效果', split: '效果', echo: '效果', aura: '效果',
+    element: '效果', damage: '效果', impact: '效果', status: '效果', mark: '效果', shield: '效果', split: '效果', echo: '效果', aura: '效果', delay: '效果',
     fx: '表现', particles: '表现', zone: '表现',
     stats: '属性'
   };
@@ -607,7 +628,7 @@
   var HOST_LABELS = { projectile: '投射物', aura: '光环', targeted: '指向性', zone: '区域残留' };
   // 除「触发 / 属性」外，所有模块都能声明作用对象（载体自身也可以，用于载体嵌套）
   var BINDABLE = {};
-  Object.keys(MODULES).forEach(function (t) { if (t !== 'source' && t !== 'stats') BINDABLE[t] = 1; });
+  Object.keys(MODULES).forEach(function (t) { if (t !== 'source' && t !== 'stats' && t !== 'delay') BINDABLE[t] = 1; });
   var HOST_BASE_OPTIONS = [['auto', '按连线自动识别'], ['global', '技能整体（公共效果）']];
   Object.keys(BINDABLE).forEach(function (t) {
     MODULES[t].fields.unshift({
@@ -906,6 +927,9 @@
         damageList: tmp[ev].damage.slice(),
         impactList: tmp[ev].impact.slice()
       };
+      // 「延迟」模块：把本事件组 damage 节点的最大累计延迟带到合并对象上，
+      // 供「持续伤害(跟随)」按延迟延后触发（直接命中伤害由碰撞时刻结算，不受此延迟影响）
+      events[ev].damage._delay = tmp[ev].damage.reduce(function (mx, d) { return Math.max(mx, Number(d._delay) || 0); }, 0);
     });
     var allDamage = [], allFx = [];
     EVENT_KEYS.forEach(function (ev) {
@@ -1232,7 +1256,7 @@
     motion: 'onCast', shield: 'onCast', aura: 'onCast'
   };
   // 这些类型只存在于事件组里，不参与单例合并
-  var EVENT_ONLY = { status: 1, motion: 1, mark: 1, shield: 1, split: 1, zone: 1, echo: 1, aura: 1, select: 1 };
+  var EVENT_ONLY = { status: 1, motion: 1, mark: 1, shield: 1, split: 1, zone: 1, echo: 1, aura: 1, select: 1, delay: 1 };
   var EVENT_SLOTS = ['element', 'fx', 'particles', 'status', 'damage', 'impact', 'motion', 'mark', 'shield', 'split', 'zone', 'echo', 'aura'];
 
   function compile(skill) {
@@ -1254,6 +1278,25 @@
       (next[cur] || []).forEach(function (to) { if (!seen[to]) { seen[to] = 1; queue.push(to); } });
     }
     var live = nodes.filter(function (x) { return seen[x.id]; });
+
+    /* 「延迟」模块：下游所有模块相对触发事件延后 seconds 秒生效。
+       沿全部可达边做最长路径松弛（延迟非负），取每个节点到根的最大累计延迟。
+       延迟节点本身不进事件桶（EVENT_GROUP_TYPES 不含 delay），只负责把 seconds 传给下游。 */
+    var nodeDelay = {};
+    roots.forEach(function (id) { nodeDelay[id] = 0; });
+    var _relax = true, _relaxGuard = 0;
+    while (_relax && _relaxGuard++ < 10000) {
+      _relax = false;
+      live.forEach(function (x) {
+        var u = x.id;
+        if (nodeDelay[u] == null) nodeDelay[u] = 0;
+        var add = (x.type === 'delay') ? (Number((x.params || {}).seconds) || 0) : 0;
+        (next[u] || []).forEach(function (to) {
+          var nd = nodeDelay[u] + add;
+          if (nodeDelay[to] == null || nd > nodeDelay[to]) { nodeDelay[to] = nd; _relax = true; }
+        });
+      });
+    }
 
     /* 「命中判定」自动解析：auto 按技能形态落到具体口径，编译期定死；
        运行时（对局 + 试放）只认节点的 _hitKind，不再各自猜。
@@ -1318,6 +1361,8 @@
       normalized._hostId = ownerOf[x.id] || '';
       var ownN = normalized._hostId && byId[normalized._hostId];
       normalized._hostType = ownN ? ownN.type : '';
+      // 「延迟」模块：本节点到根的最大累计延迟（秒）；0 = 立即生效
+      normalized._delay = Math.max(0, Number(nodeDelay[x.id]) || 0);
       /* 伤害节点带上编译期定死的「命中判定」与「伤害对象」：
          运行时按这两个字段决定「这次命中算不算数」「打谁」，两端口径完全一致 */
       if (x.type === 'damage') {

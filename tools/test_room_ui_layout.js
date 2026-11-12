@@ -17,7 +17,8 @@ const keySelectors = {
   room: ['#roomScreen', '#roomScreen .room-shell', '#roomCode', '#roomCopyBtn', '#roomStatus',
          '#roomSeats', '#roomFruitHint', '#roomReadyBtn', '#roomSharedHint', '#roomLeaveBtn'],
   p2p: ['#p2pModal', '#p2pModeSel', '#p2pCreateBtn', '#p2pJoinBtn', '#p2pRoomCodeIn',
-        '#p2pAcceptBtn', '#p2pStatus', '#p2pStageJoin'],
+        '#p2pAcceptBtn', '#p2pStatus', '#p2pStageJoin', '#p2pVisibility',
+        '#p2pVisPublic', '#p2pVisFriends'],
 };
 [...keySelectors.room.map(s => [s, roomBlock[0]]), ...keySelectors.p2p.map(s => [s, p2pBlock[0]])]
   .forEach(([sel, block]) => {

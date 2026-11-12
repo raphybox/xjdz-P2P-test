@@ -52,13 +52,22 @@
     echo:       { phase: 'control', inputs: ['signal'],                      outputs: ['signal'],                 requires: ['act'],          produces: null,     label: '回响·连发' },
     damage:     { phase: 'act',     inputs: ['targets', 'hit'],              outputs: [],                         requires: ['targets'],      produces: null,     label: '伤害·结算' },
     element:    { phase: 'act',     inputs: ['targets', 'hit'],              outputs: [],                         requires: ['targets'],      produces: null,     label: '元素·属性' },
-    status:     { phase: 'act',     inputs: ['targets'],                     outputs: [],                         requires: ['targets'],      produces: null,     label: '事件状态' },
-    mark:       { phase: 'act',     inputs: ['targets'],                     outputs: [],                         requires: ['targets'],      produces: null,     label: '标记·印记' },
-    shield:     { phase: 'act',     inputs: ['targets'],                     outputs: [],                         requires: ['targets'],      produces: null,     label: '护盾' },
+    /* 状态 / 印记 / 护盾：运行时在触发事件（onHit/onCast…）按「作用于自身」开关决定打谁，
+       目标由运行时解析，不依赖 flow 边的 targets 上下文。contract 不再要求 targets，
+       否则「特效之后接事件状态」这类合法连线会被误判成死链 / 无执行（与编译器实际行为不一致）。 */
+    status:     { phase: 'act',     inputs: [],                              outputs: [],                         requires: [],               produces: null,     label: '事件状态', runtimeResolved: true },
+    mark:       { phase: 'act',     inputs: [],                              outputs: [],                         requires: [],               produces: null,     label: '标记·印记', runtimeResolved: true },
+    shield:     { phase: 'act',     inputs: [],                              outputs: [],                         requires: [],               produces: null,     label: '护盾', runtimeResolved: true },
     impact:     { phase: 'act',     inputs: ['hit', 'point'],                outputs: [],                         requires: ['hit'],          produces: null,     label: '命中表现' },
-    fx:         { phase: 'present', inputs: ['entity', 'point', 'targets', 'hit', 'trail'], outputs: [],       requires: ['anchor'],       produces: null,     label: '像素特效' },
-    particles:  { phase: 'present', inputs: ['entity', 'point', 'targets', 'hit', 'trail'], outputs: [],       requires: ['anchor'],       produces: null,     label: '粒子特效' },
-    stats:      { phase: 'meta',    inputs: [],                              outputs: [],                         requires: [],               produces: null,     label: '属性' }
+    /* 表现层（特效 / 粒子）：运行时在触发事件用真实 落点 / 实体 / 碰撞面 作锚点渲染，
+       不依赖 flow 边传来的 anchor 上下文；标记 runtimeResolved 后不再误报「没有可挂载的位置」。 */
+    fx:         { phase: 'present', inputs: ['entity', 'point', 'targets', 'hit', 'trail'], outputs: [],       requires: ['anchor'],       produces: null,     label: '像素特效', runtimeResolved: true },
+    particles:  { phase: 'present', inputs: ['entity', 'point', 'targets', 'hit', 'trail'], outputs: [],       requires: ['anchor'],       produces: null,     label: '粒子特效', runtimeResolved: true },
+    stats:      { phase: 'meta',    inputs: [],                              outputs: [],                         requires: [],               produces: null,     label: '属性' },
+    /* 延迟·延时：纯路由节点，不消费也不产出上下文，只把下游所有模块相对触发事件延后 seconds 秒生效。
+       runtimeResolved = true：运行时按触发事件自行解析上下文，不依赖 flow 边传来的 token，
+       跳过类型契约 / 缺失上下文 / 目标判定等检查，避免「A → 延迟 → B」这类合法连线被误判。 */
+    delay:      { phase: 'control', inputs: [],                              outputs: [],                         requires: [],               produces: null,     label: '延迟·延时', runtimeResolved: true }
   };
 
   var PHASE_LABEL = {
@@ -102,14 +111,16 @@
    * ------------------------------------------------------------------------ */
   function build(sk, SM) {
     var nodes = nodesOf(sk).filter(function (n) { return n && n.id; });
-    var map = {}, out = {}, inn = {}, bindInn = {};
-    nodes.forEach(function (n) { map[n.id] = n; out[n.id] = []; inn[n.id] = []; bindInn[n.id] = []; });
+    var map = {}, out = {}, inn = {}, bindInn = {}, outAll = {};
+    nodes.forEach(function (n) { map[n.id] = n; out[n.id] = []; inn[n.id] = []; bindInn[n.id] = []; outAll[n.id] = []; });
     var flowEdges = [], dangling = [], dup = [], selfLoop = [];
     var seen = {};
     edgesOf(sk).forEach(function (e, i) {
       if (!e) return;
       if (!map[e.from] || !map[e.to]) { dangling.push({ index: i, edge: e }); return; }
       if (e.from === e.to) { selfLoop.push({ index: i, edge: e }); return; }
+      // 全部边（flow + 归属）都进入 outAll：编译器按全部边判定可达性，死链判定须与此一致
+      if (outAll[e.from].indexOf(e.to) < 0) outAll[e.from].push(e.to);
       if (!isFlow(e)) { if (bindInn[e.to]) bindInn[e.to].push(e.from); return; }
       var key = e.from + '>' + e.to;
       if (seen[key]) { dup.push({ index: i, edge: e }); return; }
@@ -141,6 +152,16 @@
       });
     }
 
+    // liveAll：沿全部边（flow + 归属）的可达性，与编译器一致。
+    // 被「归属连线」挂到主链上的模块（如特效之后接事件状态）也视为可达，避免误报死链。
+    var liveAll = {};
+    var qa = startSet.slice(), ga = 0;
+    startSet.forEach(function (id) { liveAll[id] = true; });
+    while (qa.length && ga++ < 20000) {
+      var ua = qa.shift();
+      (outAll[ua] || []).forEach(function (v) { if (!liveAll[v]) { liveAll[v] = true; qa.push(v); } });
+    }
+
     // 环检测（只看 flow 边）
     var state = {}, cyc = [];
     function dfs(v) {
@@ -154,9 +175,9 @@
     nodes.forEach(function (n) { if (!state[n.id]) dfs(n.id); });
 
     return {
-      nodes: nodes, map: map, out: out, inn: inn, bindInn: bindInn,
+      nodes: nodes, map: map, out: out, inn: inn, bindInn: bindInn, outAll: outAll,
       flowEdges: flowEdges, roots: roots, triggerRoots: triggerRoots, startSet: startSet,
-      ctx: ctx, ancestors: ancestors, live: live,
+      ctx: ctx, ancestors: ancestors, live: live, liveAll: liveAll,
       dangling: dangling, dup: dup, selfLoop: selfLoop, cycles: cyc,
       model: modelOf(sk)
     };
@@ -254,15 +275,17 @@
           why: '周期结算需要一个持续存在的区域 / 光环 / 投射物作为作用域，否则没有可重复的载体',
           fix: '把它连到「区域·残留」「光环·领域」或「投射物」之后' });
       }
-      if (!ctxErr && C.phase === 'present' && !hasAnchor(c)) {
+      if (!ctxErr && C.phase === 'present' && !C.runtimeResolved && !hasAnchor(c)) {
         ctxErr = issue('NO_ANCHOR', 'error', { node: id,
           msg: '「' + C.label + '」没有可挂载的位置',
           why: '特效需要实体 / 落点 / 目标之一作为锚点，否则运行时不知道画在哪里',
           fix: '把特效连到产生实体或落点的模块之后（投射物 / 区域残留 / 命中事件）' });
       }
 
-      // ① 类型契约：上游传下来的上下文里，至少要有一个是本模块能接收的
-      if (!ctxErr && incoming.length && C.inputs.length && !intersect(c, C.inputs).length) {
+      // ① 类型契约：上游传下来的上下文里，至少要有一个是本模块能接收的。
+      // runtimeResolved（表现层 / 状态 / 印记 / 护盾）由运行时在触发事件自行解析锚点/目标，
+      // 不依赖 flow 边传来的具体 token，跳过类型契约，避免「source→特效」「特效→状态」等合法连线被误判。
+      if (!ctxErr && !C.runtimeResolved && incoming.length && C.inputs.length && !intersect(c, C.inputs).length) {
         ctxErr = issue('TYPE_CONTRACT', 'error', { node: id,
           edge: { from: incoming[0], to: id },
           msg: flowText(R, SM, { from: incoming[0], to: id }) + '：上游传下来的东西和这个模块对不上',
@@ -290,8 +313,8 @@
         }
       });
 
-      // ③ 因果顺序：结算模块必须站在判定之后
-      if (!ctxErr && C.phase === 'act' && c.indexOf('targets') < 0 && c.indexOf('hit') < 0) {
+      // ③ 因果顺序：结算模块必须站在判定之后（runtimeResolved 模块由运行时在触发事件自行解析目标，跳过此检查）
+      if (!ctxErr && C.phase === 'act' && !C.runtimeResolved && c.indexOf('targets') < 0 && c.indexOf('hit') < 0) {
         ctxErr = issue('NO_TARGET_QUERY', 'error', { node: id,
           msg: '「' + C.label + '」前面没有任何目标判定',
           why: '结算阶段需要「对谁生效」，没有目标集合或命中事件时伤害/状态不会落到任何单位',
@@ -353,11 +376,12 @@
           fix: '新模型下统一改用因果连线；确实只需属性挂靠就删掉因果连线' }));
       }
 
-      // ⑧ 死链：不在触发根可达范围内
-      if (!R.live[id] && R.triggerRoots.length) {
+      // ⑧ 死链：与编译器一致，沿全部边（flow + 归属）从触发根可达才算活着。
+      // 用 liveAll 而非 live：被「归属连线」挂到主链上的模块（如特效之后接事件状态）也视为可达。
+      if (!R.liveAll[id] && R.triggerRoots.length) {
         issues.push(issue('DEAD_FLOW', 'warn', { node: id,
           msg: '「' + C.label + '」不在任何触发链路里，运行时不会执行',
-          why: '从「触发·来源」沿因果连线走不到这个模块',
+          why: '从「触发·来源」沿连线走不到这个模块',
           fix: '把它接进链路，或删掉这个模块' }));
       }
     });

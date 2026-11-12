@@ -833,11 +833,16 @@
 
   function p2pStatus(text) {
     const el = $('p2pStatus');
+    const row = $('p2pStatusRow');
     if (el) { el.textContent = text; el.style.color = ''; }
+    // 原始「未连接」这类内部状态不在前端常驻展示，仅在有真实连接进度时显示本行
+    if (row) row.hidden = !text;
   }
   function p2pStatusBad(text) {
     const el = $('p2pStatus');
+    const row = $('p2pStatusRow');
     if (el) { el.textContent = text; el.style.color = 'var(--bad, #e5484d)'; }
+    if (row) row.hidden = !text;
   }
   function p2pMsg(id, text, kind) {
     const el = $(id);
@@ -849,6 +854,8 @@
   }
   function p2pStage(name) {
     ['p2pStageSel', 'p2pStageJoin', 'p2pStageLobby'].forEach(id => { const el = $(id); if (el) el.hidden = id !== name; });
+    // 回到选择页时收起连接状态行（避免残留上次「已连接/已断开」给玩家看）
+    if (name === 'p2pStageSel') { const row = $('p2pStatusRow'); if (row) row.hidden = true; }
   }
 
   function bindP2PMode() {
@@ -1052,8 +1059,9 @@
       $('p2pModal').hidden = true;
       p2pRoomShow();
       p2pRoomStatus('正在创建房间并收集网络地址，请稍候…');
-      const pubChk = $('p2pPublicChk');
-      const made = await NET.Session.createHostRoom(P2P.mode, Object.assign(p2pSessionOpts('好友已连接'), { public: !!(pubChk && pubChk.checked) }));
+      const visEl = document.querySelector('input[name="p2pVis"]:checked');
+      const isPublic = !visEl || visEl.value !== 'friends';
+      const made = await NET.Session.createHostRoom(P2P.mode, Object.assign(p2pSessionOpts('好友已连接'), { public: isPublic }));
       P2P.net = made.session;
       P2P.roomCode = made.code;
       if (made.session && made.session.mode) P2P.mode = made.session.mode;
@@ -1105,6 +1113,12 @@
   function lobbyEscapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
+  /* 根据在场人数推导大厅行状态徽标：仅房主=等待中；已有队友=组队中；满员=已满 */
+  function lobbyStatusOf(joined, seats) {
+    if (joined >= seats) return { cls: 'lr-full', txt: '已满' };
+    if (joined > 1) return { cls: 'lr-active', txt: '组队中' };
+    return { cls: 'lr-waiting', txt: '等待中' };
+  }
   function p2pLobbyStop() { if (lobbyTimer) { clearInterval(lobbyTimer); lobbyTimer = null; } }
   function p2pLobbyOpen() {
     p2pMsg('p2pSelMsg', null);
@@ -1135,7 +1149,7 @@
       }
       const rooms = r.rooms || [];
       if (!rooms.length) {
-        if (msg) { msg.hidden = false; msg.textContent = '当前没有公开的房间。创建时勾选「公开到大厅」即可出现在这里。'; }
+        if (msg) { msg.hidden = false; msg.textContent = '当前没有公开的房间。创建时选择「公开大厅」即可出现在这里。'; }
         list.innerHTML = '';
         return;
       }
@@ -1144,11 +1158,15 @@
         const modeTxt = rm.mode === '2v2' ? '2V2' : '1V1';
         const host = lobbyEscapeHtml(rm.host || '房主');
         const joined = Number(rm.joined || 0), seats = Number(rm.seats || 2);
+        const st = lobbyStatusOf(joined, seats);
+        let dots = '';
+        for (let i = 0; i < seats; i++) dots += '<i class="lr-dot' + (i < joined ? ' on' : '') + '"></i>';
         return '<button class="lobby-row" type="button" data-code="' + rm.code + '">' +
           '<span class="lr-mode">' + modeTxt + '</span>' +
           '<span class="lr-host">' + host + '</span>' +
+          '<span class="lr-dots" title="' + joined + '/' + seats + ' 人">' + dots + '</span>' +
           '<span class="lr-seats">' + joined + '/' + seats + '</span>' +
-          '<span class="lr-code">' + rm.code + '</span>' +
+          '<span class="lr-status ' + st.cls + '">' + st.txt + '</span>' +
           '<span class="lr-join">加入</span>' +
           '</button>';
       }).join('');
@@ -1405,7 +1423,13 @@
     if (!x) return;
     INV.skinId = id;
     saveInventory();
-    renderSkins();
+    // 只切换选中态：不重建整张网格，避免所有卡片因重排 / 重绘 / 编辑器样式重套用而上下跳动。
+    // 卡片节点保持存活，界面编辑器给 .skin-card / .skin-orb 的尺寸位移样式不会丢失。
+    if (dom.skinGrid) {
+      dom.skinGrid.querySelectorAll('.skin-card').forEach(b => {
+        b.classList.toggle('selected', b.dataset.skin === id);
+      });
+    }
     applySelectedSkin();
   }
 
@@ -2291,7 +2315,7 @@
       // 护盾屏障与像素特效模块相连时，原手绘护盾环交给特效表现
       f._shieldHasFx = f._skillCasters.some(c => !!(c.C && c.C.shieldHasFx));
     });
-    G.skillShots = []; G.skillFx = []; G.skillParts = []; G.skillZones = []; G.skillEchoes = []; G.skillWallHazards = []; G.skillAuras = []; G.skillChannels = []; G.skillDotZones = []; G._pendingProjMovers = [];
+    G.skillShots = []; G.skillFx = []; G.skillParts = []; G.skillZones = []; G.skillEchoes = []; G.skillWallHazards = []; G.skillAuras = []; G.skillChannels = []; G.skillDotZones = []; G.skillPathEmitters = []; G.skillTimers = []; G._pendingProjMovers = [];
     if (MOTION) MOTION.clear(G.movers, { now: G.clock }); else G.movers = [];
   }
 
@@ -2528,27 +2552,39 @@
       return SM.moduleTargets(effective, m, ctx.desc, ctx).length > 0;
     };
     // 归属「区域·残留」的特效由区域实体自己生成并跟随，不在事件点重复播一次
-    const fxList = (grp.fx || []).filter(f => gate(f) && f._hostType !== 'zone');
+    // 「弹珠移动路径」特效/粒子：不按事件点一次性生成，而是登记为「路径发射器」，触发后沿弹珠移动轨迹等间隔落点
+    const fxList = (grp.fx || []).filter(f => gate(f) && f._hostType !== 'zone' && f.attach !== 'path');
+    const pathFx = (grp.fx || []).filter(f => gate(f) && f._hostType !== 'zone' && f.attach === 'path');
     const partList = (grp.particles || []).filter(gate);
+    const normalParts = partList.filter(p => p.attach !== 'path');
+    const pathParts = partList.filter(p => p.attach === 'path');
     // 「敌方弹珠身上」的选靶只从本次判定命中的目标里挑，不再挂到全图另一侧的敌人身上
     const enemies = (ctx && ctx.targets && ctx.targets.length) ? ctx.targets.slice() : enemiesOf(followEnt);
     // 同组里有印记时，挂在敌方身上的循环特效跟随印记一起结束（到期 / 被消耗 / 被引爆都会回收）
     const markLife = groupMarkLifeOf(C, grp);
-    SKILL_RT.SE.spawnFx(fxList, where, x, y, rot, null, followEnt, contact, enemies, markLife).then(arr => {
-      (arr || []).forEach(a => {
-        // 贴合墙面的特效坐标已由接触面算出，不可被事件点覆盖（否则又会飘回释放点）
-        // 锚在实体上的（跟随弹珠 / 施法者身上 / 敌方弹珠身上）同理，位置由跟随实体决定
-        if (!a.wallFace && !(a.follow && typeof a.follow === 'object')) { a.x = x; a.y = y; }
-        a.born = performance.now();
+    // 「延迟」模块：本事件组内每个特效/粒子节点都可带 _delay，带延迟的延后到 N 秒后按当时世界状态重放
+    const applyFxEntry = f => {
+      SKILL_RT.SE.spawnFx([f], where, x, y, rot, null, followEnt, contact, enemies, markLife).then(arr => {
+        (arr || []).forEach(a => {
+          // 贴合墙面的特效坐标已由接触面算出，不可被事件点覆盖（否则又会飘回释放点）
+          // 锚在实体上的（跟随弹珠 / 施法者身上 / 敌方弹珠身上）同理，位置由跟随实体决定
+          if (!a.wallFace && !(a.follow && typeof a.follow === 'object')) { a.x = x; a.y = y; }
+          a.born = performance.now();
+        });
+        // 同一目标上的同类特效默认「覆盖」：旧实例在并入列表时就销毁，不会越叠越多
+        SKILL_RT.SE.pushFx(G.skillFx, arr);
       });
-      // 同一目标上的同类特效默认「覆盖」：旧实例在并入列表时就销毁，不会越叠越多
-      SKILL_RT.SE.pushFx(G.skillFx, arr);
-    });
+    };
+    const applyPartEntry = p => {
+      G.skillParts = G.skillParts.concat(SKILL_RT.SE.burstParticles(p, x, y, rot, followEnt, contact, enemies));
+    };
+    fxList.forEach(f => { if ((f._delay || 0) > 0) scheduleSkill(f._delay, () => applyFxEntry(f)); else applyFxEntry(f); });
+    // 「弹珠移动路径」：触发后按「路径触发间隔」沿施法弹珠移动轨迹留下一串特效/粒子（实现「移动留下技能效果」）
+    pathFx.forEach(f => { if ((f._delay || 0) > 0) scheduleSkill(f._delay, () => registerPathDrop(followEnt, f, 'fx')); else registerPathDrop(followEnt, f, 'fx'); });
+    pathParts.forEach(p => { if ((p._delay || 0) > 0) scheduleSkill(p._delay, () => registerPathDrop(followEnt, p, 'particles')); else registerPathDrop(followEnt, p, 'particles'); });
     // 粒子已在编译期按 triggerEvent 归入对应事件组（events[ev].particles），
     // attach 仅作视觉锚点，不再按 attach===where 过滤，否则默认 attach='impact' 的粒子在非命中事件中不生效
-    partList.forEach(p => {
-      G.skillParts = G.skillParts.concat(SKILL_RT.SE.burstParticles(p, x, y, rot, followEnt, contact, enemies));
-    });
+    normalParts.forEach(p => { if ((p._delay || 0) > 0) scheduleSkill(p._delay, () => applyPartEntry(p)); else applyPartEntry(p); });
   }
 
   /* 伤害求和：只累计「命中来源 + 伤害对象」都匹配的伤害节点。
@@ -2620,27 +2656,47 @@
   // 应用某事件的「状态」集合：元素自带状态 + status 节点（self 标记作用于自身）
   // ctx 带范围判定时，只把状态施加给「该模块作用范围」内的目标；
   // mode='enemyOnly' 用于多目标结算时避免给自身叠 N 次护盾 / 治疗。
-  function applyStatusFromGroup(grp, att, target, ctx, mode, srcName) {
+  // allowPersistent=false 用于光环 / 区域每次 tick 的结算（已按间隔反复触发，不再叠加「持续生效」逻辑）。
+  function applyStatusFromGroup(grp, att, target, ctx, mode, srcName, allowPersistent) {
     if (!grp) return;
     const SM = SKILL_RT && SKILL_RT.SM;
     const scoped = !!(ctx && ctx.desc && SM && SM.moduleInRange);
     const pass = m => !scoped || SM.moduleInRange(m, ctx.desc, target, ctx);
     const m = mode || 'both';
+    if (allowPersistent == null) allowPersistent = true;
+    // 单次施加（含自定义状态标签），封装成可延迟 / 可重复调用的闭包
+    const applyStatusOnce = (tgt, st, power, dur, tag) => {
+      if (!tgt || tgt.dead) return;
+      applyOneStatus(tgt, st, power || 0.3, dur || 2.5, att, srcName);
+      if (tag) {
+        if (!tgt._statusTags) tgt._statusTags = {};
+        tgt._statusTags[tag] = G.clock + (dur || 2.5);
+      }
+    };
+    // 元素自带状态：支持「延迟」模块延后施加（元素节点无「持续生效」开关，只按延迟延后一次）
     (grp.elements || []).forEach(e => {
       if (m === 'selfOnly') return;
-      if (pass(e) && e.status && e.status !== 'none') applyOneStatus(target, e.status, e.statusPower || 0.3, e.statusDuration || 2.5, att, srcName);
+      if (!(pass(e) && e.status && e.status !== 'none')) return;
+      const baseDelay = Number(e._delay) || 0;
+      const fire = () => applyStatusOnce(target, e.status, e.statusPower || 0.3, e.statusDuration || 2.5, '');
+      if (baseDelay > 0) scheduleSkill(baseDelay, fire); else fire();
     });
+    // 事件状态节点：支持「延迟」延后 + 「持续生效」按间隔反复重新施加
     (grp.status || []).forEach(s => {
       const tgt = s.self ? att : target;
       if (s.self && m === 'enemyOnly') return;
       if (!s.self && m === 'selfOnly') return;
       if (!s.self && !pass(s)) return;
-      applyOneStatus(tgt, s.status, s.statusPower || 0.3, s.statusDuration || 2.5, att, srcName);
-      // 自定义状态标签：后台「状态图标」里同 tag 的条目会据此显示在对局状态栏
+      const dur = s.statusDuration || 2.5;
       const tag = s.statusTag == null ? '' : String(s.statusTag).trim();
-      if (tag) {
-        if (!tgt._statusTags) tgt._statusTags = {};
-        tgt._statusTags[tag] = G.clock + (s.statusDuration || 2.5);
+      const baseDelay = Number(s._delay) || 0;
+      const fire = () => applyStatusOnce(tgt, s.status, s.statusPower || 0.3, dur, tag);
+      if (baseDelay > 0) scheduleSkill(baseDelay, fire); else fire();
+      // 持续生效：在「状态时长」窗口内按「持续间隔」反复重新施加，使其持续覆盖
+      if (allowPersistent && s.statusPersistent) {
+        const iv = Math.max(0.05, Number(s.statusInterval) || 0.5);
+        let k = iv;
+        while (k <= dur + 1e-6) { scheduleSkill(baseDelay + k, fire); k += iv; }
       }
     });
   }
@@ -2656,8 +2712,10 @@
   }
   function applyBoundTickStatuses(grp, att, target, selfOnly, srcName) {
     if (!grp) return;
-    const st = (grp.status || []).filter(s => !selfOnly || s.self);
-    applyStatusFromGroup({ status: st, elements: selfOnly ? [] : (grp.elements || []) }, att, target, null, undefined, srcName);
+    // 光环 / 区域已按 tick 间隔反复结算：剥离延迟与「持续生效」，避免重复排程与口径冲突
+    const st = (grp.status || []).filter(s => !selfOnly || s.self).map(s => Object.assign({}, s, { _delay: 0, statusPersistent: false }));
+    const els = selfOnly ? [] : (grp.elements || []).map(e => Object.assign({}, e, { _delay: 0 }));
+    applyStatusFromGroup({ status: st, elements: els }, att, target, null, undefined, srcName, false);
   }
 
   // 在某事件触发时，对 (att,target) 于 (x,y) 施加该事件的全部效果（伤害/范围/特效/粒子/状态）
@@ -2705,6 +2763,65 @@
     });
   }
 
+  /* 「弹珠移动路径」发射器：触发后在「路径持续时长」内，每隔「路径触发间隔」在施法弹珠当前位置
+     落下一个独立、不跟随的特效/粒子实例。每个落点是固定残影（区别于「跟随弹珠」始终贴着弹珠），
+     所以弹珠移动时就会沿运动轨迹铺出一条由技能效果组成的拖尾 —— 即「移动时留下技能效果」。
+     弹珠已死亡（att.dead）则不再落点，但发射器仍按持续时长自然回收。 */
+  function registerPathDrop(att, node, kind) {
+    if (!att || att.dead) return;
+    if (!G.skillPathEmitters) G.skillPathEmitters = [];
+    const interval = Math.max(0.02, Number(node.pathInterval) || 0.15);
+    const life = Math.max(0.1, Number(node.pathDuration) || 2);
+    G.skillPathEmitters.push({
+      owner: att, side: att.side, kind: kind, node: node,
+      interval: interval, life: life, age: 0, tick: 0
+    });
+  }
+
+  /* 每帧推进所有「弹珠移动路径」发射器：到点就在施法弹珠当前位置落下一个特效/粒子，
+     弹珠已死亡则跳过落点；持续时长耗尽即退役。落点实例进入 G.skillFx / G.skillParts，
+     沿用既有的生命周期与清理逻辑（可配「存在时长」让每个落点短暂淡出形成干净拖尾）。 */
+  function stepPathEmitters(dt) {
+    if (!G.skillPathEmitters || !G.skillPathEmitters.length) return;
+    G.skillPathEmitters = G.skillPathEmitters.filter(em => {
+      em.age += dt;
+      if (em.age >= em.life) return false;          // 持续时长耗尽：发射器退役
+      em.tick -= dt;
+      if (em.tick > 0) return true;                  // 还没到下一个落点时刻
+      em.tick += em.interval;                        // 到点：沿当前弹珠位置落一个特效/粒子
+      const att = em.owner;
+      if (!att || att.dead || att.x == null) return true;
+      if (em.kind === 'fx') {
+        SKILL_RT.SE.spawnFx([em.node], 'pathDrop', att.x, att.y, (att.rot || 0), null, null, null, null, 0).then(arr => {
+          (arr || []).forEach(a => { a.born = performance.now(); });
+          SKILL_RT.SE.pushFx(G.skillFx, arr);
+        });
+      } else {
+        G.skillParts = G.skillParts.concat(SKILL_RT.SE.burstParticles(em.node, att.x, att.y, (att.rot || 0), null, null, null));
+      }
+      return true;
+    });
+  }
+
+  /* 「延迟」模块 与「状态持续生效」共用的延迟执行队列：把带延迟的效果 / 状态推迟到 N 秒后执行。
+     scheduleSkill 立即执行则直接调用；延迟执行则压入 G.skillTimers，由 stepSkillTimers 每帧推进。
+     触发器 / 上下文在排队的瞬间就被闭包捕获，到点时按当时的世界状态重放。 */
+  function scheduleSkill(delaySec, fn) {
+    if (!G.skillTimers) G.skillTimers = [];
+    if (!(delaySec > 0)) { try { fn(); } catch (e) { console.error('[skill] immediate apply failed', e); } return; }
+    G.skillTimers.push({ fireAt: G.clock + delaySec, fn: fn });
+  }
+  function stepSkillTimers() {
+    if (!G.skillTimers || !G.skillTimers.length) return;
+    const now = G.clock, ready = [], keep = [];
+    for (let i = 0; i < G.skillTimers.length; i++) {
+      const t = G.skillTimers[i];
+      if (t.fireAt <= now) ready.push(t); else keep.push(t);
+    }
+    G.skillTimers = keep;
+    for (let i = 0; i < ready.length; i++) { try { ready[i].fn(); } catch (e) { console.error('[skill] delayed apply failed', e); } }
+  }
+
   /* ---------- 扩充模块：位移 / 护盾 / 标记 / 区域 / 回响 ---------- */
   function applyExtraModules(grp, att, target, ev, x, y, contact, C, ctx) {
     if (!grp || !att) return;
@@ -2716,33 +2833,55 @@
     const pass = (m, t) => !scoped || SM.moduleInRange(m, ctx.desc, t || target || att, ctx);
     const hitTargets = (ctx && ctx.targets && ctx.targets.length) ? ctx.targets : [target];
     (grp.motion || []).forEach(m => {
-      if (pass(m, target)) applyMotionModule(att, target, m, contact, ev);
+      const go = () => { if (pass(m, target)) applyMotionModule(att, target, m, contact, ev); };
+      if ((m._delay || 0) > 0) scheduleSkill(m._delay, go); else go();
     });
     (grp.shield || []).forEach(s => {
-      const amt = att.maxHp * (s.amount || 0) / 100;
-      if (amt > 0) {
-        if (!att._shieldUntil) att._shieldBase = att.shield || 0;   // 记录施放前的护盾基线
-        att._shieldUntil = G.clock + (s.duration || 5);
-        att.shield = Math.min(att.maxHp, (att.shield || 0) + amt);
-      }
-      if (s.thorns) att._thornsBoost = Math.max(att._thornsBoost || 0, s.thorns);
+      const go = () => {
+        const amt = att.maxHp * (s.amount || 0) / 100;
+        if (amt > 0) {
+          if (!att._shieldUntil) att._shieldBase = att.shield || 0;   // 记录施放前的护盾基线
+          att._shieldUntil = G.clock + (s.duration || 5);
+          att.shield = Math.min(att.maxHp, (att.shield || 0) + amt);
+        }
+        if (s.thorns) att._thornsBoost = Math.max(att._thornsBoost || 0, s.thorns);
+      };
+      if ((s._delay || 0) > 0) scheduleSkill(s._delay, go); else go();
     });
     (grp.mark || []).forEach(m => {
       // 多目标范围技：每个落在「该印记模块作用范围」里的敌人各挂一份
-      hitTargets.forEach(t => { if (t && pass(m, t)) applyMarkModule(att, t, m, C); });
+      const go = () => hitTargets.forEach(t => { if (t && pass(m, t)) applyMarkModule(att, t, m, C); });
+      if ((m._delay || 0) > 0) scheduleSkill(m._delay, go); else go();
     });
-    (grp.zone || []).forEach(z => { if (pass(z, target)) spawnZoneModule(att, z, x, y, hostView(z)); });
-    (grp.aura || []).forEach(a => { if (pass(a, target)) spawnAuraModule(att, a, x, y, hostView(a)); });
-    (grp.echo || []).forEach(e => { if (pass(e, target)) scheduleEchoModule(grp, att, target, ev, x, y, e, C); });
-    // 伤害·结算模块的「持续伤害(跟随)」：触发后留下一片跟随目标的持续掉血区（与墙面残留同归属）
-    const dm = grp.damage;
-    if (dm && dm.dotEnable && Number(dm.dotDps) > 0) {
-      let followEnt = null;
-      const fm = dm.dotFollow || 'caster';
-      if (fm === 'target') followEnt = (target && !target.dead) ? target : null;
-      else if (fm === 'caster') followEnt = (att && !att.dead) ? att : null;
-      spawnDamageDot(att, dm, followEnt, x, y, C);
-    }
+    (grp.zone || []).forEach(z => {
+      const go = () => { if (pass(z, target)) spawnZoneModule(att, z, x, y, hostView(z)); };
+      if ((z._delay || 0) > 0) scheduleSkill(z._delay, go); else go();
+    });
+    (grp.aura || []).forEach(a => {
+      const go = () => { if (pass(a, target)) spawnAuraModule(att, a, x, y, hostView(a)); };
+      if ((a._delay || 0) > 0) scheduleSkill(a._delay, go); else go();
+    });
+    (grp.echo || []).forEach(e => {
+      const go = () => { if (pass(e, target)) scheduleEchoModule(grp, att, target, ev, x, y, e, C); };
+      if ((e._delay || 0) > 0) scheduleSkill(e._delay, go); else go();
+    });
+    // 伤害·结算模块的「持续伤害(跟随)」：逐节点处理，每个「伤害·结算」节点只按自己
+    // 的 dotEnable / dotRadius / dotDps / dotDuration / dotInterval / dotFollow 留下一片
+    // 跟随目标的持续掉血区。这样从同一触发源分叉出的多条逻辑链路互不串味：某条分支没开
+    // 持续伤害、或它的半径 / 每秒伤害 / 时长不同，都不会被另一条分支的「伤害·结算」模块带偏。
+    // 「延迟」模块：按该节点自己的累计延迟延后触发这一片掉血区（之前误用合并对象的「最大」延迟）。
+    (grp.damageList || []).forEach(function (dm) {
+      if (!dm || !dm.dotEnable || !(Number(dm.dotDps) > 0)) return;
+      const go = function () {
+        let followEnt = null;
+        const fm = dm.dotFollow || 'caster';
+        if (fm === 'target') followEnt = (target && !target.dead) ? target : null;
+        else if (fm === 'caster') followEnt = (att && !att.dead) ? att : null;
+        spawnDamageDot(att, dm, followEnt, x, y, C);
+      };
+      const dDelay = Number(dm._delay) || 0;
+      if (dDelay > 0) scheduleSkill(dDelay, go); else go();
+    });
   }
 
   /* 位移模块 = 往目标弹珠挂一个「运动器」。
@@ -3503,6 +3642,10 @@
         }
       });
     }
+    // 「弹珠移动路径」发射器：触发后沿施法弹珠轨迹等间隔落特效/粒子
+    // 「延迟」模块 / 「状态持续生效」的延迟执行队列：到点重放被推迟的效果与状态
+    stepSkillTimers();
+    if (G.skillPathEmitters && G.skillPathEmitters.length) stepPathEmitters(dt);
     SKILL_RT.SE.stepFx(G.skillFx, dt);
     SKILL_RT.SE.updateParticles(G.skillParts, dt);
     // 每帧兜底去重：任何路径（含绕过 pushFx 的投射物特效）都不允许同宿主叠多份
@@ -4793,6 +4936,16 @@
     if (!row) return;
     p2pLobbyJoin(row.dataset.code);
   });
+  // 房间可见性单选：同步 .active 高亮（radio 自带互斥，这里只管样式）
+  const pvRadios = document.querySelectorAll('input[name="p2pVis"]');
+  const pvSync = () => {
+    document.querySelectorAll('.p2p-visibility .pv-opt').forEach(o => {
+      const r = o.querySelector('input[type="radio"]');
+      o.classList.toggle('active', !!(r && r.checked));
+    });
+  };
+  pvRadios.forEach(r => r.addEventListener('change', pvSync));
+  pvSync();
   const roomCodeIn = $('p2pRoomCodeIn');
   if (roomCodeIn) {
     roomCodeIn.addEventListener('input', () => {
