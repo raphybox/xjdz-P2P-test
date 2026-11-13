@@ -4,7 +4,7 @@ window.WOWPINBALL_PUBLISHED = {
   "meta": {
     "schema": 1,
     "gameName": "魔兽弹珠",
-    "updatedAt": "2026-11-12",
+    "updatedAt": "2026-11-13",
     "note": "默认配置，与首版游戏数值一致"
   },
   "config": {
@@ -64,19 +64,29 @@ window.WOWPINBALL_PUBLISHED = {
               "enabled": true
             },
             "x": 30,
-            "y": 20
+            "y": 74
           },
           {
             "id": "select_9gcclxw",
-            "type": "select",
+            "type": "range",
             "params": {
               "bindTo": "auto",
-              "side": "enemyOne",
+              "shape": "circle",
+              "radius": 50,
+              "innerRadius": 0,
+              "angleDeg": 90,
+              "length": 600,
+              "width": 20,
+              "castRange": 0,
+              "origin": "caster",
+              "maxTargets": 1,
               "pick": "nearest",
+              "includeSelf": false,
+              "side": "enemyOne",
               "count": 1
             },
-            "x": 30,
-            "y": 230
+            "x": 330,
+            "y": 74
           },
           {
             "id": "fx_kyoyusa",
@@ -123,8 +133,8 @@ window.WOWPINBALL_PUBLISHED = {
               "rangeOrigin": "impact",
               "rangeMaxTargets": 0
             },
-            "x": 780,
-            "y": 20
+            "x": 930,
+            "y": 74
           },
           {
             "id": "damage_ivkv1lg",
@@ -161,8 +171,8 @@ window.WOWPINBALL_PUBLISHED = {
               "rangeOrigin": "impact",
               "rangeMaxTargets": 0
             },
-            "x": 1030,
-            "y": 20
+            "x": 1230,
+            "y": 96
           }
         ],
         "edges": [
@@ -172,13 +182,17 @@ window.WOWPINBALL_PUBLISHED = {
             "kind": "flow"
           },
           {
-            "from": "select_9gcclxw",
-            "to": "fx_kyoyusa",
+            "from": "fx_kyoyusa",
+            "to": "damage_ivkv1lg",
+            "fromPort": "cast",
+            "toPort": "cast",
             "kind": "flow"
           },
           {
-            "from": "fx_kyoyusa",
-            "to": "damage_ivkv1lg",
+            "from": "select_9gcclxw",
+            "to": "fx_kyoyusa",
+            "fromPort": "cast",
+            "toPort": "cast",
             "kind": "flow"
           }
         ]
@@ -3249,6 +3263,345 @@ window.WOWPINBALL_PUBLISHED = {
         ]
       },
       "icon": ""
+    },
+    {
+      "id": "sk_mweodfh6566e",
+      "name": "新果实 9",
+      "tier": "common",
+      "mods": {},
+      "enabled": true,
+      "charge": 3,
+      "intro": "",
+      "icon": "",
+      "graph": {
+        "nodes": [
+          {
+            "id": "source_tz6a1we",
+            "type": "source",
+            "x": 30,
+            "y": 74,
+            "params": {
+              "trigger": "roundStart",
+              "delay": 0.35,
+              "interval": 2.2,
+              "maxCasts": 0,
+              "aim": "atEnemy",
+              "angle": 0,
+              "enabled": true
+            }
+          },
+          {
+            "id": "select_t4zlmpl",
+            "type": "select",
+            "x": 310,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "side": "enemyOne",
+              "pick": "nearest",
+              "count": 1
+            }
+          },
+          {
+            "id": "stats_05xbl3t",
+            "type": "stats",
+            "x": 30,
+            "y": 74,
+            "params": {
+              "maxHp": 0,
+              "power": 0,
+              "speed": 0,
+              "mass": 0,
+              "crit": 0,
+              "critMult": 0,
+              "armor": 0,
+              "dodge": 0,
+              "regen": 0,
+              "shield": 0,
+              "thorns": 0,
+              "lifesteal": 0,
+              "firstStrike": 0,
+              "momentum": 0,
+              "combo": 0,
+              "execute": 0,
+              "slow": 0,
+              "dot": 0,
+              "knock": 0
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "source_tz6a1we",
+            "to": "select_t4zlmpl"
+          },
+          {
+            "from": "select_t4zlmpl",
+            "to": "stats_05xbl3t"
+          }
+        ]
+      }
+    },
+    {
+      "id": "sk_mweoe3atq729",
+      "name": "冰锥三连",
+      "tier": "rare",
+      "mods": {},
+      "enabled": true,
+      "charge": 4,
+      "intro": "",
+      "icon": "",
+      "graph": {
+        "nodes": [
+          {
+            "id": "source_u12z7vi",
+            "type": "source",
+            "x": 30,
+            "y": 74,
+            "params": {
+              "trigger": "interval",
+              "delay": 0.4,
+              "interval": 3,
+              "maxCasts": 0,
+              "aim": "atEnemy",
+              "angle": 0,
+              "enabled": true
+            }
+          },
+          {
+            "id": "select_keuh0fs",
+            "type": "select",
+            "x": 310,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "side": "enemyOne",
+              "pick": "nearest",
+              "count": 1
+            }
+          },
+          {
+            "id": "element_2vyvfqf",
+            "type": "element",
+            "x": 1150,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "triggerEvent": "onHit",
+              "element": "ice",
+              "color": "#8ad8ff",
+              "damage": 8,
+              "damagePct": 0.8,
+              "status": "slow",
+              "statusPower": 0.4,
+              "statusDuration": 2,
+              "critBonus": 0,
+              "armorPen": 0,
+              "enabled": true,
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          },
+          {
+            "id": "damage_c1a4tb0",
+            "type": "damage",
+            "x": 1150,
+            "y": 512,
+            "params": {
+              "bindTo": "auto",
+              "affect": "enemy",
+              "triggerEvent": "onHit",
+              "hitKind": "auto",
+              "base": 6,
+              "pctMaxHp": 0,
+              "critChance": 0,
+              "critMult": 0,
+              "lifesteal": 0,
+              "armorPen": 0,
+              "knockback": 0,
+              "ignoreShield": false,
+              "ignoreDodge": false,
+              "canCrit": true,
+              "wallDamageMode": "auto",
+              "wallDps": 0,
+              "wallTouchDamage": 0,
+              "wallTouchInterval": 0.8,
+              "wallDuration": 3,
+              "wallRadius": 60,
+              "dotEnable": false,
+              "dotDps": 8,
+              "dotRadius": 70,
+              "dotInterval": 0.5,
+              "dotFollow": "caster",
+              "dotDuration": 6,
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          },
+          {
+            "id": "projectile_kd3vd9e",
+            "type": "projectile",
+            "x": 590,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "name": "",
+              "count": 3,
+              "spread": 26,
+              "speed": 340,
+              "accel": 0,
+              "range": 780,
+              "size": 9,
+              "image": "",
+              "noRotFollow": false,
+              "pierce": 0,
+              "homing": 0,
+              "gravity": 0,
+              "lifetime": 4,
+              "gap": 0,
+              "spawnOffset": 28,
+              "bindCaster": false,
+              "followCaster": true,
+              "jitter": 0,
+              "spin": 0,
+              "trail": true,
+              "trailLen": 0.16,
+              "trailWidth": 100,
+              "trailAlpha": 32,
+              "fadeOut": true,
+              "delivery": "projectile",
+              "areaRadius": 80,
+              "castRange": 0,
+              "meleeRange": 60,
+              "rayRange": 600,
+              "rayWidth": 20,
+              "summonDur": 6
+            }
+          },
+          {
+            "id": "fx_vthbjav",
+            "type": "fx",
+            "x": 870,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "triggerEvent": "onHit",
+              "name": "",
+              "effect": "ice/frost-breath",
+              "attach": "projectile",
+              "enemyPick": "nearest",
+              "pathInterval": 0.15,
+              "pathDuration": 2,
+              "scale": 0.8,
+              "fps": 1,
+              "clipStart": 0,
+              "clipEnd": 0,
+              "alpha": 1,
+              "light": 1,
+              "rotation": 0,
+              "offsetX": 0,
+              "offsetY": 0,
+              "loop": true,
+              "life": 0,
+              "tailMode": "freeze",
+              "stackReplace": true,
+              "additive": false,
+              "flipX": false,
+              "matchRotation": true,
+              "noRotFollow": false,
+              "fxOptions": {},
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          },
+          {
+            "id": "particles_rdq73yf",
+            "type": "particles",
+            "x": 870,
+            "y": 535,
+            "params": {
+              "bindTo": "auto",
+              "triggerEvent": "onHit",
+              "count": 10,
+              "shape": "spark",
+              "size": 3,
+              "sizeVar": 1.5,
+              "speed": 120,
+              "speedVar": 60,
+              "spread": 360,
+              "life": 0.6,
+              "lifeVar": 0.25,
+              "gravity": 0,
+              "drag": 0.9,
+              "emitRate": 0,
+              "attach": "impact",
+              "enemyPick": "nearest",
+              "pathInterval": 0.15,
+              "pathDuration": 2,
+              "color": "#bfe8ff",
+              "color2": "#4aa8ff",
+              "spin": 0,
+              "fade": true,
+              "additive": true,
+              "enabled": true,
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "source_u12z7vi",
+            "fromPort": "cast",
+            "to": "select_keuh0fs",
+            "toPort": "cast"
+          },
+          {
+            "from": "source_u12z7vi",
+            "fromPort": "cast",
+            "to": "element_2vyvfqf",
+            "toPort": "cast"
+          },
+          {
+            "from": "element_2vyvfqf",
+            "fromPort": "cast",
+            "to": "damage_c1a4tb0",
+            "toPort": "cast"
+          },
+          {
+            "from": "damage_c1a4tb0",
+            "fromPort": "cast",
+            "to": "projectile_kd3vd9e",
+            "toPort": "cast"
+          },
+          {
+            "from": "select_keuh0fs",
+            "fromPort": "targets",
+            "to": "projectile_kd3vd9e",
+            "toPort": "targets"
+          },
+          {
+            "from": "projectile_kd3vd9e",
+            "fromPort": "entity",
+            "to": "fx_vthbjav",
+            "toPort": "entity"
+          },
+          {
+            "from": "projectile_kd3vd9e",
+            "fromPort": "hit",
+            "to": "particles_rdq73yf",
+            "toPort": "hit"
+          }
+        ]
+      }
     }
   ],
   "maps": [
@@ -3914,8 +4267,8 @@ window.WOWPINBALL_PUBLISHED = {
       }
     ]
   },
-  "version": "WJ-MEXG-Y3J5-AAAAAV-BL9N-NZUB-Z2K4-CP6R-PCVA",
-  "versionSeq": 19,
+  "version": "WJ-MEXG-Y3J5-AAAAAW-BQ9N-NDUB-Z2K4-CP6R-PCVA",
+  "versionSeq": 20,
   "statuses": [
     {
       "kind": "buff",

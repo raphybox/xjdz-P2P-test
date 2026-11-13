@@ -75,7 +75,7 @@ ok('回合战报 hover 使用 intro 且 escHtml', /s\.intro/.test(recap) && /esc
 
 console.log('4) 后台编辑器：字段、写入、搜索、校验、旧表单');
 ok('编辑器存在介绍输入框', admin.indexOf('data-semeta="intro"') >= 0 && admin.indexOf('id="seIntro"') >= 0);
-ok('介绍条被拼进 se-main', /'<div class="se-main">' \+ toolbar \+ introBar/.test(admin));
+ok('介绍收进工具栏（不独占一行）', admin.indexOf("introBar + '</div>'") >= 0 && !/toolbar \+ introBar/.test(admin));
 const onInput = seg(admin, 'function seOnInput(e) {', '\n  function seAction(');
 ok('输入介绍只写模型+列表，不重启试放', /if \(k === 'intro'\)[\s\S]{0,260}seRepaintList\(\); return true;/.test(onInput) && !/if \(k === 'intro'\)[\s\S]{0,260}seTouch\(\)/.test(onInput));
 ok('列表显示介绍摘要与完整 title', admin.indexOf('se-item-intro') >= 0 && /title="' \+ esc\(intro\)/.test(admin));

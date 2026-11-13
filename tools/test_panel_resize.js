@@ -14,7 +14,7 @@ console.log('1) 四条分隔条与变量');
 {
   ['left', 'right', 'preview', 'log'].forEach(k =>
     ok('存在 data-split="' + k + '"', admin.indexOf('data-split="' + k + '"') >= 0));
-  ok('四条都有默认值', /SE_SIZE_DEF = \{ left: 420, right: 326, preview: 360, log: 120 \}/.test(admin));
+  ok('四条都有默认值', /SE_SIZE_DEF = \{ left: 340, right: 326, preview: 340, log: 110 \}/.test(admin));
   ok('四条都有上下限', /SE_SIZE_LIMIT = \{ left: \[160, 560\], right: \[220, 640\], preview: \[180, 900\], log: \[48, 520\] \}/.test(admin));
   ok('CSS 变量映射齐全', /SE_SIZE_VAR = \{ left: '--se-left-w', right: '--se-right-w', preview: '--se-preview-h', log: '--se-log-h' \}/.test(admin));
   ok('渲染时把尺寸写进 .se-wrap', /class="se-wrap' \+ \(S\.skillEd\.pvZoom[\s\S]{0,80}seSizeStyle\(\)/.test(admin));
@@ -43,7 +43,7 @@ console.log('\n2b) 流水线视图下试放必须照常启动（本轮发现并�
 
 console.log('\n2c) 参考式三栏重排与特效预览恢复');
 {
-  ok('主区只剩工具栏 / 介绍 / 画布区', /const main = '<div class="se-main">' \+ toolbar \+ introBar \+ stageArea \+ '<\/div>';/.test(admin));
+  ok('主区只剩工具栏 / 画布区（介绍已收进工具栏）', /const main = '<div class="se-main">' \+ toolbar \+ stageArea \+ '<\/div>';/.test(admin));
   ok('试放区改为左栏内容', /const left = leftBase \+ previewHtml \+ '<\/div>';/.test(admin));
   ok('介绍栏折叠成 details', /<details class="se-intro"/.test(admin));
   ok('左栏内有 preview 分隔条', /data-act="se-pv-zoom"/.test(admin));

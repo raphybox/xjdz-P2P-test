@@ -133,7 +133,7 @@
 
   var MODULES = {
     source: {
-      label: '触发 · 来源', short: '触发', color: '#e8a95c', desc: '决定技能何时施放、施放几次、朝哪里打',
+      label: '触发 · 来源', short: '来源', color: '#e8a95c', desc: '决定技能何时施放、施放几次、朝哪里打',
       fields: [
         sel('trigger', '触发时机', 'roundStart', [
           ['roundStart', '回合开始'], ['interval', '定时循环'], ['onCharge', '充能完成时'],
@@ -161,7 +161,7 @@
        接在触发来源之后、其它模块之前；不接时保持旧行为（命中时打对手、施放时以对手为目标）。
        多敌人 / 队友按「挑选规则」排序后取前 N 个（N=1~4）。 */
     select: {
-      label: '目标 · 锁定', short: '锁定', color: '#c9a6ff',
+      label: '目标 · 锁定', short: '单体', color: '#c9a6ff',
       desc: '决定技能作用于谁：自身 / 单个敌人 / 多个敌人 / 队友。接在「触发 · 来源」后面，下游的伤害、状态、印记、位移、撞墙伤害都以这里选出的单位为目标；不接时按旧行为以对手为目标',
       fields: [
         sel('side', '选择对象', 'self', [
@@ -249,7 +249,10 @@
         sel('origin', '判定圆心', 'caster', [
           ['caster', '我方（施法者）'], ['opponent', '敌方（对手）'], ['impact', '命中 / 落点'], ['auto', '按投递形态自动']
         ], '我方=围绕自己的弹珠画范围（近身自走 AoE 最常用）；敌方=围绕对手的弹珠画范围（在敌人身上炸开）；命中/落点=投射物实际命中点；射线带恒以施法者为起点'),
-        n('maxTargets', '目标上限', 0, 0, 20, 1, '0 = 范围内所有敌方都生效；多敌人时按距离由近到远取前 N 个'),
+        n('maxTargets', '敌人数量', 0, 0, 20, 1, '0 = 范围内所有敌人；大于 0 时先按「挑选规则」排序，再取前 N 个'),
+        sel('pick', '挑选规则', 'nearest', [
+          ['nearest', '距离最近'], ['farthest', '距离最远'], ['lowestHp', '血量最低'], ['highestHp', '血量最高']
+        ], '目标上限 > 0 时生效：决定优先选哪几个敌人（先排序再截断）'),
         b('includeSelf', '也作用于自身', false, '勾选=判定区域内的自身 / 友方也参与结算（一般用于增益型技能）')
       ]
     },
@@ -1089,7 +1092,7 @@
 
     var d = {
       form: form, shape: 'circle', radius: 0, innerRadius: 0, angleDeg: 360,
-      length: 0, width: 0, castRange: 0, maxTargets: 0, includeSelf: false,
+      length: 0, width: 0, castRange: 0, maxTargets: 0, pick: 'nearest', includeSelf: false,
       origin: 'impact', x: point.x, y: point.y, angle: angle,
       source: 'delivery', label: ''
     };
@@ -1132,6 +1135,7 @@
       var cr = Math.max(0, numOr(R.castRange, 0));
       if (cr > 0) d.castRange = cr;
       d.maxTargets = Math.max(0, Math.round(numOr(R.maxTargets, 0)));
+      d.pick = R.pick || 'nearest';
       d.includeSelf = !!R.includeSelf;
       var og = R.origin || 'auto';
       // 显式指定：我方 / 敌方 / 命中落点；auto 默认围绕施法者（自走 AoE 最常见），
@@ -1192,8 +1196,14 @@
     });
     list = list.filter(function (t) { return inRangeShape(d, t); });
     if (d) {
+      var pick = d.pick || 'nearest';
       list.sort(function (a, b) {
-        return Math.hypot(a.x - d.x, a.y - d.y) - Math.hypot(b.x - d.x, b.y - d.y);
+        if (pick === 'lowestHp' || pick === 'highestHp') {
+          var ah = (a.hp == null ? Infinity : a.hp), bh = (b.hp == null ? Infinity : b.hp);
+          return pick === 'lowestHp' ? ah - bh : bh - ah;
+        }
+        var da = Math.hypot(a.x - d.x, a.y - d.y), db = Math.hypot(b.x - d.x, b.y - d.y);
+        return pick === 'farthest' ? db - da : da - db;
       });
       if (d.maxTargets > 0) list = list.slice(0, d.maxTargets);
     }
@@ -1368,6 +1378,8 @@
       normalized._hostType = ownN ? ownN.type : '';
       // 「延迟」模块：本节点到根的最大累计延迟（秒）；0 = 立即生效
       normalized._delay = Math.max(0, Number(nodeDelay[x.id]) || 0);
+      // 归属的事件组（编辑器语义条直接读它，避免编辑器自己再推一遍）
+      normalized._event = evKey;
       /* 伤害节点带上编译期定死的「命中判定」与「伤害对象」：
          运行时按这两个字段决定「这次命中算不算数」「打谁」，两端口径完全一致 */
       if (x.type === 'damage') {
@@ -1451,8 +1463,20 @@
       if (MODULES[t].multi || t === 'source') multi[t] = p;
       else if (!EVENT_ONLY[t]) single[t] = merge(t, p);   // 事件型模块只在 events 中，不进 single
     });
-    // 目标·锁定是「作用于谁」的全局配置，不进事件组；多个节点时取第一份
-    single.select = merge('select', pick('select'));
+    // 目标·锁定是「作用于谁」的全局配置，不进事件组；多个节点时取第一份。
+    // 范围卡替代了目标卡时（合并），用范围卡上携带的 side/pick/count 兜底，避免 C.select 退回默认值。
+    var selNodes = pick('select');
+    if (!selNodes.length) {
+      selNodes = pick('range').map(function (r) {
+        var mt = Math.max(0, Math.round(numOr(r.maxTargets, 0)));
+        return {
+          side: r.side || 'enemyMany',
+          pick: r.pick || 'nearest',
+          count: r.count != null ? r.count : (mt > 0 ? Math.min(4, mt) : 4)
+        };
+      });
+    }
+    single.select = merge('select', selNodes);
     // 被动属性始终以技能原有 mods 为准（stats 节点只是它的可视化入口）
     single.stats = Object.assign(defaults('stats'), (skill && skill.mods) || {});
     /* 多个投射物不再 merge 成一份：旧逻辑把 speed / count / size 全部相加，
@@ -1505,6 +1529,27 @@
       }
     })();
 
+    /* 编辑器语义条的唯一数据源：每个节点最终属于哪个事件组 / 哪个宿主 / 累计延迟 / 命中判定。
+       全部取自上面已算好的归一化结果，不再让编辑器自己猜一遍（避免「界面看着对、跑起来不对」）。 */
+    var semantics = { byNode: {} };
+    nodes.forEach(function (x) {
+      var n = normalizedById[x.id];
+      var host = (n && n._hostId) ? byId[n._hostId] : null;
+      var hostName = host ? String((host.params || {}).name || '').trim() : '';
+      semantics.byNode[x.id] = {
+        type: x.type,
+        event: (n && n._event) || '',
+        hostId: (n && n._hostId) || '',
+        hostType: host ? host.type : '',
+        hostLabel: host ? (HOST_LABELS[host.type] + (hostName ? '「' + hostName + '」' : ''))
+                        : (x.type === 'stats' ? '' : '技能整体'),
+        delay: (n && Number(n._delay)) || 0,
+        hitKind: (n && n._hitKind) || '',
+        pathDot: !!(n && n._pathDot && n._pathDot.length),
+        routed: !!(n && n._routedToPath)
+      };
+    });
+
     var result = {
       /* 技能名随编译结果一起带出：战斗记录 / 伤害统计按技能名归因，
          运行时的 C / C._viewOf 视图都能直接取到，不用再回查技能表。 */
@@ -1520,6 +1565,7 @@
       events: events, active: active,
       hosts: hosts, bindings: { byNode: ownerOf, publicBucket: scoped[''] },
       rangeByHost: rangeByHost,
+      semantics: semantics,
       charge: chargeOf(skill)
     };
 
@@ -1592,7 +1638,11 @@
   }
 
   /* ---------------- 预设：可直接载入后继续魔改 ---------------- */
-  function P(name, desc, tier, build) { return { name: name, desc: desc, tier: tier, build: build }; }
+  function P(name, desc, tier, build, charge) { return { name: name, desc: desc, tier: tier, build: build, charge: charge || 0 }; }
+  /** 预设专用：带端口的边（编辑器按端口画彩色线，编译仍按拓扑） */
+  function E(from, fromPort, to, toPort) {
+    return { from: from.id, fromPort: fromPort, to: to.id, toPort: toPort };
+  }
   var PRESETS = [
     P('火球术', '单体火球：命中附加灼烧，可编辑数量/射程/反弹', 'common', function () {
       var s = node('source', 40, 80, { trigger: 'interval', interval: 2.4, delay: 0.6 });
@@ -1673,7 +1723,136 @@
       return makeGraph([s, tg, e, m], [
         { from: s.id, to: tg.id }, { from: tg.id, to: e.id }, { from: tg.id, to: m.id }
       ]);
-    })
+    }),
+    /* ================= v4 端口样例（10 个果实） ================= */
+    P('冰锥三连', '三发冰锥扇形散射：每发独立命中并减速，适合封走位', 'rare', function () {
+      var s = node('source', 0, 0, { trigger: 'interval', interval: 3, delay: 0.4, aim: 'atEnemy' });
+      var sel = node('select', 0, 0, { side: 'enemyOne', pick: 'nearest', count: 1 });
+      var el = node('element', 0, 0, { triggerEvent: 'onHit', element: 'ice', color: '#8ad8ff', damage: 8, damagePct: 0.8, status: 'slow', statusPower: 0.4, statusDuration: 2 });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 6 });
+      var p = node('projectile', 0, 0, { count: 3, spread: 26, speed: 340, size: 9, range: 780 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'ice/frost-breath', attach: 'projectile', scale: 0.8 });
+      var pa = node('particles', 0, 0, { triggerEvent: 'onHit', count: 10, color: '#bfe8ff', color2: '#4aa8ff', attach: 'impact' });
+      return makeGraph([s, sel, el, d, p, f, pa], [
+        E(s, 'cast', sel, 'cast'), E(s, 'cast', el, 'cast'), E(el, 'cast', d, 'cast'),
+        E(d, 'cast', p, 'cast'), E(sel, 'targets', p, 'targets'),
+        E(p, 'entity', f, 'entity'), E(p, 'hit', pa, 'hit')
+      ]);
+    }, 4),
+    P('雷霆领域', '以自身为圆心的雷暴：按血量优先抓 3 个敌人，命中附带短暂眩晕', 'epic', function () {
+      var s = node('source', 0, 0, { trigger: 'roundStart', delay: 0.6, aim: 'atEnemy' });
+      var rg = node('range', 0, 0, { bindTo: 'auto', side: 'enemyMany', count: 3, shape: 'circle', radius: 150, origin: 'caster', maxTargets: 3, pick: 'lowestHp', includeSelf: false });
+      var el = node('element', 0, 0, { triggerEvent: 'onHit', element: 'lightning', color: '#9ad8ff', damage: 12, damagePct: 1.2, status: 'stun', statusPower: 0.3, statusDuration: 0.8 });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 14 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'ice/frost-nova', attach: 'host', scale: 1.3, fxOptions: { palette: ['#101a3a', '#1d3a72', '#2f6fc0', '#78c8ff', '#ffffff'] } });
+      var im = node('impact', 0, 0, { triggerEvent: 'onHit', aoeRadius: 60, aoePct: 0.2, shake: 0.2 });
+      return makeGraph([s, rg, el, d, f, im], [
+        E(s, 'cast', rg, 'cast'),
+        E(rg, 'hit', el, 'hit'), E(el, 'cast', d, 'cast'),
+        E(rg, 'hit', f, 'hit'), E(rg, 'hit', im, 'hit')
+      ]);
+    }, 5),
+    P('扇形霜爆', '面前 100° 扇形冻结：贴身打出高击退，专治绕后', 'rare', function () {
+      var s = node('source', 0, 0, { trigger: 'roundStart', delay: 0.35, aim: 'atEnemy' });
+      var rg = node('range', 0, 0, { bindTo: 'auto', side: 'enemyMany', count: 2, shape: 'cone', radius: 240, angleDeg: 100, origin: 'caster', maxTargets: 2, pick: 'nearest', includeSelf: false });
+      var el = node('element', 0, 0, { triggerEvent: 'onHit', element: 'ice', color: '#a8e8ff', damage: 10, status: 'freeze', statusPower: 0.3, statusDuration: 1.5 });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 12, knockback: 30 });
+      var im = node('impact', 0, 0, { triggerEvent: 'onHit', aoeRadius: 80, aoePct: 0.3, shake: 0.18 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'ice/frost-nova', attach: 'host', scale: 1.1 });
+      return makeGraph([s, rg, el, d, im, f], [
+        E(s, 'cast', rg, 'cast'),
+        E(rg, 'hit', el, 'hit'), E(el, 'cast', d, 'cast'),
+        E(rg, 'hit', im, 'hit'), E(rg, 'hit', f, 'hit')
+      ]);
+    }, 4),
+    P('贯穿射线', '一条 1100 长的穿透射线：优先打最远的敌人，最多贯穿 4 个', 'epic', function () {
+      var s = node('source', 0, 0, { trigger: 'interval', interval: 3.4, delay: 0.5, aim: 'atEnemy' });
+      var rg = node('range', 0, 0, { bindTo: 'auto', side: 'enemyMany', count: 4, shape: 'line', length: 1100, width: 30, origin: 'caster', maxTargets: 4, pick: 'farthest' });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 16, armorPen: 10 });
+      var el = node('element', 0, 0, { triggerEvent: 'onHit', element: 'lightning', color: '#9ad8ff', damage: 8, status: 'weaken', statusPower: 0.2, statusDuration: 2 });
+      var pa = node('particles', 0, 0, { triggerEvent: 'onHit', count: 16, color: '#d0f0ff', color2: '#3f78d0', attach: 'path' });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'ice/frost-breath', attach: 'host', scale: 1.2 });
+      return makeGraph([s, rg, d, el, pa, f], [
+        E(s, 'cast', rg, 'cast'),
+        E(rg, 'hit', d, 'hit'), E(rg, 'hit', el, 'hit'),
+        E(rg, 'hit', pa, 'hit'), E(rg, 'hit', f, 'hit')
+      ]);
+    }, 5),
+    P('毒雾陷阱', '在命中点留下一片毒雾：持续伤害 + 减速，适合锁住路口', 'rare', function () {
+      var s = node('source', 0, 0, { trigger: 'roundStart', delay: 1.2, aim: 'atEnemy' });
+      var sel = node('select', 0, 0, { side: 'enemyMany', pick: 'nearest', count: 4 });
+      var zn = node('zone', 0, 0, { triggerEvent: 'onHit', radius: 120, duration: 5, dps: 7, slowPct: 0.25, color: '#7bd88a' });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 0, dotEnable: true, dotDps: 6, dotRadius: 120, dotFollow: 'caster', dotDuration: 5 });
+      var st = node('status', 0, 0, { triggerEvent: 'onHit', status: 'poison', statusPower: 0.35, statusDuration: 4 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'nature/poison-cloud', attach: 'host', scale: 1.2, loop: false, life: 5 });
+      return makeGraph([s, sel, zn, d, st, f], [
+        E(s, 'cast', sel, 'cast'), E(s, 'cast', zn, 'cast'),
+        E(zn, 'tick', d, 'tick'), E(zn, 'tick', st, 'tick'), E(zn, 'area', f, 'point')
+      ]);
+    }, 4),
+    P('荆棘壁垒', '给自己套一层带反伤的护盾：抗住一波近身，靠反伤换血', 'common', function () {
+      var s = node('source', 0, 0, { trigger: 'roundStart', delay: 0.2, aim: 'atEnemy' });
+      var sel = node('select', 0, 0, { side: 'self', pick: 'nearest', count: 1 });
+      var sh = node('shield', 0, 0, { triggerEvent: 'onCast', amount: 70, duration: 4, thorns: 0.35 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onCast', effect: 'holy/divine-shield', attach: 'caster', scale: 1 });
+      var pa = node('particles', 0, 0, { triggerEvent: 'onCast', count: 10, color: '#ffe9a0', color2: '#e8c85a', attach: 'caster' });
+      return makeGraph([s, sel, sh, f, pa], [
+        E(s, 'cast', sel, 'cast'), E(sel, 'targets', sh, 'targets'),
+        E(sh, 'cast', f, 'cast'), E(sh, 'cast', pa, 'cast')
+      ]);
+    }, 2.5),
+    P('回旋月刃', '掷出后绕回自身的月刃：命中击退，贴身时能连续挂到', 'epic', function () {
+      var s = node('source', 0, 0, { trigger: 'roundStart', delay: 0.4, aim: 'atEnemy' });
+      var sel = node('select', 0, 0, { side: 'enemyOne', pick: 'nearest', count: 1 });
+      var p = node('projectile', 0, 0, { count: 1, speed: 420, size: 10, range: 700 });
+      var mo = node('motion', 0, 0, { triggerEvent: 'onCast', scope: 'projectile', track: 'arc', dirFrom: 'velocity', arcDeg: 60, distance: 260, duration: 0.8, endSpeed: 'restore', dieOnWall: false });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 18, knockback: 20 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'melee/heavy-cleave', attach: 'projectile', scale: 0.9, fxOptions: { palette: ['#0c2438', '#14486a', '#1f7a9c', '#4fc3d9', '#ffffff'] } });
+      var pa = node('particles', 0, 0, { triggerEvent: 'onHit', count: 8, color: '#bff4ff', color2: '#2f8fc0', attach: 'projectile' });
+      return makeGraph([s, sel, p, mo, d, f, pa], [
+        E(s, 'cast', sel, 'cast'), E(sel, 'targets', p, 'targets'),
+        E(p, 'entity', mo, 'entity'), E(mo, 'cast', d, 'cast'),
+        E(p, 'entity', f, 'entity'), E(p, 'entity', pa, 'entity')
+      ]);
+    }, 4.5),
+    P('连锁闪电', '指向性闪电命中后炸成 3 道小电弧，优先补刀残血', 'epic', function () {
+      var s = node('source', 0, 0, { trigger: 'interval', interval: 3.2, delay: 0.35, aim: 'atEnemy' });
+      var sel = node('select', 0, 0, { side: 'enemyOne', pick: 'lowestHp', count: 1 });
+      var tg = node('targeted', 0, 0, { targetSide: 'enemy', applyMode: 'instant', maxRange: 900 });
+      var el = node('element', 0, 0, { triggerEvent: 'onHit', element: 'lightning', color: '#a8d8ff', damage: 12, status: 'stun', statusPower: 0.3, statusDuration: 0.4 });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 10 });
+      var sp = node('split', 0, 0, { triggerEvent: 'onHit', count: 3, spread: 360, speedScale: 70, sizeScale: 60, damageScale: 50, range: 260 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'ice/frost-nova', attach: 'host', scale: 1.1, fxOptions: { palette: ['#1a1030', '#3a1f6a', '#6a3ad0', '#b98cff', '#ffffff'] } });
+      return makeGraph([s, sel, tg, el, d, sp, f], [
+        E(s, 'cast', sel, 'cast'), E(sel, 'targets', tg, 'targets'),
+        E(tg, 'hit', el, 'hit'), E(el, 'cast', d, 'cast'),
+        E(tg, 'hit', sp, 'hit'), E(tg, 'hit', f, 'hit')
+      ]);
+    }, 5),
+    P('印记引爆', '先叠 2 层光印，到期一起炸：层数越高单体爆发越强', 'rare', function () {
+      var s = node('source', 0, 0, { trigger: 'roundStart', delay: 0.5, aim: 'atEnemy' });
+      var sel = node('select', 0, 0, { side: 'enemyMany', pick: 'nearest', count: 2 });
+      var mk = node('mark', 0, 0, { triggerEvent: 'onHit', stacks: 2, maxStacks: 5, duration: 4, stackMode: 'add', damageAmp: 12, detonate: 'onExpire', detonateDamage: 30, detonateRadius: 90, color: '#e8c85a' });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 6 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'fire/fireball', attach: 'impact', scale: 1.2, fxOptions: { palette: ['#2a1c08', '#6a4a12', '#c08a1a', '#ffd76a', '#ffffff'] } });
+      return makeGraph([s, sel, mk, d, f], [
+        E(s, 'cast', sel, 'cast'), E(sel, 'targets', mk, 'targets'),
+        E(mk, 'cast', d, 'cast'), E(mk, 'cast', f, 'cast')
+      ]);
+    }, 4),
+    P('延迟陨石', '蓄力 1.2 秒后砸下陨石：范围击退 + 持续灼烧，适合读走位', 'epic', function () {
+      var s = node('source', 0, 0, { trigger: 'roundStart', delay: 0.3, aim: 'atEnemy' });
+      var sel = node('select', 0, 0, { side: 'enemyMany', pick: 'nearest', count: 3 });
+      var dl = node('delay', 0, 0, { seconds: 1.2 });
+      var zn = node('zone', 0, 0, { triggerEvent: 'onHit', radius: 140, duration: 2, dps: 10, color: '#ff9a3a' });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 30, knockback: 40 });
+      var im = node('impact', 0, 0, { triggerEvent: 'onHit', aoeRadius: 140, aoePct: 0.35, shake: 0.3 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'melee/heavy-cleave', attach: 'host', scale: 1.6, fxOptions: { palette: ['#2a0c10', '#5c1414', '#a3241a', '#e0481c', '#ff8a2a', '#ffc23d', '#fff0a0', '#ffffff'] } });
+      return makeGraph([s, sel, dl, zn, d, im, f], [
+        E(s, 'cast', sel, 'cast'), E(s, 'cast', dl, 'cast'), E(dl, 'cast', zn, 'cast'),
+        E(zn, 'tick', d, 'tick'), E(zn, 'area', im, 'area'), E(zn, 'area', f, 'point')
+      ]);
+    }, 6)
   ];
 
   var api = {

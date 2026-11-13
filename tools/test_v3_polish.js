@@ -35,15 +35,16 @@ ok('后台发布校验提示缺锁定', /缺少「目标 · 锁定」模块/.tes
 let allLinked = true, allPresent = true;
 cfg.skills.forEach(sk => {
   const g = sk.graph || {};
-  const sel = (g.nodes || []).find(n => n && n.type === 'select');
+  // 单体用 select，范围用 range（选择对象/数量写在范围卡上），两者都算目标卡
+  const sel = (g.nodes || []).find(n => n && (n.type === 'select' || n.type === 'range'));
   const outs = sel ? (g.edges || []).filter(e => e && e.from === sel.id).length : 0;
   if (!sel || outs === 0) allLinked = false;
   let C = null;
   try { C = SM.compile(sk); } catch (e) { C = null; }
-  if (!C || !C.present || C.present.select !== true) allPresent = false;
+  if (!C || !C.present || (C.present.select !== true && C.present.range !== true)) allPresent = false;
 });
-ok('配置里 ' + cfg.skills.length + ' 个果实都有 select 且有下游出边', allLinked);
-ok('编译后 present.select 全为 true', allPresent);
+ok('配置里 ' + cfg.skills.length + ' 个果实都有目标卡（单体 / 范围）且有下游出边', allLinked);
+ok('编译后目标卡（select / range）都参与编译', allPresent);
 ok('默认图 starterGraph 编译后 present.select 为 true',
   (function () { try { return SM.compile({ id: 'tmp', name: 'tmp', graph: SM.starterGraph(null) }).present.select === true; } catch (e) { return false; } })());
 
@@ -225,8 +226,10 @@ ok('判定引擎提供 check / canConnect / describeFlow / summarize',
   /function describeFlow\(/.test(fguard) && /function summarize\(/.test(fguard));
 ok('旧归属图不灌 error（不阻断未迁移果实的发布）',
   /model === 'legacy'/.test(fguard) && /LEGACY_GRAPH/.test(fguard));
-ok('连线前置使用语义判定，并按连线类型写 kind',
-  /FG\.canConnect\(sk, SM, a, b, kind\)/.test(admin) && /kind: 'flow'/.test(admin) && /function seLinkKind\(/.test(admin));
+ok('连线前置使用端口契约判定，并写入 fromPort / toPort',
+  /K\.canConnect\(sk, link\.from, link\.fromPort, toId, toPort\)/.test(admin) &&
+  /fromPort: link\.fromPort, toPort: toPort/.test(admin) &&
+  /function se2AutoInPort\(/.test(admin));
 ok('体检结果与发布校验合并同一份判定，error 走阻断项',
   /list\.concat\(FG\.check\(/.test(admin) && /window\.SkillFlowGuard\.check\(s, window\.SkillModules\)/.test(admin) &&
   /it\.level === 'error' \? err : warn/.test(admin));
@@ -258,7 +261,7 @@ console.log('\n17) 特效接管载体外观（连接特效后只认特效素材�
   ok('编译结果带 _hostType / fxByHostNode', /normalized\._hostType/.test(mods) && /fxByHostNode/.test(mods));
   ok('挂载位置枚举新增「跟随所属载体」', /\['host', '跟随所属载体/.test(mods));
   ok('连线到区域/光环时自动把特效切到 host',
-    /fromNd\.type === 'zone' \|\| fromNd\.type === 'aura'/.test(admin) && /nd\.params\.attach = 'host'/.test(admin));
+    /fromN\.type === 'zone' \|\| fromN\.type === 'aura'/.test(admin) && /toN\.params\.attach = 'host'/.test(admin));
   ok('试放与对局的区域实体都创建并跟随专属特效',
     /SE\.spawnFx\(zfx, 'zone'/.test(admin) && /SE\.spawnFx\(zfx, 'zone'/.test(game) &&
     /q\.follow = rec/.test(admin) && /a\.follow = rec/.test(game));
