@@ -1850,9 +1850,138 @@
       var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'melee/heavy-cleave', attach: 'host', scale: 1.6, fxOptions: { palette: ['#2a0c10', '#5c1414', '#a3241a', '#e0481c', '#ff8a2a', '#ffc23d', '#fff0a0', '#ffffff'] } });
       return makeGraph([s, sel, dl, zn, d, im, f], [
         E(s, 'cast', sel, 'cast'), E(s, 'cast', dl, 'cast'), E(dl, 'cast', zn, 'cast'),
-        E(zn, 'tick', d, 'tick'), E(zn, 'area', im, 'area'), E(zn, 'area', f, 'point')
+        E(zn, 'tick', d, 'tick'), E(zn, 'area', im, 'area'), E(im, 'cast', f, 'cast')
       ]);
-    }, 6)
+    }, 6),
+    /* ============ 像素特效定向样例（10 个，均避开现有果实已用的 effect） ============ */
+    P('耀阳圣球', '一颗圣光球飞向最近敌人，命中炸出日耀环；附加易伤，适合起手标记', 'rare', function () {
+      var s = node('source', 0, 0, { trigger: 'interval', interval: 3.2, delay: 0.4, aim: 'atEnemy' });
+      var sel = node('select', 0, 0, { side: 'enemyOne', pick: 'nearest', count: 1 });
+      var el = node('element', 0, 0, { triggerEvent: 'onHit', element: 'holy', color: '#ffe9a0', damage: 12, status: 'weaken', statusPower: 0.25, statusDuration: 2 });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 10 });
+      var p = node('projectile', 0, 0, { count: 1, speed: 360, size: 10, range: 900 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'holy/sunburst', attach: 'host', scale: 1.1 });
+      var im = node('impact', 0, 0, { triggerEvent: 'onHit', aoeRadius: 45, aoePct: 0.3, shake: 0.15 });
+      return makeGraph([s, sel, el, d, p, f, im], [
+        E(s, 'cast', sel, 'cast'), E(sel, 'targets', p, 'targets'),
+        E(p, 'hit', el, 'hit'), E(el, 'cast', d, 'cast'),
+        E(p, 'hit', im, 'hit'), E(p, 'entity', f, 'entity')
+      ]);
+    }, 4),
+    P('冰棘突刺', '面前锥形范围钻出冰棘：两名最近敌人一起吃伤害并被减速', 'common', function () {
+      var s = node('source', 0, 0, { trigger: 'roundStart', delay: 0.2, aim: 'atEnemy' });
+      var rg = node('range', 0, 0, { bindTo: 'auto', side: 'enemyMany', count: 2, shape: 'cone', radius: 220, angleDeg: 90, origin: 'caster', maxTargets: 2, pick: 'nearest', includeSelf: false });
+      var el = node('element', 0, 0, { triggerEvent: 'onHit', element: 'ice', color: '#a8e8ff', damage: 9, status: 'slow', statusPower: 0.4, statusDuration: 2 });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 8, knockback: 15 });
+      var im = node('impact', 0, 0, { triggerEvent: 'onHit', aoeRadius: 50, aoePct: 0.25, shake: 0.12 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'ice/ice-spikes', attach: 'host', scale: 1 });
+      return makeGraph([s, rg, el, d, im, f], [
+        E(s, 'cast', rg, 'cast'),
+        E(rg, 'hit', el, 'hit'), E(el, 'cast', d, 'cast'),
+        E(rg, 'hit', im, 'hit'), E(rg, 'hit', f, 'hit')
+      ]);
+    }, 2.5),
+    P('雷鸣震爆', '指向最近残血敌人落下雷柱：短眩晕 + 小范围雷爆，补刀稳定', 'rare', function () {
+      var s = node('source', 0, 0, { trigger: 'interval', interval: 3.4, delay: 0.35, aim: 'atEnemy' });
+      var sel = node('select', 0, 0, { side: 'enemyOne', pick: 'lowestHp', count: 1 });
+      var tg = node('targeted', 0, 0, { targetSide: 'enemy', applyMode: 'instant', maxRange: 900 });
+      var el = node('element', 0, 0, { triggerEvent: 'onHit', element: 'lightning', color: '#a8d8ff', damage: 12, status: 'stun', statusPower: 0.3, statusDuration: 0.6 });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 12 });
+      var im = node('impact', 0, 0, { triggerEvent: 'onHit', aoeRadius: 65, aoePct: 0.3, shake: 0.2, hitStop: 35 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'lightning/thunderclap', attach: 'host', scale: 1.2 });
+      return makeGraph([s, sel, tg, el, d, im, f], [
+        E(s, 'cast', sel, 'cast'), E(sel, 'targets', tg, 'targets'),
+        E(tg, 'hit', el, 'hit'), E(el, 'cast', d, 'cast'),
+        E(tg, 'hit', im, 'hit'), E(tg, 'hit', f, 'hit')
+      ]);
+    }, 4),
+    P('暗影虹吸', '暗影弹命中后抽取生命：自身回血，并让目标易伤', 'epic', function () {
+      var s = node('source', 0, 0, { trigger: 'interval', interval: 4, delay: 0.3, aim: 'atEnemy' });
+      var sel = node('select', 0, 0, { side: 'enemyOne', pick: 'nearest', count: 1 });
+      var p = node('projectile', 0, 0, { count: 1, speed: 300, size: 9, range: 700 });
+      var el = node('element', 0, 0, { triggerEvent: 'onHit', element: 'shadow', color: '#b98cff', damage: 6, status: 'weaken', statusPower: 0.2, statusDuration: 3 });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 14, lifesteal: 0.35 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'shadow/life-steal', attach: 'host', scale: 1.1 });
+      return makeGraph([s, sel, p, el, d, f], [
+        E(s, 'cast', sel, 'cast'), E(sel, 'targets', p, 'targets'),
+        E(p, 'hit', el, 'hit'), E(el, 'cast', d, 'cast'),
+        E(p, 'entity', f, 'entity')
+      ]);
+    }, 5),
+    P('荆棘缠根', '脚下藤根缠住两名敌人：自然伤害 + 减速，适合拖住突进', 'common', function () {
+      var s = node('source', 0, 0, { trigger: 'roundStart', delay: 0.25, aim: 'atEnemy' });
+      var rg = node('range', 0, 0, { bindTo: 'auto', side: 'enemyMany', count: 2, shape: 'circle', radius: 120, origin: 'caster', maxTargets: 2, pick: 'nearest', includeSelf: false });
+      var el = node('element', 0, 0, { triggerEvent: 'onHit', element: 'nature', color: '#8ad88a', damage: 8 });
+      var st = node('status', 0, 0, { triggerEvent: 'onHit', status: 'slow', statusPower: 0.5, statusDuration: 2 });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 6 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'nature/root-snare', attach: 'host', scale: 1 });
+      return makeGraph([s, rg, el, st, d, f], [
+        E(s, 'cast', rg, 'cast'),
+        E(rg, 'hit', el, 'hit'), E(rg, 'hit', st, 'hit'),
+        E(st, 'cast', d, 'cast'), E(rg, 'hit', f, 'hit')
+      ]);
+    }, 2.5),
+    P('水晶棱镜', '自身裹上冰晶护罩：护盾 + 反伤，纯防御向的保命果实', 'rare', function () {
+      var s = node('source', 0, 0, { trigger: 'roundStart', delay: 0.2, aim: 'atEnemy' });
+      var sel = node('select', 0, 0, { side: 'self', pick: 'nearest', count: 1 });
+      var sh = node('shield', 0, 0, { triggerEvent: 'onCast', amount: 60, duration: 4, thorns: 0.2 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onCast', effect: 'ice/ice-crystal', attach: 'caster', scale: 1.3, loop: false });
+      var pa = node('particles', 0, 0, { triggerEvent: 'onCast', count: 10, color: '#d0f0ff', color2: '#4aa8ff', attach: 'caster' });
+      return makeGraph([s, sel, sh, f, pa], [
+        E(s, 'cast', sel, 'cast'), E(sel, 'targets', sh, 'targets'),
+        E(sh, 'cast', f, 'cast'), E(sh, 'cast', pa, 'cast')
+      ]);
+    }, 3.5),
+    P('陨星火雨', '延迟 1.1 秒落下一片火雨：范围持续伤害 + 击退，读走位用', 'epic', function () {
+      var s = node('source', 0, 0, { trigger: 'roundStart', delay: 0.3, aim: 'atEnemy' });
+      var sel = node('select', 0, 0, { side: 'enemyMany', pick: 'nearest', count: 3 });
+      var dl = node('delay', 0, 0, { seconds: 1.1 });
+      var zn = node('zone', 0, 0, { triggerEvent: 'onHit', radius: 130, duration: 3, dps: 8, slowPct: 0.15, color: '#ff8a3a' });
+      var d = node('damage', 0, 0, { triggerEvent: 'onTick', base: 0, dotEnable: true, dotDps: 6, dotRadius: 130, dotDuration: 3 });
+      var im = node('impact', 0, 0, { triggerEvent: 'onHit', aoeRadius: 130, aoePct: 0.4, shake: 0.3 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'fire/meteor', attach: 'point', scale: 1.5, loop: false, life: 3 });
+      return makeGraph([s, sel, dl, zn, d, im, f], [
+        E(s, 'cast', sel, 'cast'), E(s, 'cast', dl, 'cast'), E(dl, 'cast', zn, 'cast'),
+        E(zn, 'tick', d, 'tick'), E(zn, 'area', im, 'area'), E(im, 'cast', f, 'cast')
+      ]);
+    }, 6),
+    P('晶盘回旋', '掷出能量晶盘，绕一道弧线切回：命中击退，适合封侧身', 'rare', function () {
+      var s = node('source', 0, 0, { trigger: 'roundStart', delay: 0.4, aim: 'atEnemy' });
+      var sel = node('select', 0, 0, { side: 'enemyOne', pick: 'nearest', count: 1 });
+      var p = node('projectile', 0, 0, { count: 1, speed: 430, size: 9, range: 650 });
+      var mo = node('motion', 0, 0, { triggerEvent: 'onCast', scope: 'projectile', track: 'arc', arcDeg: 50, distance: 220, duration: 0.7, endSpeed: 'restore', dieOnWall: false });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 15, knockback: 10 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'projectiles/energy-disc', attach: 'projectile', scale: 1 });
+      return makeGraph([s, sel, p, mo, d, f], [
+        E(s, 'cast', sel, 'cast'), E(sel, 'targets', p, 'targets'),
+        E(p, 'entity', mo, 'entity'), E(mo, 'cast', d, 'cast'),
+        E(p, 'entity', f, 'entity')
+      ]);
+    }, 4),
+    P('涌泉漩涡', '目标脚下涌出漩涡：持续伤害并把敌人往中心拖慢', 'rare', function () {
+      var s = node('source', 0, 0, { trigger: 'roundStart', delay: 0.6, aim: 'atEnemy' });
+      var rg = node('range', 0, 0, { bindTo: 'auto', side: 'enemyMany', count: 3, shape: 'circle', radius: 120, origin: 'caster', maxTargets: 3, pick: 'lowestHp', includeSelf: false });
+      var zn = node('zone', 0, 0, { triggerEvent: 'onHit', radius: 120, duration: 4, dps: 5, slowPct: 0.4, color: '#5ac8fa' });
+      var d = node('damage', 0, 0, { triggerEvent: 'onTick', base: 0, dotEnable: true, dotDps: 5, dotRadius: 120, dotDuration: 4 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'water/whirlpool', attach: 'host', scale: 1.2, loop: true, life: 4 });
+      return makeGraph([s, rg, zn, d, f], [
+        E(s, 'cast', rg, 'cast'), E(rg, 'area', zn, 'area'),
+        E(zn, 'tick', d, 'tick'), E(rg, 'hit', f, 'hit')
+      ]);
+    }, 4),
+    P('大地裂击', '正面锥形地裂：地刺顶起两名敌人并击退，简单直接', 'common', function () {
+      var s = node('source', 0, 0, { trigger: 'interval', interval: 2.8, delay: 0.25, aim: 'atEnemy' });
+      var rg = node('range', 0, 0, { bindTo: 'auto', side: 'enemyMany', count: 2, shape: 'cone', radius: 240, angleDeg: 80, origin: 'caster', maxTargets: 2, pick: 'nearest', includeSelf: false });
+      var el = node('element', 0, 0, { triggerEvent: 'onHit', element: 'nature', color: '#d8b878', damage: 10 });
+      var d = node('damage', 0, 0, { triggerEvent: 'onHit', base: 8, knockback: 20 });
+      var im = node('impact', 0, 0, { triggerEvent: 'onHit', aoeRadius: 70, aoePct: 0.25, shake: 0.18 });
+      var f = node('fx', 0, 0, { triggerEvent: 'onHit', effect: 'nature/earth-spike', attach: 'host', scale: 1.1 });
+      return makeGraph([s, rg, el, d, im, f], [
+        E(s, 'cast', rg, 'cast'),
+        E(rg, 'hit', el, 'hit'), E(el, 'cast', d, 'cast'),
+        E(rg, 'hit', im, 'hit'), E(rg, 'hit', f, 'hit')
+      ]);
+    }, 2.5)
   ];
 
   var api = {

@@ -14,8 +14,8 @@ console.log('1) 四条分隔条与变量');
 {
   ['left', 'right', 'preview', 'log'].forEach(k =>
     ok('存在 data-split="' + k + '"', admin.indexOf('data-split="' + k + '"') >= 0));
-  ok('四条都有默认值', /SE_SIZE_DEF = \{ left: 340, right: 326, preview: 340, log: 110 \}/.test(admin));
-  ok('四条都有上下限', /SE_SIZE_LIMIT = \{ left: \[160, 560\], right: \[220, 640\], preview: \[180, 900\], log: \[48, 520\] \}/.test(admin));
+  ok('四条都有默认值', /SE_SIZE_DEF = \{ left: 420, right: 326, preview: 420, log: 72 \}/.test(admin));
+  ok('四条都有上下限', /SE_SIZE_LIMIT = \{ left: \[160, 560\], right: \[220, 640\], preview: \[180, 900\], log: \[36, 520\] \}/.test(admin));
   ok('CSS 变量映射齐全', /SE_SIZE_VAR = \{ left: '--se-left-w', right: '--se-right-w', preview: '--se-preview-h', log: '--se-log-h' \}/.test(admin));
   ok('渲染时把尺寸写进 .se-wrap', /class="se-wrap' \+ \(S\.skillEd\.pvZoom[\s\S]{0,80}seSizeStyle\(\)/.test(admin));
 }

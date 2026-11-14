@@ -10,9 +10,26 @@
  */
 
 import { onRequestGet, onRequestOptions } from './functions/api/turn.js';
+import { createAuthRouter } from './functions/api/steam-auth-router.mjs';
+import { durableStore } from './functions/api/steam-store.mjs';
 
 /* DO 类必须从主模块具名导出，wrangler 才能注册 Durable Object binding */
 export { RoomHub } from './functions/api/room.js';
+export { AccountHub } from './functions/api/account-hub.mjs';
+
+/* Steam OpenID 登录：账号 / 限流全落在 AccountHub 单实例里。
+   SESSION_SECRET 是 wrangler secret（不进 vars、不进仓库）；
+   STEAM_API_KEY 只用于可选地拉昵称头像，没配也能完成登录。 */
+function authFor(env) {
+  const stub = env.AUTH ? env.AUTH.get(env.AUTH.idFromName('global')) : null;
+  return createAuthRouter({
+    secret: String(env.SESSION_SECRET || ''),
+    apiKey: String(env.STEAM_API_KEY || ''),
+    store: stub ? durableStore(stub) : null,
+    devMock: false,                       // 线上永远不开放 mock 登录
+    log: (k, v) => console.log('[steam-auth] ' + k + (v ? ' ' + v : ''))
+  });
+}
 
 /* 区域边缘缓存自助清理：
    静态资产响应被区域级缓存规则（如 Cache Everything）钉住时，wrangler 部署
@@ -46,6 +63,11 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
+    /* Steam OpenID 2.0：login / callback / me / logout 全部由单源路由器处理 */
+    if (path.indexOf('/api/auth/steam/') === 0) {
+      return authFor(env).handle(request);
+    }
+
     if (path === '/api/turn' || path === '/api/turn/') {
       if (request.method === 'OPTIONS') {
         return onRequestOptions({ request, env });
@@ -64,6 +86,23 @@ export default {
             'Access-Control-Allow-Headers': 'Content-Type',
           },
         });
+      }
+      /* 风控：建房额度与加入频次在服务端按内部 uid 限流（未登录按 IP）。
+         poll / list 是联机心跳，频率高且无副作用，故意不限流，避免误伤对局。 */
+      const roomAct = (path.split('/').filter(Boolean).pop() || '').toLowerCase();
+      const guardAct = roomAct === 'create' ? 'roomCreate' : (roomAct === 'lookup' ? 'roomLookup' : '');
+      if (guardAct && env.AUTH) {
+        const g = await authFor(env).guard(request, guardAct);
+        if (!g.ok) {
+          return new Response(JSON.stringify({ error: 'rate_limited', scope: guardAct, retryAfterMs: g.retryAfterMs }), {
+            status: 429,
+            headers: {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Retry-After': String(Math.ceil((g.retryAfterMs || 1000) / 1000)),
+              'Cache-Control': 'no-store'
+            }
+          });
+        }
       }
       // 全局单实例：所有房间信令强一致，避免 KV 跨 PoP 的读取延迟
       const id = env.ROOMS.idFromName('global');

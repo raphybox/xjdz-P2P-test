@@ -2,7 +2,7 @@
   "meta": {
     "schema": 1,
     "gameName": "魔兽弹珠",
-    "updatedAt": "2026-11-13",
+    "updatedAt": "2026-11-14",
     "note": "默认配置，与首版游戏数值一致"
   },
   "config": {
@@ -3263,84 +3263,6 @@
       "icon": ""
     },
     {
-      "id": "sk_mweodfh6566e",
-      "name": "新果实 9",
-      "tier": "common",
-      "mods": {},
-      "enabled": true,
-      "charge": 3,
-      "intro": "",
-      "icon": "",
-      "graph": {
-        "nodes": [
-          {
-            "id": "source_tz6a1we",
-            "type": "source",
-            "x": 30,
-            "y": 74,
-            "params": {
-              "trigger": "roundStart",
-              "delay": 0.35,
-              "interval": 2.2,
-              "maxCasts": 0,
-              "aim": "atEnemy",
-              "angle": 0,
-              "enabled": true
-            }
-          },
-          {
-            "id": "select_t4zlmpl",
-            "type": "select",
-            "x": 310,
-            "y": 74,
-            "params": {
-              "bindTo": "auto",
-              "side": "enemyOne",
-              "pick": "nearest",
-              "count": 1
-            }
-          },
-          {
-            "id": "stats_05xbl3t",
-            "type": "stats",
-            "x": 30,
-            "y": 74,
-            "params": {
-              "maxHp": 0,
-              "power": 0,
-              "speed": 0,
-              "mass": 0,
-              "crit": 0,
-              "critMult": 0,
-              "armor": 0,
-              "dodge": 0,
-              "regen": 0,
-              "shield": 0,
-              "thorns": 0,
-              "lifesteal": 0,
-              "firstStrike": 0,
-              "momentum": 0,
-              "combo": 0,
-              "execute": 0,
-              "slow": 0,
-              "dot": 0,
-              "knock": 0
-            }
-          }
-        ],
-        "edges": [
-          {
-            "from": "source_tz6a1we",
-            "to": "select_t4zlmpl"
-          },
-          {
-            "from": "select_t4zlmpl",
-            "to": "stats_05xbl3t"
-          }
-        ]
-      }
-    },
-    {
       "id": "sk_mweoe3atq729",
       "name": "冰锥三连",
       "tier": "rare",
@@ -3597,6 +3519,626 @@
             "fromPort": "hit",
             "to": "particles_rdq73yf",
             "toPort": "hit"
+          }
+        ]
+      }
+    },
+    {
+      "id": "sk_mwev2wlxolde",
+      "name": "耀阳圣球",
+      "tier": "rare",
+      "mods": {},
+      "enabled": true,
+      "charge": 4,
+      "intro": "",
+      "icon": "",
+      "graph": {
+        "nodes": [
+          {
+            "id": "source_qjrtrhj",
+            "type": "source",
+            "x": 30,
+            "y": 74,
+            "params": {
+              "trigger": "interval",
+              "delay": 0.4,
+              "interval": 3.2,
+              "maxCasts": 0,
+              "aim": "atEnemy",
+              "angle": 0,
+              "enabled": true
+            }
+          },
+          {
+            "id": "select_ysyhvdy",
+            "type": "select",
+            "x": 330,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "side": "enemyOne",
+              "pick": "nearest",
+              "count": 1
+            }
+          },
+          {
+            "id": "element_r1z9gvd",
+            "type": "element",
+            "x": 1230,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "triggerEvent": "onHit",
+              "element": "holy",
+              "color": "#ffe9a0",
+              "damage": 12,
+              "damagePct": 0,
+              "status": "weaken",
+              "statusPower": 0.25,
+              "statusDuration": 2,
+              "critBonus": 0,
+              "armorPen": 0,
+              "enabled": true,
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          },
+          {
+            "id": "damage_7vwdfgv",
+            "type": "damage",
+            "x": 1230,
+            "y": 512,
+            "params": {
+              "bindTo": "auto",
+              "affect": "enemy",
+              "triggerEvent": "onHit",
+              "hitKind": "auto",
+              "base": 10,
+              "pctMaxHp": 0,
+              "critChance": 0,
+              "critMult": 0,
+              "lifesteal": 0,
+              "armorPen": 0,
+              "knockback": 0,
+              "ignoreShield": false,
+              "ignoreDodge": false,
+              "canCrit": true,
+              "wallDamageMode": "auto",
+              "wallDps": 0,
+              "wallTouchDamage": 0,
+              "wallTouchInterval": 0.8,
+              "wallDuration": 3,
+              "wallRadius": 60,
+              "dotEnable": false,
+              "dotDps": 8,
+              "dotRadius": 70,
+              "dotInterval": 0.5,
+              "dotFollow": "caster",
+              "dotDuration": 6,
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          },
+          {
+            "id": "projectile_3dd3qy6",
+            "type": "projectile",
+            "x": 630,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "name": "",
+              "count": 1,
+              "spread": 0,
+              "speed": 360,
+              "accel": 0,
+              "range": 900,
+              "size": 10,
+              "image": "",
+              "noRotFollow": false,
+              "pierce": 0,
+              "homing": 0,
+              "gravity": 0,
+              "lifetime": 4,
+              "gap": 0,
+              "spawnOffset": 28,
+              "bindCaster": false,
+              "followCaster": true,
+              "jitter": 0,
+              "spin": 0,
+              "trail": true,
+              "trailLen": 0.16,
+              "trailWidth": 100,
+              "trailAlpha": 32,
+              "fadeOut": true,
+              "delivery": "projectile",
+              "areaRadius": 80,
+              "castRange": 0,
+              "meleeRange": 60,
+              "rayRange": 600,
+              "rayWidth": 20,
+              "summonDur": 6
+            }
+          },
+          {
+            "id": "fx_kxsmaiw",
+            "type": "fx",
+            "x": 930,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "triggerEvent": "onHit",
+              "name": "",
+              "effect": "holy/sunburst",
+              "attach": "host",
+              "enemyPick": "nearest",
+              "pathInterval": 0.15,
+              "pathDuration": 2,
+              "scale": 1.1,
+              "fps": 1,
+              "clipStart": 0,
+              "clipEnd": 0,
+              "alpha": 1,
+              "light": 1,
+              "rotation": 0,
+              "offsetX": 0,
+              "offsetY": 0,
+              "loop": true,
+              "life": 0,
+              "tailMode": "freeze",
+              "stackReplace": true,
+              "additive": false,
+              "flipX": false,
+              "matchRotation": true,
+              "noRotFollow": false,
+              "fxOptions": {},
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          },
+          {
+            "id": "impact_pt1vadw",
+            "type": "impact",
+            "x": 930,
+            "y": 535,
+            "params": {
+              "bindTo": "auto",
+              "triggerEvent": "onHit",
+              "aoeRadius": 45,
+              "aoePct": 0.3,
+              "knockback": 0,
+              "shake": 0.15,
+              "hitStop": 0,
+              "chainCount": 0,
+              "chainRange": 260,
+              "chainFalloff": 0.7,
+              "explodeOnWall": false,
+              "explodeOnExpire": false,
+              "applyStatus": true,
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "source_qjrtrhj",
+            "fromPort": "cast",
+            "to": "select_ysyhvdy",
+            "toPort": "cast"
+          },
+          {
+            "from": "select_ysyhvdy",
+            "fromPort": "targets",
+            "to": "projectile_3dd3qy6",
+            "toPort": "targets"
+          },
+          {
+            "from": "projectile_3dd3qy6",
+            "fromPort": "hit",
+            "to": "element_r1z9gvd",
+            "toPort": "hit"
+          },
+          {
+            "from": "element_r1z9gvd",
+            "fromPort": "cast",
+            "to": "damage_7vwdfgv",
+            "toPort": "cast"
+          },
+          {
+            "from": "projectile_3dd3qy6",
+            "fromPort": "hit",
+            "to": "impact_pt1vadw",
+            "toPort": "hit"
+          },
+          {
+            "from": "projectile_3dd3qy6",
+            "fromPort": "entity",
+            "to": "fx_kxsmaiw",
+            "toPort": "entity"
+          }
+        ]
+      }
+    },
+    {
+      "id": "sk_mwfvg2vuhuvg",
+      "name": "涌泉漩涡",
+      "tier": "rare",
+      "mods": {},
+      "enabled": true,
+      "charge": 4,
+      "intro": "",
+      "icon": "",
+      "graph": {
+        "nodes": [
+          {
+            "id": "source_xlwk3r7",
+            "type": "source",
+            "x": 30,
+            "y": 74,
+            "params": {
+              "trigger": "roundStart",
+              "delay": 0.6,
+              "interval": 2.2,
+              "maxCasts": 0,
+              "aim": "atEnemy",
+              "angle": 0,
+              "enabled": true
+            }
+          },
+          {
+            "id": "range_2j3x0yo",
+            "type": "range",
+            "x": 330,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "shape": "circle",
+              "radius": 120,
+              "innerRadius": 0,
+              "angleDeg": 90,
+              "length": 600,
+              "width": 20,
+              "castRange": 0,
+              "origin": "caster",
+              "maxTargets": 3,
+              "pick": "lowestHp",
+              "includeSelf": false,
+              "side": "enemyMany",
+              "count": 3
+            }
+          },
+          {
+            "id": "zone_ek57zxb",
+            "type": "zone",
+            "x": 630,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "name": "",
+              "triggerEvent": "onHit",
+              "radius": 120,
+              "duration": 4,
+              "dps": 5,
+              "slowPct": 0.4,
+              "color": "#5ac8fa",
+              "followCaster": false
+            }
+          },
+          {
+            "id": "damage_2yd98rw",
+            "type": "damage",
+            "x": 1230,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "affect": "enemy",
+              "triggerEvent": "onTick",
+              "hitKind": "auto",
+              "base": 0,
+              "pctMaxHp": 0,
+              "critChance": 0,
+              "critMult": 0,
+              "lifesteal": 0,
+              "armorPen": 0,
+              "knockback": 0,
+              "ignoreShield": false,
+              "ignoreDodge": false,
+              "canCrit": true,
+              "wallDamageMode": "auto",
+              "wallDps": 0,
+              "wallTouchDamage": 0,
+              "wallTouchInterval": 0.8,
+              "wallDuration": 3,
+              "wallRadius": 60,
+              "dotEnable": true,
+              "dotDps": 5,
+              "dotRadius": 120,
+              "dotInterval": 0.5,
+              "dotFollow": "caster",
+              "dotDuration": 4,
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          },
+          {
+            "id": "fx_t3q4s7l",
+            "type": "fx",
+            "x": 930,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "triggerEvent": "onHit",
+              "name": "",
+              "effect": "water/whirlpool",
+              "attach": "host",
+              "enemyPick": "nearest",
+              "pathInterval": 0.15,
+              "pathDuration": 2,
+              "scale": 1.2,
+              "fps": 1,
+              "clipStart": 0,
+              "clipEnd": 0,
+              "alpha": 1,
+              "light": 1,
+              "rotation": 0,
+              "offsetX": 0,
+              "offsetY": 0,
+              "loop": true,
+              "life": 4,
+              "tailMode": "freeze",
+              "stackReplace": true,
+              "additive": false,
+              "flipX": false,
+              "matchRotation": true,
+              "noRotFollow": false,
+              "fxOptions": {},
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "source_xlwk3r7",
+            "fromPort": "cast",
+            "to": "range_2j3x0yo",
+            "toPort": "cast"
+          },
+          {
+            "from": "range_2j3x0yo",
+            "fromPort": "area",
+            "to": "zone_ek57zxb",
+            "toPort": "area"
+          },
+          {
+            "from": "zone_ek57zxb",
+            "fromPort": "tick",
+            "to": "damage_2yd98rw",
+            "toPort": "tick"
+          },
+          {
+            "from": "range_2j3x0yo",
+            "fromPort": "hit",
+            "to": "fx_t3q4s7l",
+            "toPort": "hit"
+          }
+        ]
+      }
+    },
+    {
+      "id": "sk_mwfvgid6jpju",
+      "name": "陨星火雨",
+      "tier": "epic",
+      "mods": {},
+      "enabled": true,
+      "charge": 6,
+      "intro": "",
+      "icon": "",
+      "graph": {
+        "nodes": [
+          {
+            "id": "source_9v2ic4p",
+            "type": "source",
+            "x": 30,
+            "y": 74,
+            "params": {
+              "trigger": "roundStart",
+              "delay": 0.3,
+              "interval": 2.2,
+              "maxCasts": 0,
+              "aim": "atEnemy",
+              "angle": 0,
+              "enabled": true
+            }
+          },
+          {
+            "id": "select_wwbq2x8",
+            "type": "select",
+            "x": 330,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "side": "enemyMany",
+              "pick": "nearest",
+              "count": 3
+            }
+          },
+          {
+            "id": "delay_3ex9ui1",
+            "type": "delay",
+            "x": 30,
+            "y": 451,
+            "params": {
+              "seconds": 1.1
+            }
+          },
+          {
+            "id": "zone_rvwhod6",
+            "type": "zone",
+            "x": 630,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "name": "",
+              "triggerEvent": "onHit",
+              "radius": 130,
+              "duration": 3,
+              "dps": 8,
+              "slowPct": 0.15,
+              "color": "#ff8a3a",
+              "followCaster": false
+            }
+          },
+          {
+            "id": "damage_es22ybw",
+            "type": "damage",
+            "x": 1230,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "affect": "enemy",
+              "triggerEvent": "onTick",
+              "hitKind": "auto",
+              "base": 0,
+              "pctMaxHp": 0,
+              "critChance": 0,
+              "critMult": 0,
+              "lifesteal": 0,
+              "armorPen": 0,
+              "knockback": 0,
+              "ignoreShield": false,
+              "ignoreDodge": false,
+              "canCrit": true,
+              "wallDamageMode": "auto",
+              "wallDps": 0,
+              "wallTouchDamage": 0,
+              "wallTouchInterval": 0.8,
+              "wallDuration": 3,
+              "wallRadius": 60,
+              "dotEnable": true,
+              "dotDps": 6,
+              "dotRadius": 130,
+              "dotInterval": 0.5,
+              "dotFollow": "caster",
+              "dotDuration": 3,
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          },
+          {
+            "id": "impact_qafqzmx",
+            "type": "impact",
+            "x": 930,
+            "y": 74,
+            "params": {
+              "bindTo": "auto",
+              "triggerEvent": "onHit",
+              "aoeRadius": 130,
+              "aoePct": 0.4,
+              "knockback": 0,
+              "shake": 0.3,
+              "hitStop": 0,
+              "chainCount": 0,
+              "chainRange": 260,
+              "chainFalloff": 0.7,
+              "explodeOnWall": false,
+              "explodeOnExpire": false,
+              "applyStatus": true,
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          },
+          {
+            "id": "fx_7l6bc05",
+            "type": "fx",
+            "x": 930,
+            "y": 493,
+            "params": {
+              "bindTo": "auto",
+              "triggerEvent": "onHit",
+              "name": "",
+              "effect": "fire/meteor",
+              "attach": "point",
+              "enemyPick": "nearest",
+              "pathInterval": 0.15,
+              "pathDuration": 2,
+              "scale": 1.5,
+              "fps": 1,
+              "clipStart": 0,
+              "clipEnd": 0,
+              "alpha": 1,
+              "light": 1,
+              "rotation": 0,
+              "offsetX": 0,
+              "offsetY": 0,
+              "loop": false,
+              "life": 3,
+              "tailMode": "freeze",
+              "stackReplace": true,
+              "additive": false,
+              "flipX": false,
+              "matchRotation": true,
+              "noRotFollow": false,
+              "fxOptions": {},
+              "rangeMode": "inherit",
+              "rangeRadius": 0,
+              "rangeOrigin": "impact",
+              "rangeMaxTargets": 0
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "source_9v2ic4p",
+            "fromPort": "cast",
+            "to": "select_wwbq2x8",
+            "toPort": "cast"
+          },
+          {
+            "from": "source_9v2ic4p",
+            "fromPort": "cast",
+            "to": "delay_3ex9ui1",
+            "toPort": "cast"
+          },
+          {
+            "from": "delay_3ex9ui1",
+            "fromPort": "cast",
+            "to": "zone_rvwhod6",
+            "toPort": "cast"
+          },
+          {
+            "from": "zone_rvwhod6",
+            "fromPort": "tick",
+            "to": "damage_es22ybw",
+            "toPort": "tick"
+          },
+          {
+            "from": "zone_rvwhod6",
+            "fromPort": "area",
+            "to": "impact_qafqzmx",
+            "toPort": "area"
+          },
+          {
+            "from": "impact_qafqzmx",
+            "fromPort": "cast",
+            "to": "fx_7l6bc05",
+            "toPort": "cast"
           }
         ]
       }
@@ -4265,8 +4807,8 @@
       }
     ]
   },
-  "version": "WJ-MEXG-Y3J5-AAAAAW-BQ9N-NDUB-Z2K4-CP6R-PCVA",
-  "versionSeq": 20,
+  "version": "WJ-MEXG-G3J5-AAAAAX-BQSN-NDUB-Z2K4-CP6R-PCVA",
+  "versionSeq": 21,
   "statuses": [
     {
       "kind": "buff",

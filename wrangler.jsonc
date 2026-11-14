@@ -4,15 +4,26 @@
   "compatibility_date": "2026-11-01",
   "routes": [{ "pattern": "xjdz.de5.net", "custom_domain": true }],
   "durable_objects": {
-    "bindings": [{ "name": "ROOMS", "class_name": "RoomHub" }]
+    "bindings": [
+      { "name": "ROOMS", "class_name": "RoomHub" },
+      { "name": "AUTH", "class_name": "AccountHub" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomHub"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RoomHub"] },
+    { "tag": "v2", "new_sqlite_classes": ["AccountHub"] }
+  ],
   "assets": {
     "directory": "./dist-site",
     "binding": "ASSETS"
   },
   "vars": {
     "TURN_KEY_ID": "1e00352be0bc5fa6e1745a8c1554853a",
-    "ALLOWED_ORIGIN": "https://xjdz.de5.net"
+    "ALLOWED_ORIGIN": "https://xjdz.de5.net",
+    // Steam Web API Key：可选。只用于拉昵称 / 头像，留空照样能完成 OpenID 登录校验。
+    // 领取需要该 Steam 账号在商店累计消费满 $5（受限账号不可用）。
+    "STEAM_API_KEY": ""
+    // SESSION_SECRET 不写在这里：用 `wrangler secret put SESSION_SECRET` 注入，
+    // 否则会话签名密钥会明文进仓库。没配时登录接口返回 503，页面仍可游客游玩。
   }
 }

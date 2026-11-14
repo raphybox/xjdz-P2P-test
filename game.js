@@ -1246,6 +1246,12 @@
   function updateNickButton() {
     if (dom.nickBtn) dom.nickBtn.textContent = PROFILE.name ? ('昵称 · ' + PROFILE.name) : '设置昵称';
   }
+  /* Steam 登录成功后用 Steam 昵称预填（仅在本地还没设昵称时）；
+     事件由 steam-login.js 派发，这里只重读一次本地档案，不引入任何账号耦合。 */
+  window.addEventListener('wowpinball:profile-update', function () {
+    loadProfile();
+    updateNickButton();
+  });
 
 
   /* ---------------------------------------------------------

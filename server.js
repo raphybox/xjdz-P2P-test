@@ -20,6 +20,7 @@ const HOST = '127.0.0.1';
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
@@ -405,6 +406,58 @@ async function deploySync() {
   }
 }
 
+/* =============================================================
+   Steam OpenID 2.0 登录 · 本地镜像
+   与线上 cf-worker.js 共用 functions/api/steam-auth-router.mjs 这一份实现，
+   只把 Durable Object 换成内存版 AccountHub，本地不依赖 Cloudflare。
+   mock 模式（STEAM_OPENID_MOCK 默认开启）：不连 Steam 也能走完整链路，
+   供无头浏览器验证 login → callback → session → me → logout。
+   ============================================================= */
+const { pathToFileURL } = require('url');
+let STEAM_ROUTER = null;
+async function getSteamRouter() {
+  if (STEAM_ROUTER) return STEAM_ROUTER;
+  const [routerMod, storeMod] = await Promise.all([
+    import(pathToFileURL(path.join(ROOT, 'functions', 'api', 'steam-auth-router.mjs')).href),
+    import(pathToFileURL(path.join(ROOT, 'functions', 'api', 'steam-store.mjs')).href)
+  ]);
+  STEAM_ROUTER = routerMod.createAuthRouter({
+    secret: process.env.SESSION_SECRET || 'wowpinball-local-dev-secret-do-not-use-in-prod',
+    apiKey: process.env.STEAM_API_KEY || '',
+    store: storeMod.memoryStore(),
+    devMock: process.env.STEAM_OPENID_MOCK !== '0',
+    log: (k, v) => console.log('[steam-auth:local] ' + k + (v ? ' ' + v : ''))
+  });
+  return STEAM_ROUTER;
+}
+/* Node http.IncomingMessage → 标准 Request，让本地也能跑同一份路由 */
+function toWebRequest(req) {
+  const host = req.headers.host || (HOST + ':' + PORT);
+  const h = new Headers();
+  const skip = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'keep-alive']);
+  Object.keys(req.headers).forEach(k => {
+    if (skip.has(k.toLowerCase())) return;
+    const v = req.headers[k];
+    if (Array.isArray(v)) v.forEach(x => h.append(k, String(x)));
+    else if (v != null) h.set(k, String(v));
+  });
+  return new Request('http://' + host + (req.url || '/'), { method: req.method || 'GET', headers: h });
+}
+/* 标准 Response → Node http.ServerResponse（含多个 Set-Cookie） */
+async function sendWebResponse(res, webRes) {
+  webRes.headers.forEach((v, k) => {
+    if (k.toLowerCase() !== 'set-cookie') res.setHeader(k, v);
+  });
+  const cookies = typeof webRes.headers.getSetCookie === 'function'
+    ? webRes.headers.getSetCookie()
+    : [webRes.headers.get('set-cookie')].filter(Boolean);
+  if (cookies.length) res.setHeader('Set-Cookie', cookies);
+  res.statusCode = webRes.status;
+  if (webRes.status === 204 || webRes.status === 304) { res.end(); return; }
+  const buf = Buffer.from(await webRes.arrayBuffer());
+  res.end(buf);
+}
+
 const server = http.createServer(async (req, res) => {
   const url = req.url || '/';
   if (req.method === 'OPTIONS') return json(res, 200, { ok: true });
@@ -412,7 +465,22 @@ const server = http.createServer(async (req, res) => {
   if (url.startsWith('/api/')) {
     try {
       ensureDirs();
-      if (url.startsWith('/api/room')) return await handleLocalRoom(req, res, url);
+      if (url.startsWith('/api/auth/steam/')) {
+        const router = await getSteamRouter();
+        const webRes = await router.handle(toWebRequest(req));
+        if (webRes) return await sendWebResponse(res, webRes);
+      }
+      if (url.startsWith('/api/room')) {
+        // 与线上一致的「建房 / 加入」按账号维度限流；poll / list 心跳不限流
+        const ru = new URL(url, 'http://' + HOST + ':' + PORT);
+        const roomAct = (ru.pathname.split('/').filter(Boolean).pop() || '').toLowerCase();
+        const guardAct = roomAct === 'create' ? 'roomCreate' : (roomAct === 'lookup' ? 'roomLookup' : '');
+        if (guardAct) {
+          const g = await (await getSteamRouter()).guard(toWebRequest(req), guardAct);
+          if (!g.ok) return json(res, 429, { error: 'rate_limited', scope: guardAct, retryAfterMs: g.retryAfterMs });
+        }
+        return await handleLocalRoom(req, res, url);
+      }
       if (req.method === 'GET' && url.startsWith('/api/turn')) return await handleLocalTurn(res);
       // 开发启动台控制接口（launcher.html 用）。服务自身即游戏服务，故 status 恒为运行中。
       if (url.startsWith('/api/status')) {
