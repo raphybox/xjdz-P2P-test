@@ -4809,8 +4809,8 @@ window.WOWPINBALL_PUBLISHED = {
       }
     ]
   },
-  "version": "WJ-MNXG-Y3J5-AAAAA3-BQ9N-NDUB-Z2K4-CP6R-PCVA",
-  "versionSeq": 25,
+  "version": "WJ-MEXG-Y3J5-AAAAA4-BQ9N-NDUB-Z2K4-CP6R-PCVA",
+  "versionSeq": 26,
   "statuses": [
     {
       "kind": "buff",

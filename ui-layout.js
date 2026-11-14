@@ -182,15 +182,14 @@
       ['result', '孵化结果', '#hatchResult'],
       ['confirmBtn', '收下按钮', '#hatchConfirmBtn']
     ] },
-    /* Steam 登录：顶栏的动态区域，元素是 steam-login.js 运行时生成的。
-       编辑态（?uiEditor=1）由该脚本铺一套静态样例，让「未登录按钮」和
-       「已登录徽标」两种状态都能被单独选中、拖拽、换素材与调排版。
-       顶栏不属于任何 .screen，所以本屏借用首页做背景；applyAll 会遍历全部
-       SCREENS，因此这里的覆盖在所有界面上都生效。 */
+    /* Steam 登录：DOM 上是 #steamDock 独立模块，与 .top-actions 平级，
+       所以这里只登记 Steam 自己的元素，绝不把「顶部栏 / 右上按钮组」等通用
+       父级塞进本屏 —— 否则选中父级时黄框会把 Steam 一起框走，无法单独设计。
+       元素是 steam-login.js 运行时生成的；编辑态由该脚本铺两种状态的样例。
+       顶栏不属于任何 .screen，本屏借用首页做背景；applyAll 遍历全部 SCREENS，
+       因此这里的覆盖在所有界面上都生效。 */
     { id: 'steam', name: '顶栏 · Steam 登录', kind: 'screen', root: '#startScreen', items: [
-      ['bg', '整页背景', 'body', 1], ['app', '内容容器', '.app', 1],
-      ['topbar', '顶部栏', '.topbar'],
-      ['topActions', '右上按钮组', '.top-actions'],
+      ['dock', 'Steam 模块（独立容器）', '#steamDock', 0, 0, 'Steam 登录 · 单独编辑'],
       ['slot', 'Steam 登录整块（容器）', '#steamAuthSlot', 0, 0, 'Steam 登录 · 单独编辑'],
       ['loginBtn', 'Steam 登录按钮（未登录）', '.steam-login-btn', 0, 0, 'Steam 登录 · 单独编辑'],
       ['userBadge', '已登录徽标', '.steam-user', 0, 0, 'Steam 登录 · 单独编辑'],

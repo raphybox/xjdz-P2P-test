@@ -44,8 +44,11 @@ ok('存在独立 steam 编辑屏', !!steam);
 ok('屏名与类型正确', !!steam && /Steam/.test(steam.name) && steam.kind === 'screen');
 ok('借用首页做背景（顶栏全局可见）', !!steam && steam.root === '#startScreen');
 ok('不挤掉默认首屏', schema[0].id === 'start');
+ok('本屏不含任何通用父级图层（右上按钮组不再框住 Steam）',
+  !steam.items.some(x => ['bg', 'app', 'topbar', 'topActions'].indexOf(x.k) >= 0));
 
 const EXPECT = [
+  ['dock', '#steamDock'],
   ['slot', '#steamAuthSlot'],
   ['loginBtn', '.steam-login-btn'],
   ['userBadge', '.steam-user'],
@@ -90,7 +93,12 @@ ok('已有屏幕的配置不受影响', n.screens.start.shopBtn.dx === 4);
 ok('非法颜色被拒', !UI.normalize({ screens: { steam: { slot: { bg: 'javascript:alert(1)' } } } }).screens.steam);
 
 console.log('\n3) 页面挂载点与编辑态样例');
-ok('index.html 有 #steamAuthSlot', /id="steamAuthSlot"/.test(indexHtml));
+ok('index.html 有 #steamAuthSlot 与 #steamDock',
+  /id="steamAuthSlot"/.test(indexHtml) && /id="steamDock"/.test(indexHtml));
+const iDock = indexHtml.indexOf('id="steamDock"'), iActions = indexHtml.indexOf('class="top-actions"'),
+  iSlot = indexHtml.indexOf('id="steamAuthSlot"');
+ok('Steam 模块在 DOM 上与右上按钮组平级、不在其内部',
+  iDock > 0 && iActions > iDock && iSlot > iDock && iSlot < iActions);
 ok('steam-login.js 在 game.js 之后加载', indexHtml.indexOf('game.js') < indexHtml.indexOf('steam-login.js'));
 ok('识别 uiEditor=1', /uiEditor=1/.test(loginJs) && /UI_EDITOR/.test(loginJs));
 ok('编辑态跳过真实 /me 请求', /if \(UI_EDITOR\) \{ renderEditorSamples\(slotRef\); return; \}/.test(loginJs));
@@ -98,11 +106,20 @@ const sampleClasses = ['steam-login-btn', 'steam-user', 'steam-avatar', 'steam-n
   'steam-id', 'steam-logout-btn', 'steam-auth-err'];
 ok('样例覆盖全部动态类名', sampleClasses.every(c => loginJs.indexOf(c) >= 0));
 ok('样例带 data-ui-sample 标记', /data-ui-sample="1"/.test(loginJs));
+ok('样例按真实结构分两态（每行横排，不再拆成假的一列）',
+  /<div class="steam-sample-row" data-ui-sample="1">/.test(loginJs) &&
+  /<span class="steam-user" data-ui-sample="1">[\s\S]{0,220}steam-avatar/.test(loginJs) &&
+  /steam-logout-btn/.test(loginJs));
 ok('样例渲染后重放样式覆盖', /WowPinballUI\.apply\(\)/.test(loginJs));
 ok('游戏态不铺样例', /renderEditorSamples/.test(loginJs) && /function render\(slot, me, reason\)/.test(loginJs));
 
 console.log('\n4) 编辑态布局样式与配平');
-ok('编辑态允许样例换行', /\.ui-edit-mode \.steam-auth-slot \{ flex-wrap: wrap/.test(css));
+ok('Steam 模块用 auto 外边距与按钮组解耦', /\.steam-dock \{ margin-right: auto/.test(css));
+ok('编辑态样例两行布局', /\.ui-edit-mode \.steam-auth-slot \{[\s\S]{0,160}flex-direction: column/.test(css) &&
+  /\.steam-sample-row \{ display: flex/.test(css));
+ok('徽标样例按真实宽度展开', /\.steam-user \{[^}]*max-width: none/.test(css));
+ok('容器留 padding 作为自己的可点区域', /padding: 10px 12px/.test(css) &&
+  /border: 1px dashed rgba\(217, 164, 65/.test(css));
 ok('头像样例有可见底色', /\.ui-edit-mode \.steam-auth-slot \.steam-avatar/.test(css));
 ok('失败提示在编辑态强制可见', /\.ui-edit-mode \.steam-auth-slot \.steam-auth-err \{ display: inline/.test(css));
 [['ui-layout.js', uiSrc], ['steam-login.js', loginJs], ['styles.css', css]].forEach(([f, s]) => {

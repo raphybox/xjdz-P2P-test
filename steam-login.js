@@ -148,15 +148,22 @@
      失败提示」全部摆出来，保证 SCREENS 里每个 Steam 图层都有可点选的元素。
      data-ui-sample 只是标记，游戏态不会出现；样例不请求 /me、不写本地昵称。 */
   function renderEditorSamples(slot) {
+    /* 样例按真实结构分两行：一行未登录态、一行已登录态，块内横排。
+       每个 UI 元素在图层清单里都是独立项，点清单逐个设计即可，
+       不再为了「预览里能点中」把 DOM 拆成一列假结构。 */
     slot.innerHTML =
-      '<button class="ghost-btn steam-login-btn" type="button" data-ui-sample="1">Steam 登录</button>' +
-      '<span class="steam-user" data-ui-sample="1">' +
-        '<span class="steam-avatar" data-ui-sample="1"></span>' +
-        '<span class="steam-nick" data-ui-sample="1">Raphybox</span>' +
-        '<span class="steam-id" data-ui-sample="1">76561198000000000</span>' +
-      '</span>' +
-      '<button class="ghost-btn steam-logout-btn" type="button" data-ui-sample="1">退出</button>' +
-      '<span class="steam-auth-err" data-ui-sample="1">登录失败提示示例</span>';
+      '<div class="steam-sample-row" data-ui-sample="1">' +
+        '<button class="ghost-btn steam-login-btn" type="button" data-ui-sample="1">Steam 登录</button>' +
+        '<span class="steam-auth-err" data-ui-sample="1">登录失败提示示例</span>' +
+      '</div>' +
+      '<div class="steam-sample-row" data-ui-sample="1">' +
+        '<span class="steam-user" data-ui-sample="1">' +
+          '<span class="steam-avatar" data-ui-sample="1"></span>' +
+          '<span class="steam-nick" data-ui-sample="1">Raphybox</span>' +
+          '<span class="steam-id" data-ui-sample="1">76561198000000000</span>' +
+        '</span>' +
+        '<button class="ghost-btn steam-logout-btn" type="button" data-ui-sample="1">退出</button>' +
+      '</div>';
     // 样例晚于 ui-layout.js 的首次 applyAll，补完后主动重新套一次后台下发的覆盖
     try {
       if (window.WowPinballUI && window.WowPinballUI.apply) {

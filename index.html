@@ -44,8 +44,10 @@
         <p>果实构筑 · 每回合选一枚果实</p>
       </div>
     </div>
+    <!-- Steam 登录是独立 UI 模块，与右上按钮组平级：
+         界面编辑器里调整按钮组不会再带动它，每个 Steam 元素也各有独立图层。 -->
+    <div id="steamDock" class="steam-dock"><span id="steamAuthSlot" class="steam-auth-slot"></span></div>
     <div class="top-actions">
-      <span id="steamAuthSlot" class="steam-auth-slot"></span>
       <div id="coinBadge" class="coin-badge" title="金币余额"><span class="coin-icon"></span><strong id="coinAmount">0</strong></div>
       <button id="shopBtn" class="ghost-btn shop-entry-btn" type="button">商店</button>
       <button id="nickBtn" class="ghost-btn nick-btn" type="button">设置昵称</button>
