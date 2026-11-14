@@ -74,7 +74,28 @@
         img.referrerPolicy = 'no-referrer';
         box.appendChild(img);
       }
-      box.appendChild(el('span', 'steam-nick', (me.nick || 'Steam 玩家')));
+      /* OpenID 2.0 只保证给出 SteamID64；昵称/头像需要 Web API Key（$5 门槛）。
+         所以顶栏以 SteamID64 为主标识，昵称只在拿得到时作为副信息，
+         绝不把「Steam 玩家」这类占位文案当成已登录的展示结果。 */
+      var sid = String((me && me.steamId) || '').trim();
+      var nick = String((me && me.nick) || '').trim();
+      if (sid) {
+        var idEl = el('span', 'steam-id', sid);
+        idEl.title = 'SteamID64：' + sid + (nick ? ' · 昵称：' + nick : '') + ' · 点击复制';
+        idEl.addEventListener('click', function () {
+          // writeText 返回 Promise：页面失焦 / 非安全上下文 / 用户拒权都会异步拒绝，
+          // 同步 try 拦不住，必须同时挂 catch，否则控制台会留未处理异常。
+          try {
+            var p = (navigator.clipboard && navigator.clipboard.writeText)
+              ? navigator.clipboard.writeText(sid) : null;
+            if (p && typeof p.catch === 'function') p.catch(function () {});
+          } catch (e) {}
+        });
+        box.appendChild(idEl);
+      }
+      if (nick) box.appendChild(el('span', 'steam-nick', nick));
+      if (!sid && !nick) box.appendChild(el('span', 'steam-nick', 'Steam 玩家'));
+      box.title = sid ? ('SteamID64：' + sid + (nick ? ' · 昵称：' + nick : '')) : 'Steam 账号已登录';
       slot.appendChild(box);
       var out = el('button', 'ghost-btn steam-logout-btn', '退出');
       out.type = 'button';

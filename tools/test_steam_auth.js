@@ -311,6 +311,10 @@ function makeCallback(loginRes, claimed, overrides) {
     ok('页面挂载 Steam 登录位与脚本', /id="steamAuthSlot"/.test(html) && /steam-login\.js/.test(html));
     ok('game.js 监听 profile 更新', /wowpinball:profile-update/.test(game));
     ok('前端样式存在', /\.steam-login-btn/.test(css));
+    ok('顶栏以 SteamID64 为主标识', /el\('span', 'steam-id', sid\)/.test(front) && /\.steam-id \{/.test(css));
+    ok('无昵称时不再拿占位文案冒充身份', /if \(!sid && !nick\)/.test(front) && /me\.steamId/.test(front));
+    ok('SteamID 支持点击复制', /navigator\.clipboard/.test(front));
+    ok('昵称降级为副信息', /steam-nick', nick/.test(front) && /max-width: 92px/.test(css));
     ok('前端只用 uid 不拿 SteamID 做业务', /window\.SteamAuthState = me/.test(front) && !/uid\s*=\s*me\.steamId/.test(front));
   }
 

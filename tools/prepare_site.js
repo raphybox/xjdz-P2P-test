@@ -20,8 +20,11 @@ fs.mkdirSync(DEST, { recursive: true });
 
 const EXCLUDE = new Set(['_worker.js', 'cf-worker.js', 'wrangler.jsonc', 'CNAME']);
 
-const files = execSync('git ls-files', { cwd: ROOT, encoding: 'utf8' })
-  .split('\n')
+/* 用 -z（NUL 分隔）而不是默认换行输出：默认模式下 git 会把中文/特殊字符路径
+   按 core.quotepath 转义成 "docs/\346\236\234..."，后续 fs.statSync 找不到该文件，
+   校验环节会抛 ENOENT 并让整个部署脚本以失败告终。 */
+const files = execSync('git ls-files -z', { cwd: ROOT, encoding: 'utf8' })
+  .split('\0')
   .map((s) => s.trim())
   .filter(Boolean)
   .filter((f) => !EXCLUDE.has(f));
