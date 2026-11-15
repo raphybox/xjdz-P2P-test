@@ -117,6 +117,7 @@
 
   function saveInventory() {
     try { window.localStorage.setItem(INVENTORY_KEY, JSON.stringify(INV)); } catch (e) { /* 存储不可用仅本次会话生效 */ }
+    if (window.WowPinballSave) window.WowPinballSave.touch();   // 已登录时防抖同步到账号存档
   }
   function loadInventory() {
     let v = null;
@@ -260,23 +261,28 @@
     if (!spendCoins(price)) { shopResult('金币不足，还需要 ' + (price - COINS) + ' 金币；打一局对战可以获得金币。', true); return; }
     lastEgg = { kind: kind, tier: tierKey };
     if (dom.shopDrawBtn) dom.shopDrawBtn.disabled = false;
+    /* 金币动作只上报「做了什么」，金额由服务端按自己的 SHOP 规则重算后回执覆盖；
+       本地 addCoins/spendCoins 只是乐观 UI，保证断网也能继续玩。 */
+    const saveOp = function (outcome) {
+      if (window.WowPinballSave) window.WowPinballSave.op({ t: 'buy', kind: kind, tier: tierKey, outcome: outcome });
+    };
     const pool = shopPool(kind, tierKey);
     const pick = pool[Math.floor(Math.random() * pool.length)];
-    if (!pick) { addCoins(price); shopResult('这一档暂时没有可抽取的内容，金币已退还。', true); return; }
+    if (!pick) { addCoins(price); saveOp('empty'); shopResult('这一档暂时没有可抽取的内容，金币已退还。', true); return; }
     if (kind === 'fruit') {
       INV.owned.push({
         uid: 's' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6), id: pick.id
       });
-      saveInventory(); renderFruitGrid();
+      saveInventory(); renderFruitGrid(); saveOp('new');
       shopResult('开出果实「' + pick.name + '」（' + (TIER_NAME[pick.tier] || '') + '），已存入果实库');
     } else if (isOwned(pick.id)) {
       const back = Math.round(price * SHOP.duplicateRefund);
-      addCoins(back);
+      addCoins(back); saveOp('duplicate');
       shopResult('抽到已解锁的外观「' + pick.name + '」，返还 ' + back + ' 金币');
     } else {
       INV.skinsOwned.push(pick.id);
       INV.skinId = pick.id;
-      saveInventory(); renderSkins(); applySelectedSkin();
+      saveInventory(); renderSkins(); applySelectedSkin(); saveOp('new');
       shopResult('解锁新外观「' + pick.name + '」（' + (TIER_NAME[pick.tier] || '') + '），已为你选用');
     }
     updateCoins();
@@ -1242,6 +1248,7 @@
     PROFILE = { name: cleanNick(name) };
     try { window.localStorage.setItem(PROFILE_KEY, JSON.stringify(PROFILE)); } catch (e) { /* 存储不可用时仅本次会话生效 */ }
     updateNickButton();
+    if (window.WowPinballSave) window.WowPinballSave.touch();
   }
   function updateNickButton() {
     if (dom.nickBtn) dom.nickBtn.textContent = PROFILE.name ? ('昵称 · ' + PROFILE.name) : '设置昵称';
@@ -1251,6 +1258,21 @@
   window.addEventListener('wowpinball:profile-update', function () {
     loadProfile();
     updateNickButton();
+  });
+  /* 账号存档回执：save-client.js 已把云端数据写进 localStorage，这里只同步内存并重绘，
+     不回调 saveInventory / saveWallet，避免「云端覆盖 → 又触发一次上报」的循环。 */
+  window.addEventListener('wowpinball:save-apply', function (e) {
+    const s = e.detail || {};
+    if (s.inventory) {
+      INV = s.inventory;
+      renderFruitGrid(); renderSkins(); applySelectedSkin();
+    }
+    if (s.profile) { PROFILE = { name: cleanNick(s.profile.name) }; updateNickButton(); }
+    if (isFinite(Number(s.coins))) { COINS = Math.max(0, Math.round(Number(s.coins))); updateCoins(); }
+  });
+  window.addEventListener('wowpinball:coins-apply', function (e) {
+    const c = Number(e.detail && e.detail.coins);
+    if (isFinite(c)) { COINS = Math.max(0, Math.round(c)); updateCoins(); }
   });
 
 
@@ -4693,8 +4715,10 @@
       nickName() + ' 对阵 ' + enemyNick() + (G.mode === '2v2' ? '  ·  2V2' : '');
     if (SHOP.enabled) {
       const rw = SHOP.rewards;
+      const result = cls === 'win' ? 'win' : (cls === 'lose' ? 'lose' : 'draw');
       const gain = cls === 'win' ? rw.win : (cls === 'lose' ? rw.lose : rw.draw);
       addCoins(gain);
+      if (window.WowPinballSave) window.WowPinballSave.op({ t: 'reward', result: result });
       dom.resultDesc.textContent += '  ·  ' + SHOP.currency + ' +' + gain;
     }
 

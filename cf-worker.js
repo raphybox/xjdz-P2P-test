@@ -11,6 +11,8 @@
 
 import { onRequestGet, onRequestOptions } from './functions/api/turn.js';
 import { createAuthRouter } from './functions/api/steam-auth-router.mjs';
+import { createSaveRouter } from './functions/api/save-router.mjs';
+import { normalizeRules, DEFAULT_RULES } from './functions/api/save-core.mjs';
 import { durableStore } from './functions/api/steam-store.mjs';
 
 /* DO 类必须从主模块具名导出，wrangler 才能注册 Durable Object binding */
@@ -28,6 +30,41 @@ function authFor(env) {
     store: stub ? durableStore(stub) : null,
     devMock: false,                       // 线上永远不开放 mock 登录
     log: (k, v) => console.log('[steam-auth] ' + k + (v ? ' ' + v : ''))
+  });
+}
+
+/* 服务端权威经济规则：从静态资产里的后台配置读，isolate 内缓存 60s。
+   读不到时回落到与 game.js 一致的默认值，绝不信任客户端传来的价格。 */
+let RULE_CACHE = null, RULE_AT = 0;
+async function loadRules(env, origin) {
+  const now = Date.now();
+  if (RULE_CACHE && now - RULE_AT < 60000) return RULE_CACHE;
+  try {
+    if (env.ASSETS) {
+      const r = await env.ASSETS.fetch(new Request(origin + '/data/game-config.json'));
+      if (r.ok) {
+        const j = await r.json();
+        RULE_CACHE = normalizeRules(j && j.shop);
+        RULE_AT = now;
+        return RULE_CACHE;
+      }
+    }
+  } catch (e) { console.log('[save] rules fallback: ' + (e && e.message)); }
+  RULE_CACHE = DEFAULT_RULES; RULE_AT = now;
+  return RULE_CACHE;
+}
+
+function saveFor(env, auth, origin) {
+  const stub = env.AUTH ? env.AUTH.get(env.AUTH.idFromName('global')) : null;
+  const store = stub ? durableStore(stub) : null;
+  return createSaveRouter({
+    saveCall: store ? store.saveCall : null,
+    identity: auth.identity,
+    rate: (key, limit, windowMs) => store
+      ? store.rate({ key: key, limit: limit, windowMs: windowMs })
+      : Promise.resolve({ ok: true }),
+    getRules: () => loadRules(env, origin),
+    log: (k, v) => console.log('[save] ' + k + (v ? ' ' + v : ''))
   });
 }
 
@@ -66,6 +103,11 @@ export default {
     /* Steam OpenID 2.0：login / callback / me / logout 全部由单源路由器处理 */
     if (path.indexOf('/api/auth/steam/') === 0) {
       return authFor(env).handle(request);
+    }
+
+    /* 账号存档 / 金币事务：uid 只从签名会话解，金币由服务端按规则重算 */
+    if (path === '/api/save' || path === '/api/save/ops') {
+      return saveFor(env, authFor(env), url.origin).handle(request);
     }
 
     if (path === '/api/turn' || path === '/api/turn/') {

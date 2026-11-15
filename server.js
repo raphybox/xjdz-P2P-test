@@ -414,24 +414,45 @@ async function deploySync() {
    供无头浏览器验证 login → callback → session → me → logout。
    ============================================================= */
 const { pathToFileURL } = require('url');
-let STEAM_ROUTER = null;
+let STEAM_ROUTER = null, SAVE_ROUTER = null;
+let LOCAL_RULES = null, LOCAL_RULES_AT = 0;
+function localShopRules(coreMod) {
+  const now = Date.now();
+  if (LOCAL_RULES && now - LOCAL_RULES_AT < 60000) return LOCAL_RULES;
+  try {
+    const j = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    LOCAL_RULES = coreMod.normalizeRules(j && j.shop);
+  } catch (e) { LOCAL_RULES = coreMod.DEFAULT_RULES; }
+  LOCAL_RULES_AT = now;
+  return LOCAL_RULES;
+}
 async function getSteamRouter() {
   if (STEAM_ROUTER) return STEAM_ROUTER;
-  const [routerMod, storeMod] = await Promise.all([
+  const [routerMod, storeMod, saveMod, coreMod] = await Promise.all([
     import(pathToFileURL(path.join(ROOT, 'functions', 'api', 'steam-auth-router.mjs')).href),
-    import(pathToFileURL(path.join(ROOT, 'functions', 'api', 'steam-store.mjs')).href)
+    import(pathToFileURL(path.join(ROOT, 'functions', 'api', 'steam-store.mjs')).href),
+    import(pathToFileURL(path.join(ROOT, 'functions', 'api', 'save-router.mjs')).href),
+    import(pathToFileURL(path.join(ROOT, 'functions', 'api', 'save-core.mjs')).href)
   ]);
+  const store = storeMod.memoryStore();
   STEAM_ROUTER = routerMod.createAuthRouter({
     secret: process.env.SESSION_SECRET || 'wowpinball-local-dev-secret-do-not-use-in-prod',
     apiKey: process.env.STEAM_API_KEY || '',
-    store: storeMod.memoryStore(),
+    store: store,
     devMock: process.env.STEAM_OPENID_MOCK !== '0',
     log: (k, v) => console.log('[steam-auth:local] ' + k + (v ? ' ' + v : ''))
+  });
+  SAVE_ROUTER = saveMod.createSaveRouter({
+    saveCall: store.saveCall,
+    identity: STEAM_ROUTER.identity,
+    rate: (key, limit, windowMs) => store.rate({ key: key, limit: limit, windowMs: windowMs }),
+    getRules: () => Promise.resolve(localShopRules(coreMod)),
+    log: (k, v) => console.log('[save:local] ' + k + (v ? ' ' + v : ''))
   });
   return STEAM_ROUTER;
 }
 /* Node http.IncomingMessage → 标准 Request，让本地也能跑同一份路由 */
-function toWebRequest(req) {
+function toWebRequest(req, body) {
   const host = req.headers.host || (HOST + ':' + PORT);
   const h = new Headers();
   const skip = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'keep-alive']);
@@ -441,7 +462,9 @@ function toWebRequest(req) {
     if (Array.isArray(v)) v.forEach(x => h.append(k, String(x)));
     else if (v != null) h.set(k, String(v));
   });
-  return new Request('http://' + host + (req.url || '/'), { method: req.method || 'GET', headers: h });
+  const init = { method: req.method || 'GET', headers: h };
+  if (body !== undefined) init.body = body;   // 存档 PUT / POST 需要请求体
+  return new Request('http://' + host + (req.url || '/'), init);
 }
 /* 标准 Response → Node http.ServerResponse（含多个 Set-Cookie） */
 async function sendWebResponse(res, webRes) {
@@ -468,6 +491,13 @@ const server = http.createServer(async (req, res) => {
       if (url.startsWith('/api/auth/steam/')) {
         const router = await getSteamRouter();
         const webRes = await router.handle(toWebRequest(req));
+        if (webRes) return await sendWebResponse(res, webRes);
+      }
+      if (url.startsWith('/api/save')) {
+        await getSteamRouter();
+        const hasBody = (req.method === 'PUT' || req.method === 'POST');
+        const raw = hasBody ? await readBody(req) : undefined;
+        const webRes = await SAVE_ROUTER.handle(toWebRequest(req, raw));
         if (webRes) return await sendWebResponse(res, webRes);
       }
       if (url.startsWith('/api/room')) {

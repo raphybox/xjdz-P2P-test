@@ -4,6 +4,7 @@
  */
 
 import { newUid, rateAllow } from './steam-auth.mjs';
+import { blankSave, mergeSeed, patchSave, applyOps, normalizeRules, publicSave } from './save-core.mjs';
 
 /** Cloudflare：把 DO stub 包成 store 接口。所有写操作都落在单实例里，强一致。 */
 export function durableStore(stub) {
@@ -20,7 +21,9 @@ export function durableStore(stub) {
     resolve: b => call('resolve', b),
     get: uid => call('get', { uid: uid }),
     rate: b => call('rate', b),
-    link: b => call('link', b)
+    link: b => call('link', b),
+    /* 存档路由用的通用 action 入口，与 AccountHub.fetch 的 act 一一对应 */
+    saveCall: (act, body) => call(act, body)
   };
 }
 
@@ -31,6 +34,7 @@ export function memoryStore(options) {
   const identities = new Map(Object.entries(persisted.identities || {}));
   const accounts = new Map(Object.entries(persisted.accounts || {}));
   const rates = new Map(Object.entries(persisted.rates || {}));
+  const saves = new Map(Object.entries(persisted.saves || {}));
 
   function flush() {
     if (typeof opt.save !== 'function') return;
@@ -38,7 +42,8 @@ export function memoryStore(options) {
       opt.save({
         identities: Object.fromEntries(identities),
         accounts: Object.fromEntries(accounts),
-        rates: Object.fromEntries(rates)
+        rates: Object.fromEntries(rates),
+        saves: Object.fromEntries(saves)
       });
     } catch (e) { /* 本地持久化失败不影响登录 */ }
   }
@@ -104,6 +109,36 @@ export function memoryStore(options) {
       flush();
       return { ok: r.ok, remaining: Math.max(0, limit - r.hits.length), retryAfterMs: r.retryAfterMs || 0 };
     },
-    _debug() { return { accounts: accounts.size, identities: identities.size, rates: rates.size }; }
+    /* 本地镜像的存档 action：与 AccountHub 的 saveGet/savePut/saveOps/saveDelete 同语义，
+       复用 save-core 的纯逻辑，保证本地双窗口验证的结论能代表线上行为。 */
+    async saveCall(act, b) {
+      const uid = String((b && b.uid) || '');
+      const rules = normalizeRules(b && b.rules);
+      const now = Date.now();
+      if (act === 'saveget') return { save: saves.get(uid) || null };
+      if (act === 'savedelete') { saves.delete(uid); flush(); return { ok: true }; }
+      if (act === 'saveput') {
+        let raw = saves.get(uid);
+        let out;
+        if (!raw) {
+          const fresh = blankSave(now, rules);
+          out = b.seed !== undefined
+            ? mergeSeed(fresh, b.seed, rules, now)
+            : patchSave(fresh, b.patch, b.baseRev, now);
+        } else out = patchSave(raw, b.patch, b.baseRev, now);
+        if (out.error) return { error: out.error, save: publicSave(out.save) };
+        saves.set(uid, out.save); flush();
+        return { ok: true, save: publicSave(out.save) };
+      }
+      if (act === 'saveops') {
+        const raw = saves.get(uid) || blankSave(now, rules);
+        const out = applyOps(raw, b.ops, rules, now);
+        if (out.error) return { error: out.error, results: out.results, coins: raw.coins, rev: raw.rev };
+        saves.set(uid, out.save); flush();
+        return { ok: true, coins: out.save.coins, rev: out.save.rev, results: out.results, save: publicSave(out.save) };
+      }
+      return { error: 'unknown_action' };
+    },
+    _debug() { return { accounts: accounts.size, identities: identities.size, rates: rates.size, saves: saves.size }; }
   };
 }

@@ -14,6 +14,7 @@
  */
 
 import { newUid, rateAllow } from './steam-auth.mjs';
+import { blankSave, mergeSeed, patchSave, applyOps, normalizeRules, publicSave } from './save-core.mjs';
 
 const RATE_TTL_MS = 15 * 60 * 1000;
 
@@ -45,6 +46,11 @@ export class AccountHub {
       if (act === 'get') return json(await this.get(b.uid));
       if (act === 'link' && request.method === 'POST') return json(await this.link(b));
       if (act === 'rate' && request.method === 'POST') return json(await this.rate(b));
+      /* 账号存档：uid 由 Worker 从签名会话解出后传入，DO 不信任请求自带的 uid 之外的任何身份 */
+      if (act === 'saveget') return json(await this.saveGet(b));
+      if (act === 'saveput' && request.method === 'POST') return json(await this.savePut(b));
+      if (act === 'saveops' && request.method === 'POST') return json(await this.saveOps(b));
+      if (act === 'savedelete' && request.method === 'POST') return json(await this.saveDelete(b));
       if (act === 'stats') return json(await this.stats());
       return json({ error: 'unknown_action' }, 404);
     } catch (e) {
@@ -123,6 +129,62 @@ export class AccountHub {
     const r = rateAllow(hits, limit, windowMs);
     await this.storage.put(rk, r.hits);
     return { ok: r.ok, remaining: Math.max(0, limit - r.hits.length), retryAfterMs: r.retryAfterMs || 0 };
+  }
+
+  /* ---------------- 账号存档（方案 B） ----------------
+     单实例 DO 天然串行，rev 乐观锁在这里就是真正的 CAS，不需要额外事务。
+     rules 由 Worker 从静态配置读好后随请求传入，DO 不自己去取资产。 */
+  _saveKey(uid) { return 'save:' + String(uid || '').slice(0, 80); }
+
+  async saveGet(b) {
+    const uid = String(b.uid || '');
+    if (!uid) return { error: 'missing_uid' };
+    const raw = await this.storage.get(this._saveKey(uid));
+    return { save: raw || null };
+  }
+
+  async savePut(b) {
+    const uid = String(b.uid || '');
+    if (!uid) return { error: 'missing_uid' };
+    const key = this._saveKey(uid);
+    const rules = normalizeRules(b.rules);
+    const now = Date.now();
+    let raw = await this.storage.get(key);
+    let out;
+    if (!raw) {
+      const fresh = blankSave(now, rules);
+      out = b.seed !== undefined
+        ? mergeSeed(fresh, b.seed, rules, now)
+        : patchSave(fresh, b.patch, b.baseRev, now);
+    } else {
+      out = patchSave(raw, b.patch, b.baseRev, now);
+    }
+    if (out.error) return { error: out.error, save: publicSave(out.save) };
+    await this.storage.put(key, out.save);
+    return { ok: true, save: publicSave(out.save) };
+  }
+
+  async saveOps(b) {
+    const uid = String(b.uid || '');
+    if (!uid) return { error: 'missing_uid' };
+    const key = this._saveKey(uid);
+    const rules = normalizeRules(b.rules);
+    const now = Date.now();
+    const raw = await this.storage.get(key) || blankSave(now, rules);
+    const out = applyOps(raw, b.ops, rules, now);
+    if (out.error) return { error: out.error, results: out.results, coins: raw.coins, rev: raw.rev };
+    await this.storage.put(key, out.save);
+    return {
+      ok: true, coins: out.save.coins, rev: out.save.rev,
+      results: out.results, save: publicSave(out.save)
+    };
+  }
+
+  async saveDelete(b) {
+    const uid = String(b.uid || '');
+    if (!uid) return { error: 'missing_uid' };
+    await this.storage.delete(this._saveKey(uid));
+    return { ok: true };
   }
 
   async stats() {

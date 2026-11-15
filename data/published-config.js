@@ -4,7 +4,7 @@ window.WOWPINBALL_PUBLISHED = {
   "meta": {
     "schema": 1,
     "gameName": "魔兽弹珠",
-    "updatedAt": "2026-11-14",
+    "updatedAt": "2026-11-15",
     "note": "默认配置，与首版游戏数值一致"
   },
   "config": {
@@ -4809,8 +4809,8 @@ window.WOWPINBALL_PUBLISHED = {
       }
     ]
   },
-  "version": "WJ-MEXG-Y3J5-AAAAA4-BQ9N-NDUB-Z2K4-CP6R-PCVA",
-  "versionSeq": 26,
+  "version": "WJ-VEXG-Y3J5-AAAAA5-BQ9N-NDUT-Z2K4-CP6R-PCVA",
+  "versionSeq": 27,
   "statuses": [
     {
       "kind": "buff",
