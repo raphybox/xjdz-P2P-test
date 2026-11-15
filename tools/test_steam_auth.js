@@ -345,6 +345,18 @@ function makeCallback(loginRes, claimed, overrides) {
     ok('有 Key 时仍优先官方 Web API', /if \(cfg\.apiKey\)/.test(routerSrc) && /playerSummariesUrl\(cfg\.apiKey/.test(routerSrc));
     ok('资料抓取失败不阻断登录', /return \{ nick: '', avatar: '' \};/.test(routerSrc));
     ok('前端只用 uid 不拿 SteamID 做业务', /window\.SteamAuthState = me/.test(front) && !/uid\s*=\s*me\.steamId/.test(front));
+
+    /* 登录 Steam 后隐藏顶栏的离线昵称入口（昵称由账号提供） */
+    ok('登录态广播 steam-auth 事件', /wowpinball:steam-auth/.test(front) && /logged: !!\(me && me\.logged\)/.test(front));
+    ok('登出 / 校验失败回落游客态并再次广播', /announce\(\{ logged: false \}\)/.test(front));
+    ok('编辑态不广播（#nickBtn 图层照常可编辑）',
+      /if \(UI_EDITOR\) \{ renderEditorSamples\(slotRef\); return; \}/.test(front));
+    ok('game.js 按登录态隐藏离线昵称按钮',
+      /dom\.nickBtn\.hidden = STEAM_LINKED/.test(game) && /wowpinball:steam-auth/.test(game));
+    ok('隐藏统一收口在 updateNickButton（其它重绘不会放回按钮）',
+      /function updateNickButton\(\)[\s\S]{0,220}dom\.nickBtn\.hidden/.test(game) &&
+      /STEAM_LINKED = !!\(e\.detail && e\.detail\.logged\)/.test(game));
+    ok('CSS 兜底 hidden 的 display', /\.nick-btn\[hidden\].*display: none !important/.test(css));
   }
 
   console.log('\n' + (fail ? 'FAILED ' + fail + ' 项' : 'ALL PASS ' + pass + ' 项'));

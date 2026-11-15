@@ -601,6 +601,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 /* ---------- 昵称（首次输入 / 顶栏修改） ---------- */
 .nick-btn { color: var(--accent-2); border-color: #6b542a; background: #241f14; }
 .nick-btn:hover:not(:disabled) { color: #ffe0a0; border-color: #9c7638; background: #2e2617; }
+/* Steam 登录后隐藏离线昵称入口。界面编辑器可能给按钮下发 inline display，
+   !important 保证 hidden 属性始终生效；退出登录后自动恢复。 */
+.nick-btn[hidden] { display: none !important; }
 #nameModal { z-index: 60; }
 .name-modal-card { width: min(420px, 100%); }
 .name-tip { margin: 0 0 16px; font-size: 12px; color: var(--text-dim); line-height: 1.7; }
@@ -983,9 +986,16 @@ body.preview-mode .arena-wrap { height: clamp(360px, 60vh, 720px); }
 /* 后台界面编辑器（?uiEditor=1）：样例按真实结构分两行展示两种登录态，
    每行内部横排；容器 padding 留出自己可点的区域，虚线框仅标识整块范围。
    每个元素靠左侧图层清单单独选中设计，不需要把 DOM 拆成假的一列。 */
+/* 编辑态两行样例只是「可点选的浮层」，不能参与顶栏高度计算：
+   留在文档流里会把 .topbar 撑高约 40px，下面所有区块跟着下移，
+   预览里金币 / 商店 / 果实卡的位置就和真实页面差一截。
+   dock 保留一个矮占位，既让自身图层有可点区域，又不改变 flex 行高。 */
+.ui-edit-mode .steam-dock { position: relative; min-width: 160px; height: 34px; flex: none; }
 .ui-edit-mode .steam-auth-slot {
+  position: absolute; left: 0; top: 0; z-index: 6;
   flex-direction: column; align-items: flex-start; gap: 9px;
-  max-width: 340px; padding: 10px 12px;
+  width: 340px; max-width: none; padding: 10px 12px;
+  background: rgba(10, 15, 23, .93);
   border: 1px dashed rgba(217, 164, 65, .38); border-radius: 8px;
 }
 .ui-edit-mode .steam-auth-slot > [data-ui-sample] { flex: none; }

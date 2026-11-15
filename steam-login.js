@@ -132,6 +132,17 @@
   }
 
   var slotRef = null;
+  /* 登录态广播：game.js 据此让「昵称 · xxx」这个离线入口让位给账号昵称。
+     退出登录 / 校验失败都会再广播一次 logged:false，让按钮自动恢复。
+     编辑态（?uiEditor=1）不走 load，因此不会广播 —— #nickBtn 图层照常可编辑。 */
+  function announce(me) {
+    window.SteamAuthState = me;   // 供房间 / 其它模块读取 uid（只读）
+    try {
+      window.dispatchEvent(new CustomEvent('wowpinball:steam-auth', {
+        detail: { logged: !!(me && me.logged), uid: (me && me.uid) || '' }
+      }));
+    } catch (e) {}
+  }
   function load() {
     if (!slotRef) return;
     fetch('/api/auth/steam/me', { credentials: 'same-origin', cache: 'no-store' })
@@ -139,9 +150,12 @@
       .then(function (me) {
         autoFillNick(me);
         render(slotRef, me, failReason());
-        window.SteamAuthState = me;   // 供房间 / 其它模块读取 uid（只读）
+        announce(me);
       })
-      .catch(function () { render(slotRef, { logged: false }, failReason()); });
+      .catch(function () {
+        render(slotRef, { logged: false }, failReason());
+        announce({ logged: false });
+      });
   }
 
   /* 编辑态样例：把「未登录按钮 / 已登录徽标 / 头像 / 昵称 / ID 兜底 / 退出 /

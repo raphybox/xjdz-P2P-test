@@ -4331,21 +4331,25 @@ window.WOWPINBALL_PUBLISHED = {
           "fc": "#b3b3b3"
         },
         "topActions": {
-          "dx": -4,
+          "dx": -34,
           "dy": 0,
           "z": 10
         },
         "coinBadge": {
-          "dx": 249,
-          "dy": 96
+          "dx": 176,
+          "dy": 122,
+          "w": 162,
+          "h": 48
         },
         "coinAmount": {
           "dx": 1,
           "dy": -1
         },
         "shopBtn": {
-          "dx": 253,
-          "dy": 96,
+          "dx": 177,
+          "dy": 120,
+          "w": 87,
+          "h": 51,
           "z": 20
         },
         "nickBtn": {
@@ -4364,8 +4368,8 @@ window.WOWPINBALL_PUBLISHED = {
           "dy": 8
         },
         "head": {
-          "dx": 0,
-          "dy": -4,
+          "dx": -2,
+          "dy": 0,
           "radius": 10,
           "z": -10,
           "imgZoom": 104,
@@ -4809,8 +4813,8 @@ window.WOWPINBALL_PUBLISHED = {
       }
     ]
   },
-  "version": "WJ-VEXG-Y3J5-AAAAA5-BQ9N-NDUT-Z2K4-CP6R-PCVA",
-  "versionSeq": 27,
+  "version": "WJ-MNXG-Y3J5-AAAAA6-BQ9N-NDUB-Z2K4-CP6R-PCVA",
+  "versionSeq": 28,
   "statuses": [
     {
       "kind": "buff",

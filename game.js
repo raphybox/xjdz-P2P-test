@@ -1250,9 +1250,20 @@
     updateNickButton();
     if (window.WowPinballSave) window.WowPinballSave.touch();
   }
+  /* Steam 登录态：登录后昵称由账号提供，顶栏的「昵称 · xxx」离线入口让位。
+     本地 PROFILE.name 仍保留，供联机座位名与分享码使用，登出后按钮自动恢复。 */
+  let STEAM_LINKED = false;
   function updateNickButton() {
-    if (dom.nickBtn) dom.nickBtn.textContent = PROFILE.name ? ('昵称 · ' + PROFILE.name) : '设置昵称';
+    if (!dom.nickBtn) return;
+    dom.nickBtn.textContent = PROFILE.name ? ('昵称 · ' + PROFILE.name) : '设置昵称';
+    dom.nickBtn.hidden = STEAM_LINKED;
   }
+  /* steam-login.js 在 /me 返回、退出登录、校验失败时各广播一次。
+     统一走 updateNickButton()，因此 profile-update / save-apply 触发的重绘也不会把按钮放回来。 */
+  window.addEventListener('wowpinball:steam-auth', function (e) {
+    STEAM_LINKED = !!(e.detail && e.detail.logged);
+    updateNickButton();
+  });
   /* Steam 登录成功后用 Steam 昵称预填（仅在本地还没设昵称时）；
      事件由 steam-login.js 派发，这里只重读一次本地档案，不引入任何账号耦合。 */
   window.addEventListener('wowpinball:profile-update', function () {
